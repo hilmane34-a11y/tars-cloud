@@ -1,9 +1,9 @@
 #pragma once
 
-#define WIFI_SSID       "ISI_WIFI"
-#define WIFI_PASSWORD   "ISI_PASSWORD"
+#define WIFI_SSID       "HomeManz"
+#define WIFI_PASSWORD   "rumahanak4"
 
-#define BT_HEADSET_NAME "NAMA_HEADSET"
+#define BT_HEADSET_NAME "I7-TWS"
 
 #define OLED_SDA 21
 #define OLED_SCL 22
