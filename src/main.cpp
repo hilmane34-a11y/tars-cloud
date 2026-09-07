@@ -40,9 +40,29 @@ static const uint32_t PLAY_TIMEOUT_MS = 120000;
 static const uint32_t OLED_REFRESH_MS = 80;
 static const uint32_t TEXT_SPEED_MS = 35;
 
-// ElevenLabs worker membatasi panjang teks TTS.
-// Jawaban OLED tetap menggunakan teks asli.
 static const size_t TTS_MAX_CHARS = 450;
+
+// ============================================================
+// AUDIO VOLUME
+// ============================================================
+
+// 2x digital gain.
+// Limiter mencegah sample melewati batas int16.
+static const int32_t PCM_GAIN = 2;
+
+static inline int16_t boostPCM(int16_t sample)
+{
+    int32_t value =
+        (int32_t)sample * PCM_GAIN;
+
+    if (value > 32767)
+        value = 32767;
+
+    if (value < -32768)
+        value = -32768;
+
+    return (int16_t)value;
+}
 
 // ============================================================
 // NTP
@@ -63,9 +83,7 @@ static bool isTimeValid()
 static bool syncNTPOnce()
 {
     if (ntpSynced && isTimeValid())
-    {
         return true;
-    }
 
     Serial.println();
     Serial.println("TARS: NTP START");
@@ -94,10 +112,8 @@ static bool syncNTPOnce()
             struct tm info;
             localtime_r(&now, &info);
 
-            Serial.print("TARS: NTP OK ");
-
             Serial.printf(
-                "%04d-%02d-%02d %02d:%02d:%02d\n",
+                "TARS: NTP OK %04d-%02d-%02d %02d:%02d:%02d\n",
                 info.tm_year + 1900,
                 info.tm_mon + 1,
                 info.tm_mday,
@@ -107,13 +123,11 @@ static bool syncNTPOnce()
             );
 
             ntpSynced = true;
-
             return true;
         }
     }
 
     Serial.println("TARS: NTP FAILED");
-
     return false;
 }
 
@@ -207,24 +221,6 @@ static bool playbackRunning = false;
 
 // ============================================================
 // PCM OUTPUT
-//
-// A2DP ESP32 membutuhkan:
-//
-// 44100 Hz
-// 2 channel
-// 16 bit
-//
-// MP3 ElevenLabs yang kita dapat bisa didecode menjadi:
-// 22050 Hz mono.
-//
-// Di sini dikonversi menjadi:
-// 44100 Hz stereo.
-//
-// 22050 mono:
-// setiap sample -> dua sample waktu
-// lalu diduplikasi ke L/R.
-//
-// Ini mencegah SbcAnalysisInit crash.
 // ============================================================
 
 class PCMOutputStream : public AudioStream
@@ -291,16 +287,36 @@ public:
             sourceInfo.channels;
 
         // ----------------------------------------------------
-        // 44100 stereo
+        // 44100 stereo -> boost 2x -> stereo
         // ----------------------------------------------------
 
         if (rate == 44100 && channels == 2)
         {
-            return writeRaw(data, size);
+            const int16_t *samples =
+                (const int16_t *)data;
+
+            size_t sampleCount =
+                size / 2;
+
+            for (size_t i = 0; i < sampleCount; i++)
+            {
+                int16_t s =
+                    boostPCM(samples[i]);
+
+                if (writeRaw(
+                        (const uint8_t *)&s,
+                        2
+                    ) != 2)
+                {
+                    return i * 2;
+                }
+            }
+
+            return sampleCount * 2;
         }
 
         // ----------------------------------------------------
-        // 44100 mono -> stereo
+        // 44100 mono -> stereo + boost
         // ----------------------------------------------------
 
         if (rate == 44100 && channels == 1)
@@ -314,21 +330,12 @@ public:
             for (size_t i = 0; i < sampleCount; i++)
             {
                 int16_t s =
-                    samples[i];
+                    boostPCM(samples[i]);
 
                 uint8_t out[4];
 
-                memcpy(
-                    out,
-                    &s,
-                    2
-                );
-
-                memcpy(
-                    out + 2,
-                    &s,
-                    2
-                );
+                memcpy(out, &s, 2);
+                memcpy(out + 2, &s, 2);
 
                 if (writeRaw(out, 4) != 4)
                     return i * 2;
@@ -338,14 +345,7 @@ public:
         }
 
         // ----------------------------------------------------
-        // 22050 mono -> 44100 stereo
-        //
-        // 1 input sample:
-        //
-        // L/R sample #1
-        // L/R sample #2
-        //
-        // sehingga sample rate menjadi 44100.
+        // 22050 mono -> 44100 stereo + boost
         // ----------------------------------------------------
 
         if (rate == 22050 && channels == 1)
@@ -359,13 +359,15 @@ public:
             for (size_t i = 0; i < sampleCount; i++)
             {
                 int16_t s =
-                    samples[i];
+                    boostPCM(samples[i]);
 
                 uint8_t out[8];
 
+                // sample waktu pertama
                 memcpy(out, &s, 2);
                 memcpy(out + 2, &s, 2);
 
+                // sample waktu kedua
                 memcpy(out + 4, &s, 2);
                 memcpy(out + 6, &s, 2);
 
@@ -376,10 +378,7 @@ public:
             return sampleCount * 2;
         }
 
-        Serial.print(
-            "TARS: UNSUPPORTED PCM "
-        );
-
+        Serial.print("TARS: UNSUPPORTED PCM ");
         Serial.print(rate);
         Serial.print(" Hz / ");
         Serial.print(channels);
@@ -557,26 +556,17 @@ StreamCopy mp3Copier(
 static void drawPanelFrame()
 {
     oled.drawRect(
-        0,
-        0,
-        128,
-        64,
+        0, 0, 128, 64,
         SSD1306_WHITE
     );
 
     oled.drawLine(
-        0,
-        11,
-        127,
-        11,
+        0, 11, 127, 11,
         SSD1306_WHITE
     );
 
     oled.drawLine(
-        0,
-        53,
-        127,
-        53,
+        0, 53, 127, 53,
         SSD1306_WHITE
     );
 }
@@ -616,7 +606,6 @@ static void drawConnectionStatus()
 static void drawWaitingPanel()
 {
     drawPanelFrame();
-
     drawHeader("READY");
 
     oled.setCursor(6, 18);
@@ -629,10 +618,7 @@ static void drawWaitingPanel()
         (panelAnimation / 2) % 10;
 
     oled.drawRect(
-        6,
-        41,
-        116,
-        6,
+        6, 41, 116, 6,
         SSD1306_WHITE
     );
 
@@ -656,7 +642,6 @@ static void drawWaitingPanel()
 static void drawThinkingPanel()
 {
     drawPanelFrame();
-
     drawHeader("THINK");
 
     oled.setCursor(6, 18);
@@ -670,26 +655,19 @@ static void drawThinkingPanel()
 
     for (int i = 0; i < 12; i++)
     {
-        int x =
-            6 + i * 10;
+        int x = 6 + i * 10;
 
         if (i <= active)
         {
             oled.fillRect(
-                x,
-                42,
-                7,
-                5,
+                x, 42, 7, 5,
                 SSD1306_WHITE
             );
         }
         else
         {
             oled.drawRect(
-                x,
-                42,
-                7,
-                5,
+                x, 42, 7, 5,
                 SSD1306_WHITE
             );
         }
@@ -701,7 +679,6 @@ static void drawThinkingPanel()
 static void drawPreparingPanel()
 {
     drawPanelFrame();
-
     drawHeader("AUDIO");
 
     oled.setCursor(6, 18);
@@ -715,26 +692,19 @@ static void drawPreparingPanel()
 
     for (int i = 0; i < 12; i++)
     {
-        int x =
-            6 + i * 10;
+        int x = 6 + i * 10;
 
         if (i == active)
         {
             oled.fillRect(
-                x,
-                42,
-                7,
-                5,
+                x, 42, 7, 5,
                 SSD1306_WHITE
             );
         }
         else
         {
             oled.drawRect(
-                x,
-                42,
-                7,
-                5,
+                x, 42, 7, 5,
                 SSD1306_WHITE
             );
         }
@@ -746,7 +716,6 @@ static void drawPreparingPanel()
 static void drawSpeakingPanel()
 {
     drawPanelFrame();
-
     drawHeader("SPEAK");
 
     const size_t visible =
@@ -770,11 +739,9 @@ static void drawSpeakingPanel()
     size_t pos =
         startIndex;
 
-    for (
-        size_t line = 0;
-        line < maxLines;
-        line++
-    )
+    for (size_t line = 0;
+         line < maxLines;
+         line++)
     {
         oled.setCursor(
             4,
@@ -828,7 +795,6 @@ static void drawSpeakingPanel()
 static void drawErrorPanel()
 {
     drawPanelFrame();
-
     drawHeader("ERROR");
 
     oled.setCursor(6, 20);
@@ -838,10 +804,7 @@ static void drawErrorPanel()
     oled.print("CHECK CONNECTION");
 
     oled.drawRect(
-        6,
-        43,
-        116,
-        5,
+        6, 43, 116, 5,
         SSD1306_WHITE
     );
 
@@ -918,9 +881,6 @@ static void updateOLED()
 
 // ============================================================
 // WIFI
-//
-// TIDAK ADA NTP DI SINI.
-// NTP hanya dilakukan sekali di setup().
 // ============================================================
 
 bool connectWiFi()
@@ -971,13 +931,8 @@ bool connectWiFi()
 
     wifiIsOn = true;
 
-    Serial.print(
-        "TARS: IP = "
-    );
-
-    Serial.println(
-        WiFi.localIP()
-    );
+    Serial.print("TARS: IP = ");
+    Serial.println(WiFi.localIP());
 
     return true;
 }
@@ -989,7 +944,6 @@ void wifiOff()
     );
 
     WiFi.disconnect(true);
-
     WiFi.mode(WIFI_OFF);
 
     wifiIsOn = false;
@@ -1010,7 +964,6 @@ bool askTars(
         return false;
 
     WiFiClientSecure client;
-
     client.setInsecure();
 
     HTTPClient http;
@@ -1053,15 +1006,11 @@ bool askTars(
     int code =
         http.POST(body);
 
-    Serial.print(
-        "ASK HTTP: "
-    );
-
+    Serial.print("ASK HTTP: ");
     Serial.println(code);
 
     if (
-        code !=
-        HTTP_CODE_OK
+        code != HTTP_CODE_OK
     )
     {
         Serial.println(
@@ -1221,7 +1170,6 @@ bool downloadTTS(
     }
 
     WiFiClientSecure client;
-
     client.setInsecure();
 
     HTTPClient http;
@@ -1268,8 +1216,7 @@ bool downloadTTS(
     Serial.println(code);
 
     if (
-        code !=
-        HTTP_CODE_OK
+        code != HTTP_CODE_OK
     )
     {
         Serial.println(
@@ -1670,10 +1617,6 @@ bool playMP3()
     if (!startDecoder())
         return false;
 
-    // Bluetooth harus sudah hidup
-    // sebelum PCM priming supaya buffer
-    // tidak penuh/deadlock.
-
     if (!startBluetooth())
     {
         stopDecoder();
@@ -1782,7 +1725,6 @@ bool playMP3()
     );
 
     stopDecoder();
-
     stopBluetooth();
 
     Serial.println(
@@ -1822,10 +1764,6 @@ void processQuestion(
         "================================"
     );
 
-    // --------------------------------------------------------
-    // ASK
-    // --------------------------------------------------------
-
     tarsState =
         TARS_THINKING;
 
@@ -1855,19 +1793,11 @@ void processQuestion(
         return;
     }
 
-    // --------------------------------------------------------
-    // OLED TEXT
-    // --------------------------------------------------------
-
     speechText =
         answer;
 
     speechVisibleChars =
         0;
-
-    // --------------------------------------------------------
-    // TTS
-    // --------------------------------------------------------
 
     tarsState =
         TARS_PREPARING_AUDIO;
@@ -1895,15 +1825,7 @@ void processQuestion(
         return;
     }
 
-    // --------------------------------------------------------
-    // WIFI OFF
-    // --------------------------------------------------------
-
     wifiOff();
-
-    // --------------------------------------------------------
-    // BLUETOOTH + PLAY
-    // --------------------------------------------------------
 
     bool played =
         playMP3();
@@ -1920,10 +1842,6 @@ void processQuestion(
         delay(1500);
     }
 
-    // --------------------------------------------------------
-    // DELETE MP3
-    // --------------------------------------------------------
-
     if (
         LittleFS.exists(
             MP3_FILE
@@ -1934,14 +1852,6 @@ void processQuestion(
             MP3_FILE
         );
     }
-
-    // --------------------------------------------------------
-    // WIFI ON
-    //
-    // PENTING:
-    // Tidak ada NTP di sini.
-    // NTP hanya sekali saat boot.
-    // --------------------------------------------------------
 
     if (
         !connectWiFi()
@@ -2154,10 +2064,7 @@ void setup()
         "================================"
     );
 
-    // --------------------------------------------------------
     // OLED
-    // --------------------------------------------------------
-
     Wire.begin(
         OLED_SDA,
         OLED_SCL
@@ -2179,7 +2086,6 @@ void setup()
         oled.clearDisplay();
 
         oled.setTextSize(1);
-
         oled.setTextColor(
             SSD1306_WHITE
         );
@@ -2207,10 +2113,7 @@ void setup()
         delay(500);
     }
 
-    // --------------------------------------------------------
-    // LITTLEFS
-    // --------------------------------------------------------
-
+    // LittleFS
     if (
         !LittleFS.begin(true)
     )
@@ -2233,16 +2136,10 @@ void setup()
         "LittleFS OK"
     );
 
-    // --------------------------------------------------------
     // PCM
-    // --------------------------------------------------------
-
     pcmOutput.begin();
 
-    // --------------------------------------------------------
-    // QUEUE
-    // --------------------------------------------------------
-
+    // Queue
     questionQueue =
         xQueueCreate(
             1,
@@ -2265,10 +2162,7 @@ void setup()
         }
     }
 
-    // --------------------------------------------------------
-    // WIFI
-    // --------------------------------------------------------
-
+    // WiFi
     tarsState =
         TARS_THINKING;
 
@@ -2286,7 +2180,6 @@ void setup()
 
         delay(1500);
 
-        // Coba lagi sampai WiFi hidup.
         while (
             !connectWiFi()
         )
@@ -2295,10 +2188,7 @@ void setup()
         }
     }
 
-    // --------------------------------------------------------
-    // NTP — HANYA SEKALI
-    // --------------------------------------------------------
-
+    // NTP hanya SEKALI saat boot
     while (
         !syncNTPOnce()
     )
@@ -2310,10 +2200,7 @@ void setup()
         delay(1000);
     }
 
-    // --------------------------------------------------------
-    // WORKER
-    // --------------------------------------------------------
-
+    // Worker
     xTaskCreatePinnedToCore(
         tarsWorkerTask,
         "TARS_WORKER",
@@ -2324,10 +2211,7 @@ void setup()
         0
     );
 
-    // --------------------------------------------------------
-    // READY
-    // --------------------------------------------------------
-
+    // Ready
     tarsState =
         TARS_WAITING;
 
@@ -2358,6 +2242,10 @@ void setup()
 
     Serial.println(
         "BT   : OFF"
+    );
+
+    Serial.println(
+        "VOLUME: 2X + LIMITER"
     );
 
     Serial.println(
