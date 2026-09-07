@@ -1,0 +1,33 @@
+name: Build TARS ESP32
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install PlatformIO
+        run: pip install platformio
+
+      - name: Build TARS
+        run: pio run
+
+      - name: Rename firmware
+        run: |
+          cp .pio/build/tars/firmware.bin TARS-ESP32.bin
+
+      - name: Upload TARS firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: TARS-ESP32
+          path: TARS-ESP32.bin
