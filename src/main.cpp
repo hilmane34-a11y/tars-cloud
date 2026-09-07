@@ -18,7 +18,6 @@
 
 #include "config.h"
 
-
 // ============================================================
 // TARS ESP32
 //
@@ -83,9 +82,7 @@ static const uint32_t OLED_ANIM_INTERVAL = 80;
 // OLED HEADER
 // ============================================================
 
-void oledHeader(
-    const char *status
-) {
+void oledHeader(const char *status) {
 
     if (!oledReadyFlag) {
         return;
@@ -157,9 +154,7 @@ void oledHeader(
 // OLED MECHANICAL STRUCTURE
 // ============================================================
 
-void oledDrawMechanical(
-    bool speaking
-) {
+void oledDrawMechanical(bool speaking) {
 
     if (!oledReadyFlag) {
         return;
@@ -178,13 +173,9 @@ void oledDrawMechanical(
     if (!speaking) {
 
         static const uint8_t normalPattern[24] = {
-
             2, 2, 5, 5, 5, 2,
-
             2, 4, 4, 2, 2, 5,
-
             5, 5, 2, 2, 4, 4,
-
             2, 2, 5, 5, 2, 2
         };
 
@@ -249,8 +240,7 @@ void oledDrawMechanical(
         int pulseX =
             45 +
             (
-                oledMechanicalFrame %
-                17
+                oledMechanicalFrame % 17
             );
 
         oled.drawLine(
@@ -280,29 +270,22 @@ void oledDrawMechanical(
         if (
             i ==
             (
-                oledMechanicalFrame %
-                6
+                oledMechanicalFrame % 6
             )
         ) {
 
             height =
                 8;
+
         }
         else if (
             i ==
             (
-                (
-                    oledMechanicalFrame +
-                    5
-                ) % 6
+                (oledMechanicalFrame + 5) % 6
             ) ||
-
             i ==
             (
-                (
-                    oledMechanicalFrame +
-                    1
-                ) % 6
+                (oledMechanicalFrame + 1) % 6
             )
         ) {
 
@@ -339,8 +322,7 @@ void oledDrawMechanical(
         61 +
         (
             (
-                oledMechanicalFrame %
-                3
+                oledMechanicalFrame % 3
             ) - 1
         ) * 3;
 
@@ -552,7 +534,6 @@ void oledUpdateReadyAnimation() {
         oledLastAnim <
         OLED_ANIM_INTERVAL
     ) {
-
         return;
     }
 
@@ -785,7 +766,6 @@ void oledUpdateTyping(
 
     if (
         oledTyping &&
-
         now -
         oledLastType >=
         OLED_TYPE_INTERVAL
@@ -803,7 +783,6 @@ void oledUpdateTyping(
 
             redraw =
                 true;
-
         }
         else {
 
@@ -817,7 +796,6 @@ void oledUpdateTyping(
 
     if (
         speaking &&
-
         now -
         oledLastAnim >=
         OLED_ANIM_INTERVAL
@@ -934,10 +912,18 @@ static const uint32_t A2DP_TAIL_MS =
 static const char *BT_DEVICE_NAME =
     "I7-TWS";
 
-// IMPORTANT:
-// Object dibuat baru setiap sesi.
-// Setelah end(true), object langsung dihapus.
-// Tidak pernah dipakai ulang setelah release memory.
+/*
+ * A2DP object dibuat sekali dan digunakan kembali.
+ *
+ * JANGAN:
+ *   end(true)
+ *   delete a2dpSource
+ *
+ * end(false) digunakan agar A2DP berhenti/deinit,
+ * tetapi controller Bluetooth tetap dapat digunakan
+ * untuk sesi berikutnya.
+ */
+
 BluetoothA2DPSource *a2dpSource =
     nullptr;
 
@@ -1008,7 +994,6 @@ private:
     portMUX_TYPE mux =
         portMUX_INITIALIZER_UNLOCKED;
 
-
 public:
 
     bool begin(
@@ -1044,7 +1029,6 @@ public:
         return true;
     }
 
-
     void end() {
 
         if (buffer) {
@@ -1068,7 +1052,6 @@ public:
             0;
     }
 
-
     void clear() {
 
         portENTER_CRITICAL(
@@ -1089,7 +1072,6 @@ public:
         );
     }
 
-
     size_t available() {
 
         size_t value;
@@ -1108,7 +1090,6 @@ public:
         return value;
     }
 
-
     size_t freeSpace() {
 
         size_t value;
@@ -1126,7 +1107,6 @@ public:
 
         return value;
     }
-
 
     size_t write(
         const uint8_t *src,
@@ -1155,6 +1135,7 @@ public:
             len >
             freeBytes
         ) {
+
             len =
                 freeBytes;
         }
@@ -1168,6 +1149,7 @@ public:
                 first >
                 len
             ) {
+
                 first =
                     len;
             }
@@ -1212,7 +1194,6 @@ public:
         return written;
     }
 
-
     size_t read(
         uint8_t *dst,
         size_t len
@@ -1237,6 +1218,7 @@ public:
             len >
             used
         ) {
+
             len =
                 used;
         }
@@ -1250,6 +1232,7 @@ public:
                 first >
                 len
             ) {
+
                 first =
                     len;
             }
@@ -1295,7 +1278,6 @@ public:
     }
 };
 
-
 PCMRingBuffer pcmRing;
 
 
@@ -1313,7 +1295,6 @@ private:
         PCM_OUTPUT_CHUNK
     ];
 
-
     static int16_t applyGain(
         int16_t sample
     ) {
@@ -1328,6 +1309,7 @@ private:
             value >
             32767
         ) {
+
             value =
                 32767;
         }
@@ -1336,15 +1318,15 @@ private:
             value <
             -32768
         ) {
+
             value =
                 -32768;
         }
 
         return (
-            int16_t)value
-            ;
+            (int16_t)value
+        );
     }
-
 
 public:
 
@@ -1367,7 +1349,6 @@ public:
         );
     }
 
-
     int availableForWrite() override {
 
         size_t freeBytes =
@@ -1376,10 +1357,8 @@ public:
         if (
             currentInfo.sample_rate ==
                 INPUT_SAMPLE_RATE &&
-
             currentInfo.channels ==
                 INPUT_CHANNELS &&
-
             currentInfo.bits_per_sample ==
                 BITS_PER_SAMPLE
         ) {
@@ -1391,21 +1370,23 @@ public:
                 inputCapacity >
                 512
             ) {
+
                 inputCapacity =
                     512;
             }
 
             return (
-                int)inputCapacity;
+                (int)inputCapacity
+            );
         }
 
         return (
-            int)min(
+            (int)min(
                 freeBytes,
                 (size_t)512
-            );
+            )
+        );
     }
-
 
     size_t write(
         const uint8_t *data,
@@ -1422,10 +1403,8 @@ public:
         if (
             currentInfo.sample_rate !=
                 INPUT_SAMPLE_RATE ||
-
             currentInfo.channels !=
                 INPUT_CHANNELS ||
-
             currentInfo.bits_per_sample !=
                 BITS_PER_SAMPLE
         ) {
@@ -1461,6 +1440,7 @@ public:
                 samples >
                 maxSamples
             ) {
+
                 samples =
                     maxSamples;
             }
@@ -1468,6 +1448,7 @@ public:
             if (
                 samples == 0
             ) {
+
                 break;
             }
 
@@ -1576,7 +1557,6 @@ public:
     }
 };
 
-
 PCMOutputStream pcmOutput;
 
 MP3DecoderHelix mp3Decoder;
@@ -1604,7 +1584,6 @@ bool connectWiFi(
             requireTime &&
             !ntpSynced
         ) {
-
         }
         else {
 
@@ -1631,7 +1610,6 @@ bool connectWiFi(
     while (
         WiFi.status() !=
             WL_CONNECTED &&
-
         millis() - start <
             WIFI_TIMEOUT_MS
     ) {
@@ -1666,7 +1644,6 @@ bool connectWiFi(
     return true;
 }
 
-
 void disconnectWiFi() {
 
     Serial.println(
@@ -1700,7 +1677,6 @@ bool isTimeValid() {
     );
 }
 
-
 bool syncNTP() {
 
     Serial.println(
@@ -1726,7 +1702,6 @@ bool syncNTP() {
 
     while (
         !isTimeValid() &&
-
         millis() - start <
             NTP_TIMEOUT_MS
     ) {
@@ -1767,17 +1742,11 @@ bool syncNTP() {
 
     Serial.printf(
         "TARS: NTP OK %04d-%02d-%02d %02d:%02d:%02d\n",
-
         timeInfo.tm_year + 1900,
-
         timeInfo.tm_mon + 1,
-
         timeInfo.tm_mday,
-
         timeInfo.tm_hour,
-
         timeInfo.tm_min,
-
         timeInfo.tm_sec
     );
 
@@ -1786,7 +1755,6 @@ bool syncNTP() {
 
     return true;
 }
-
 
 bool ensureTimeValid() {
 
@@ -1823,12 +1791,14 @@ String askAI(
     if (
         !connectWiFi(true)
     ) {
+
         return "";
     }
 
     if (
         !ensureTimeValid()
     ) {
+
         return "";
     }
 
@@ -1944,12 +1914,14 @@ bool downloadTTS(
     if (
         !connectWiFi(true)
     ) {
+
         return false;
     }
 
     if (
         !ensureTimeValid()
     ) {
+
         return false;
     }
 
@@ -2085,6 +2057,7 @@ bool downloadTTS(
                 readSize >
                 sizeof(buffer)
             ) {
+
                 readSize =
                     sizeof(buffer);
             }
@@ -2164,6 +2137,7 @@ int32_t getAudioData(
         !data ||
         len <= 0
     ) {
+
         return 0;
     }
 
@@ -2204,159 +2178,129 @@ void onBTConnectionState(
         "TARS: A2DP STATE = "
     );
 
-    if (a2dpSource != nullptr) {
+    switch (state) {
 
-        Serial.println(
-            a2dpSource->to_str(
-                state
-            )
-        );
+        case ESP_A2D_CONNECTION_STATE_CONNECTED:
 
-    }
-    else {
+            Serial.println(
+                "Connected"
+            );
 
-        Serial.println(
-            (int)state
-        );
-    }
+            btConnected =
+                true;
 
-    if (
-        state ==
-        ESP_A2D_CONNECTION_STATE_CONNECTED
-    ) {
+            Serial.println(
+                "TARS: A2DP CONNECTED"
+            );
 
-        btConnected =
-            true;
+            break;
 
-        Serial.println(
-            "TARS: A2DP CONNECTED"
-        );
-    }
-    else {
 
-        btConnected =
-            false;
+        case ESP_A2D_CONNECTION_STATE_CONNECTING:
+
+            Serial.println(
+                "Connecting"
+            );
+
+            break;
+
+
+        case ESP_A2D_CONNECTION_STATE_DISCONNECTING:
+
+            Serial.println(
+                "Disconnecting"
+            );
+
+            btConnected =
+                false;
+
+            break;
+
+
+        case ESP_A2D_CONNECTION_STATE_DISCONNECTED:
+
+            Serial.println(
+                "Disconnected"
+            );
+
+            btConnected =
+                false;
+
+            break;
+
+
+        default:
+
+            Serial.println(
+                (int)state
+            );
+
+            break;
     }
 }
-
 
 void onBTAudioState(
     esp_a2d_audio_state_t state,
     void *
 ) {
 
-    if (a2dpSource != nullptr) {
-
-        Serial.print(
-            "TARS: A2DP AUDIO = "
-        );
-
-        Serial.println(
-            a2dpSource->to_str(
-                state
-            )
-        );
-    }
-
-    if (
-        state ==
-        ESP_A2D_AUDIO_STATE_STARTED
-    ) {
-
-        btAudioStarted =
-            true;
-
-        Serial.println(
-            "TARS: A2DP AUDIO STARTED"
-        );
-    }
-    else {
-
-        btAudioStarted =
-            false;
-    }
-}
-
-
-// ============================================================
-// RELEASE BLUETOOTH
-// ============================================================
-//
-// Sangat penting:
-//
-// end(true) me-release memory internal A2DP.
-// Karena itu object TIDAK boleh dipakai lagi.
-//
-// Setelah end(true):
-//
-//   delete object
-//   pointer = nullptr
-//
-// Pertanyaan berikutnya akan membuat object baru.
-// ============================================================
-
-void releaseBluetooth() {
-
-    if (
-        a2dpSource == nullptr
-    ) {
-
-        btConnected =
-            false;
-
-        btAudioStarted =
-            false;
-
-        return;
-    }
-
-    Serial.println(
-        "TARS: Bluetooth RELEASE"
+    Serial.print(
+        "TARS: A2DP AUDIO = "
     );
 
-    btAudioStarted =
-        false;
+    switch (state) {
 
-    btConnected =
-        false;
+        case ESP_A2D_AUDIO_STATE_STARTED:
 
-    // end(true) release memory internal A2DP.
-    a2dpSource->end(
-        true
-    );
+            Serial.println(
+                "Started"
+            );
 
-    // Beri waktu callback/event terakhir
-    // untuk selesai sebelum object dihapus.
-    uint32_t waitStart =
-        millis();
+            btAudioStarted =
+                true;
 
-    while (
-        millis() -
-        waitStart <
-        1000
-    ) {
+            Serial.println(
+                "TARS: A2DP AUDIO STARTED"
+            );
 
-        delay(10);
+            break;
+
+
+        case ESP_A2D_AUDIO_STATE_STOPPED:
+
+            Serial.println(
+                "Stopped"
+            );
+
+            btAudioStarted =
+                false;
+
+            break;
+
+
+        case ESP_A2D_AUDIO_STATE_REMOTE_SUSPEND:
+
+            Serial.println(
+                "Remote Suspend"
+            );
+
+            btAudioStarted =
+                false;
+
+            break;
+
+
+        default:
+
+            Serial.println(
+                (int)state
+            );
+
+            btAudioStarted =
+                false;
+
+            break;
     }
-
-    delete a2dpSource;
-
-    a2dpSource =
-        nullptr;
-
-    btConnected =
-        false;
-
-    btAudioStarted =
-        false;
-
-    Serial.println(
-        "TARS: Bluetooth MEMORY RELEASED"
-    );
-
-    printHeap(
-        "AFTER_BT_RELEASE"
-    );
 }
 
 
@@ -2369,19 +2313,6 @@ bool startBluetooth() {
     Serial.println(
         "TARS: Bluetooth START"
     );
-
-    // Safety:
-    // jangan pernah start object lama.
-    if (
-        a2dpSource != nullptr
-    ) {
-
-        Serial.println(
-            "TARS: OLD BT OBJECT FOUND - RELEASING"
-        );
-
-        releaseBluetooth();
-    }
 
     btConnected =
         false;
@@ -2396,55 +2327,86 @@ bool startBluetooth() {
         "BEFORE_BT"
     );
 
-    // Object BARU setiap sesi.
-    a2dpSource =
-        new BluetoothA2DPSource();
+    /*
+     * Object hanya dibuat sekali.
+     *
+     * Setelah sesi pertama selesai:
+     * end(false) akan menghentikan A2DP,
+     * tetapi object tetap ada.
+     *
+     * Sesi berikutnya langsung menggunakan
+     * object yang sama.
+     */
 
     if (
-        a2dpSource == nullptr
+        a2dpSource ==
+        nullptr
     ) {
 
         Serial.println(
-            "TARS: A2DP OBJECT ALLOC FAILED"
+            "TARS: CREATE A2DP OBJECT"
         );
 
-        return false;
+        a2dpSource =
+            new BluetoothA2DPSource();
+
+        if (
+            a2dpSource ==
+            nullptr
+        ) {
+
+            Serial.println(
+                "TARS: A2DP OBJECT ALLOC FAILED"
+            );
+
+            return false;
+        }
+
+        a2dpSource->set_event_queue_size(
+            8
+        );
+
+        a2dpSource->set_event_stack_size(
+            2048
+        );
+
+        a2dpSource->set_auto_reconnect(
+            false
+        );
+
+        a2dpSource->set_data_callback(
+            getAudioData
+        );
+
+        a2dpSource->set_on_connection_state_changed(
+            onBTConnectionState
+        );
+
+        a2dpSource->set_on_audio_state_changed(
+            onBTAudioState
+        );
+
+        Serial.println(
+            "BT: event queue = 8"
+        );
+
+        Serial.println(
+            "BT: event stack = 2048"
+        );
+
+        Serial.println(
+            "BT: auto reconnect = OFF"
+        );
+    }
+    else {
+
+        Serial.println(
+            "TARS: REUSE A2DP OBJECT"
+        );
     }
 
-    a2dpSource->set_event_queue_size(
-        8
-    );
-
-    a2dpSource->set_event_stack_size(
-        2048
-    );
-
-    a2dpSource->set_auto_reconnect(
-        false
-    );
-
-    a2dpSource->set_data_callback(
-        getAudioData
-    );
-
-    a2dpSource->set_on_connection_state_changed(
-        onBTConnectionState
-    );
-
-    a2dpSource->set_on_audio_state_changed(
-        onBTAudioState
-    );
-
     Serial.println(
-        "BT: event queue = 8"
-    );
-
-    Serial.println(
-        "BT: event stack = 2048"
-    );
-
-    Serial.println(
-        "BT: auto reconnect = OFF"
+        "TARS: A2DP START"
     );
 
     a2dpSource->start(
@@ -2456,7 +2418,6 @@ bool startBluetooth() {
 
     while (
         !btConnected &&
-
         millis() - start <
             BT_TIMEOUT_MS
     ) {
@@ -2476,10 +2437,31 @@ bool startBluetooth() {
             "BT_FAILED"
         );
 
-        // PENTING:
-        // Bluetooth gagal = langsung shutdown
-        // dan release object.
-        releaseBluetooth();
+        /*
+         * Jangan end(true).
+         *
+         * end(false) cukup untuk menghentikan
+         * sesi A2DP dan object tetap bisa
+         * dipakai pada pertanyaan berikutnya.
+         */
+
+        if (
+            a2dpSource !=
+            nullptr
+        ) {
+
+            a2dpSource->end(
+                false
+            );
+        }
+
+        btConnected =
+            false;
+
+        btAudioStarted =
+            false;
+
+        delay(300);
 
         return false;
     }
@@ -2508,14 +2490,55 @@ void stopBluetooth() {
         "TARS: Bluetooth STOP"
     );
 
-    // releaseBluetooth() melakukan:
-    //
-    // end(true)
-    // tunggu event
-    // delete object
-    // pointer = nullptr
-    //
-    releaseBluetooth();
+    if (
+        a2dpSource ==
+        nullptr
+    ) {
+
+        btConnected =
+            false;
+
+        btAudioStarted =
+            false;
+
+        return;
+    }
+
+    btAudioStarted =
+        false;
+
+    /*
+     * PENTING:
+     *
+     * Jangan gunakan end(true).
+     *
+     * end(false):
+     * - disconnect speaker
+     * - stop/deinit A2DP
+     * - tidak menghancurkan object
+     * - controller Bluetooth tetap tersedia
+     * - sesi berikutnya dapat start kembali
+     */
+
+    a2dpSource->end(
+        false
+    );
+
+    btConnected =
+        false;
+
+    btAudioStarted =
+        false;
+
+    delay(300);
+
+    Serial.println(
+        "TARS: Bluetooth A2DP STOPPED"
+    );
+
+    printHeap(
+        "AFTER_BT_STOP"
+    );
 
     Serial.printf(
         "TARS: A2DP callbacks = %u\n",
@@ -2527,10 +2550,6 @@ void stopBluetooth() {
 // ============================================================
 // AUDIO SESSION CLEANUP
 // ============================================================
-//
-// Semua resource khusus satu playback dibersihkan
-// setelah suara selesai.
-// ============================================================
 
 void cleanupAudioSession() {
 
@@ -2538,13 +2557,10 @@ void cleanupAudioSession() {
         "TARS: AUDIO CLEANUP"
     );
 
-    // Pastikan decoder stream ditutup.
     mp3Stream.end();
 
-    // Pastikan ring kosong.
     pcmRing.clear();
 
-    // Hapus MP3 sementara.
     if (
         LittleFS.exists(
             MP3_PATH
@@ -2739,7 +2755,7 @@ bool playMP3() {
         !btAudioStarted &&
         btConnected &&
         millis() -
-        oledAudioWaitStart <
+            oledAudioWaitStart <
         5000
     ) {
 
@@ -2782,21 +2798,13 @@ bool playMP3() {
 
             Serial.printf(
                 "AUDIO: MP3=%u/%u PCM=%u/%u FREE=%u BT=%d AUDIO=%d CB=%u\n",
-
                 (unsigned)position,
-
                 (unsigned)mp3Size,
-
                 (unsigned)availablePCM,
-
                 (unsigned)PCM_RING_SIZE,
-
                 (unsigned)freePCM,
-
                 btConnected,
-
                 btAudioStarted,
-
                 (unsigned)btCallbackCalls
             );
 
@@ -2859,7 +2867,6 @@ bool playMP3() {
         ) {
 
             delay(2);
-
         }
         else {
 
@@ -2890,7 +2897,6 @@ bool playMP3() {
 
     while (
         pcmRing.available() > 0 &&
-
         millis() -
         drainStart <
         10000
@@ -2911,7 +2917,6 @@ bool playMP3() {
             "TARS: PCM DRAIN TIMEOUT, remaining=%u\n",
             (unsigned)pcmRing.available()
         );
-
     }
     else {
 
@@ -2951,6 +2956,7 @@ bool playMP3() {
         if (
             !btConnected
         ) {
+
             break;
         }
 
@@ -2971,7 +2977,7 @@ bool playMP3() {
 
 
     // --------------------------------------------------------
-    // BLUETOOTH FULL RELEASE
+    // BLUETOOTH STOP
     // --------------------------------------------------------
 
     stopBluetooth();
@@ -2983,10 +2989,8 @@ bool playMP3() {
 
     cleanupAudioSession();
 
-
     playbackRunning =
         false;
-
 
     if (
         !decoderFinished
@@ -3017,7 +3021,6 @@ bool playMP3() {
         delay(5);
     }
 
-
     oledShowReady();
 
     Serial.println(
@@ -3043,6 +3046,7 @@ void handleQuestion(
     if (
         question.length() == 0
     ) {
+
         return;
     }
 
@@ -3247,7 +3251,11 @@ void setup() {
     );
 
     Serial.println(
-        "A2DP : NEW OBJECT PER SESSION"
+        "A2DP : REUSABLE OBJECT"
+    );
+
+    Serial.println(
+        "BT   : AUTO RECONNECT OFF"
     );
 
     printHeap(
@@ -3266,7 +3274,6 @@ void setup() {
     if (
         WiFi.status() ==
             WL_CONNECTED &&
-
         !ntpSynced
     ) {
 
