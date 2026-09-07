@@ -2,24 +2,42 @@
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
-#include <ArduinoJson.h>
 #include <LittleFS.h>
 #include <Wire.h>
-
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
+#include <ArduinoJson.h>
 
+#include "BluetoothA2DPSource.h"
 #include "AudioTools.h"
 #include "AudioTools/AudioCodecs/CodecMP3Helix.h"
-#include "AudioLibs/A2DPStream.h"
 
 #include "config.h"
+
+// ============================================================
+// TARS CONFIG
+// ============================================================
+
+static const char *ASK_URL =
+    "https://tars-cloud-v1.hilmane34.workers.dev/ask";
+
+static const char *TTS_URL =
+    "https://tars-cloud-v1.hilmane34.workers.dev/tts";
+
+static const char *MP3_FILE = "/tars.mp3";
+
+static const uint32_t WIFI_TIMEOUT_MS = 15000;
+static const uint32_t BT_TIMEOUT_MS   = 20000;
+
+// MP3 decoder queue.
+// Jangan terlalu besar karena ESP32 tanpa PSRAM.
+static const size_t MP3_QUEUE_SIZE = 8192;
 
 // ============================================================
 // OLED
 // ============================================================
 
-Adafruit_SSD1306 oled(
+Adafruit_SSD1306 display(
     OLED_WIDTH,
     OLED_HEIGHT,
     &Wire,
@@ -30,14 +48,20 @@ Adafruit_SSD1306 oled(
 // AUDIO
 // ============================================================
 
-A2DPStream a2dp;
-MP3DecoderHelix mp3Decoder;
-EncodedAudioStream decoder(&a2dp, &mp3Decoder);
+BluetoothA2DPSource a2dp_source;
 
 File mp3File;
 
-bool audioPlaying = false;
+MP3DecoderHelix mp3Decoder;
+
+EncodedAudioStream decoder(
+    &mp3File,
+    &mp3Decoder
+);
+
 bool btStarted = false;
+bool decoderStarted = false;
+bool audioFinished = false;
 
 // ============================================================
 // OLED HELPERS
@@ -45,59 +69,95 @@ bool btStarted = false;
 
 void oledClear()
 {
-    oled.clearDisplay();
-    oled.display();
+    display.clearDisplay();
+    display.setTextColor(SSD1306_WHITE);
+    display.setTextSize(1);
+    display.setCursor(0, 0);
+    display.display();
 }
 
 void oledText(const String &text)
 {
-    oled.clearDisplay();
+    display.clearDisplay();
+    display.setTextColor(SSD1306_WHITE);
+    display.setTextSize(1);
 
-    oled.setTextColor(SSD1306_WHITE);
-    oled.setTextSize(1);
-    oled.setCursor(0, 0);
+    int x = 0;
+    int y = 0;
 
-    int start = 0;
+    String line;
 
-    while (start < text.length())
+    for (size_t i = 0; i < text.length(); i++)
     {
-        int end = text.indexOf('\n', start);
+        char c = text[i];
 
-        if (end < 0)
-            end = text.length();
+        if (c == '\n')
+        {
+            display.setCursor(x, y);
+            display.println(line);
 
-        String line = text.substring(start, end);
+            line = "";
+            x = 0;
+            y += 8;
 
-        oled.println(line);
+            if (y >= OLED_HEIGHT)
+                break;
 
-        start = end + 1;
+            continue;
+        }
+
+        line += c;
+
+        if (line.length() >= 21)
+        {
+            display.setCursor(x, y);
+            display.println(line);
+
+            line = "";
+            x = 0;
+            y += 8;
+
+            if (y >= OLED_HEIGHT)
+                break;
+        }
     }
 
-    oled.display();
+    if (y < OLED_HEIGHT)
+    {
+        display.setCursor(x, y);
+        display.println(line);
+    }
+
+    display.display();
 }
+
+// ============================================================
+// OLED TYPING EFFECT
+// ============================================================
 
 void oledTyping(const String &text)
 {
-    oled.clearDisplay();
-    oled.setTextColor(SSD1306_WHITE);
-    oled.setTextSize(1);
+    display.clearDisplay();
+    display.setTextColor(SSD1306_WHITE);
+    display.setTextSize(1);
 
-    String line = "";
+    String line;
     int y = 0;
 
     for (size_t i = 0; i < text.length(); i++)
     {
         char c = text[i];
 
-        if (c == '\n' || line.length() >= 20)
+        if (c == '\n' || line.length() >= 21)
         {
-            oled.setCursor(0, y);
-            oled.print(line);
+            display.setCursor(0, y);
+            display.println(line);
+            display.display();
 
             line = "";
-            y += 10;
+            y += 8;
 
-            if (y >= 64)
+            if (y >= OLED_HEIGHT)
                 break;
 
             if (c == '\n')
@@ -106,19 +166,19 @@ void oledTyping(const String &text)
 
         line += c;
 
-        oled.setCursor(0, y);
-        oled.print(line);
+        display.fillRect(0, y, 128, 8, SSD1306_BLACK);
+        display.setCursor(0, y);
+        display.print(line);
+        display.display();
 
-        oled.display();
-
-        delay(18);
+        delay(25);
     }
 
-    if (line.length() && y < 64)
+    if (y < OLED_HEIGHT)
     {
-        oled.setCursor(0, y);
-        oled.print(line);
-        oled.display();
+        display.setCursor(0, y);
+        display.print(line);
+        display.display();
     }
 }
 
@@ -132,124 +192,75 @@ bool connectWiFi()
         return true;
 
     Serial.println();
-    Serial.println("[WIFI] START");
+    Serial.println("TARS: WiFi ON");
 
-    oledText("TARS\nWiFi...");
+    oledText("TARS\nWiFi menghubungkan...");
 
     WiFi.mode(WIFI_STA);
-    WiFi.setSleep(false);
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
-    unsigned long start = millis();
+    uint32_t start = millis();
 
     while (WiFi.status() != WL_CONNECTED)
     {
         delay(250);
-
         Serial.print(".");
 
-        if (millis() - start > 20000)
+        if (millis() - start >= WIFI_TIMEOUT_MS)
         {
             Serial.println();
-            Serial.println("[WIFI] TIMEOUT");
-
+            Serial.println("TARS: WiFi timeout");
             oledText("WiFi gagal");
-
             return false;
         }
     }
 
     Serial.println();
-    Serial.println("[WIFI] CONNECTED");
+    Serial.print("TARS: WiFi OK IP=");
     Serial.println(WiFi.localIP());
-
-    oledText("WiFi OK");
 
     return true;
 }
 
-// ============================================================
-// WIFI OFF
-// ============================================================
-
 void wifiOff()
 {
-    Serial.println("[WIFI] OFF");
+    Serial.println("TARS: WiFi OFF");
 
     WiFi.disconnect(true);
     WiFi.mode(WIFI_OFF);
 
-    delay(200);
+    delay(100);
 }
 
 // ============================================================
-// HTTPS POST JSON
+// ASK CLOUD
 // ============================================================
 
-bool httpsPostJson(
-    const String &url,
-    const String &json,
-    String &response
+bool askTars(
+    const String &question,
+    String &answer
 )
 {
-    WiFiClientSecure client;
+    if (!connectWiFi())
+        return false;
 
-    // TARS Cloud uses HTTPS.
-    // We intentionally bypass CA verification here because
-    // the previous MicroPython firmware failed at x509 bundle
-    // verification on the ESP32.
+    WiFiClientSecure client;
     client.setInsecure();
 
     HTTPClient http;
 
-    if (!http.begin(client, url))
+    Serial.println("TARS: POST /ask");
+
+    if (!http.begin(client, ASK_URL))
     {
-        Serial.println("[HTTP] BEGIN FAILED");
+        Serial.println("TARS: HTTP begin gagal");
         return false;
     }
-
-    http.setTimeout(30000);
 
     http.addHeader(
         "Content-Type",
         "application/json"
     );
-
-    int code = http.POST(json);
-
-    Serial.print("[HTTP] CODE: ");
-    Serial.println(code);
-
-    if (code <= 0)
-    {
-        Serial.print("[HTTP] ERROR: ");
-        Serial.println(http.errorToString(code));
-
-        http.end();
-        return false;
-    }
-
-    response = http.getString();
-
-    http.end();
-
-    return code >= 200 && code < 300;
-}
-
-// ============================================================
-// ASK TARS CLOUD
-// ============================================================
-
-bool askTARS(
-    const String &question,
-    String &answer
-)
-{
-    Serial.println();
-    Serial.println("==============================");
-    Serial.println("[AI] ASK");
-    Serial.println(question);
-    Serial.println("==============================");
 
     JsonDocument request;
 
@@ -259,53 +270,49 @@ bool askTARS(
 
     serializeJson(request, body);
 
-    String response;
+    int code = http.POST(body);
 
-    String url =
-        String(TARS_CLOUD_URL) +
-        "/ask";
+    Serial.print("TARS: ASK HTTP=");
+    Serial.println(code);
 
-    if (!httpsPostJson(
-        url,
-        body,
-        response
-    ))
+    if (code != HTTP_CODE_OK)
     {
-        Serial.println("[AI] REQUEST FAILED");
+        Serial.println(http.getString());
+        http.end();
         return false;
     }
 
+    String response = http.getString();
+
+    http.end();
+
     JsonDocument json;
 
-    DeserializationError error =
+    DeserializationError err =
         deserializeJson(json, response);
 
-    if (error)
+    if (err)
     {
-        Serial.print("[AI] JSON ERROR: ");
-        Serial.println(error.c_str());
-
-        Serial.println(response);
-
+        Serial.print("TARS: JSON error: ");
+        Serial.println(err.c_str());
         return false;
     }
 
     const char *result =
-        json["response"];
+        json["response"] | "";
 
-    if (!result)
+    if (!result || result[0] == '\0')
     {
-        Serial.println("[AI] NO RESPONSE");
+        Serial.println("TARS: response kosong");
         return false;
     }
 
     answer = String(result);
 
-    Serial.println();
-    Serial.println("[AI] ANSWER");
+    Serial.println("TARS ANSWER:");
     Serial.println(answer);
 
-    return answer.length() > 0;
+    return true;
 }
 
 // ============================================================
@@ -316,21 +323,11 @@ bool downloadTTS(
     const String &text
 )
 {
-    Serial.println();
-    Serial.println("==============================");
-    Serial.println("[TTS] DOWNLOAD MP3");
-    Serial.println("==============================");
-
-    if (!LittleFS.begin(true))
-    {
-        Serial.println("[FS] LITTLEFS FAILED");
+    if (!connectWiFi())
         return false;
-    }
 
     if (LittleFS.exists(MP3_FILE))
-    {
         LittleFS.remove(MP3_FILE);
-    }
 
     File file =
         LittleFS.open(
@@ -340,40 +337,26 @@ bool downloadTTS(
 
     if (!file)
     {
-        Serial.println("[FS] FILE OPEN FAILED");
+        Serial.println("TARS: gagal membuka MP3");
         return false;
     }
 
     WiFiClientSecure client;
-
-    // See comment in httpsPostJson().
     client.setInsecure();
 
     HTTPClient http;
 
-    String url =
-        String(TARS_CLOUD_URL) +
-        "/tts";
+    Serial.println("TARS: POST /tts");
 
-    if (!http.begin(client, url))
+    if (!http.begin(client, TTS_URL))
     {
-        Serial.println("[TTS] HTTP BEGIN FAILED");
-
         file.close();
-
         return false;
     }
-
-    http.setTimeout(60000);
 
     http.addHeader(
         "Content-Type",
         "application/json"
-    );
-
-    http.addHeader(
-        "Accept",
-        "audio/mpeg"
     );
 
     JsonDocument request;
@@ -384,113 +367,160 @@ bool downloadTTS(
 
     serializeJson(request, body);
 
-    int code =
-        http.POST(body);
+    int code = http.POST(body);
 
-    Serial.print("[TTS] HTTP: ");
+    Serial.print("TARS: TTS HTTP=");
     Serial.println(code);
 
-    if (code != 200)
+    if (code != HTTP_CODE_OK)
     {
-        Serial.println(
-            http.getString()
-        );
+        Serial.println(http.getString());
 
         http.end();
-
         file.close();
+
+        LittleFS.remove(MP3_FILE);
 
         return false;
     }
 
-    int total =
-        http.getSize();
-
-    Serial.print("[TTS] SIZE: ");
-    Serial.println(total);
-
     WiFiClient *stream =
         http.getStreamPtr();
 
-    uint8_t buffer[2048];
+    uint8_t buffer[1024];
 
-    size_t received = 0;
+    int remaining =
+        http.getSize();
 
-    unsigned long lastData =
-        millis();
+    uint32_t lastData = millis();
 
-    while (
-        http.connected() ||
-        stream->available()
-    )
+    while (http.connected())
     {
         size_t available =
             stream->available();
 
         if (available)
         {
-            int len =
+            size_t toRead =
+                available;
+
+            if (toRead > sizeof(buffer))
+                toRead = sizeof(buffer);
+
+            int read =
                 stream->readBytes(
                     buffer,
-                    min(
-                        available,
-                        sizeof(buffer)
-                    )
+                    toRead
                 );
 
-            if (len > 0)
+            if (read > 0)
             {
                 file.write(
                     buffer,
-                    len
+                    read
                 );
 
-                received += len;
+                lastData = millis();
 
-                lastData =
-                    millis();
+                if (remaining > 0)
+                    remaining -= read;
             }
         }
         else
         {
-            delay(5);
+            delay(1);
 
-            if (
-                millis() - lastData >
-                10000
-            )
-            {
+            if (remaining == 0)
                 break;
-            }
+
+            if (millis() - lastData > 5000)
+                break;
         }
     }
 
+    file.flush();
     file.close();
 
     http.end();
 
-    Serial.print(
-        "[TTS] RECEIVED: "
-    );
+    File check =
+        LittleFS.open(
+            MP3_FILE,
+            FILE_READ
+        );
 
-    Serial.println(received);
-
-    if (received < 100)
+    if (!check)
     {
         LittleFS.remove(MP3_FILE);
+        return false;
+    }
 
-        Serial.println(
-            "[TTS] MP3 INVALID"
-        );
+    size_t size =
+        check.size();
+
+    check.close();
+
+    Serial.print("TARS: MP3 size=");
+    Serial.println(size);
+
+    if (size < 512)
+    {
+        Serial.println("TARS: MP3 terlalu kecil");
+
+        LittleFS.remove(MP3_FILE);
 
         return false;
     }
 
-    Serial.println(
-        "[TTS] MP3 SAVED"
-    );
-
     return true;
+}
+
+// ============================================================
+// A2DP PCM CALLBACK
+//
+// MP3DecoderHelix:
+// MP3 -> PCM 44.1 kHz / stereo / 16 bit
+//
+// ESP32-A2DP:
+// callback juga mengharapkan PCM.
+// ============================================================
+
+int32_t getAudioData(
+    uint8_t *data,
+    int32_t byteCount
+)
+{
+    if (!decoderStarted)
+    {
+        memset(
+            data,
+            0,
+            byteCount
+        );
+
+        return byteCount;
+    }
+
+    int32_t result =
+        decoder.readBytes(
+            data,
+            byteCount
+        );
+
+    if (result <= 0)
+    {
+        memset(
+            data,
+            0,
+            byteCount
+        );
+
+        audioFinished = true;
+
+        return byteCount;
+    }
+
+    return result;
 }
 
 // ============================================================
@@ -499,47 +529,46 @@ bool downloadTTS(
 
 bool startBluetooth()
 {
-    Serial.println();
-    Serial.println("==============================");
-    Serial.println("[BT] START");
-    Serial.println("==============================");
+    Serial.println("TARS: Bluetooth ON");
 
-    oledText("Bluetooth\nmencari...");
-
-    auto cfg =
-        a2dp.defaultConfig(TX_MODE);
-
-    cfg.name =
-        BT_HEADSET_NAME;
-
-    cfg.auto_reconnect = false;
-
-    a2dp.begin(cfg);
-
-    btStarted = true;
-
-    Serial.print(
-        "[BT] CONNECTING: "
+    oledText(
+        "TARS\nBluetooth ON\nMencari I7-TWS..."
     );
 
-    Serial.println(
+    btStarted = false;
+    audioFinished = false;
+
+    a2dp_source.set_auto_reconnect(
+        false
+    );
+
+    a2dp_source.set_data_callback(
+        getAudioData
+    );
+
+    a2dp_source.set_volume(100);
+
+    a2dp_source.start(
         BT_HEADSET_NAME
     );
 
-    unsigned long start =
+    btStarted = true;
+
+    Serial.println(
+        "TARS: A2DP start"
+    );
+
+    uint32_t start =
         millis();
 
-    while (!a2dp)
+    while (!a2dp_source.is_connected())
     {
         delay(100);
 
-        if (
-            millis() - start >
-            BT_CONNECT_TIMEOUT
-        )
+        if (millis() - start >= BT_TIMEOUT_MS)
         {
             Serial.println(
-                "[BT] TIMEOUT"
+                "TARS: Bluetooth timeout"
             );
 
             return false;
@@ -547,14 +576,88 @@ bool startBluetooth()
     }
 
     Serial.println(
-        "[BT] CONNECTED"
+        "TARS: I7-TWS CONNECTED"
     );
 
     oledText(
-        "Bluetooth\nterhubung"
+        "TARS\nI7-TWS connected"
     );
 
     return true;
+}
+
+// ============================================================
+// START DECODER
+// ============================================================
+
+bool startDecoder()
+{
+    if (!mp3File)
+    {
+        mp3File =
+            LittleFS.open(
+                MP3_FILE,
+                FILE_READ
+            );
+    }
+
+    if (!mp3File)
+    {
+        Serial.println(
+            "TARS: MP3 open gagal"
+        );
+
+        return false;
+    }
+
+    /*
+     * AudioTools/Helix memakai queue internal.
+     * 8 KB cukup untuk menjaga aliran PCM tanpa
+     * menghabiskan RAM ESP32 terlalu besar.
+     */
+    decoder
+        .transformationReader()
+        .resizeResultQueue(
+            MP3_QUEUE_SIZE
+        );
+
+    if (!decoder.begin())
+    {
+        Serial.println(
+            "TARS: MP3 decoder gagal"
+        );
+
+        mp3File.close();
+
+        return false;
+    }
+
+    decoderStarted = true;
+    audioFinished = false;
+
+    Serial.println(
+        "TARS: MP3 decoder READY"
+    );
+
+    return true;
+}
+
+// ============================================================
+// STOP DECODER
+// ============================================================
+
+void stopDecoder()
+{
+    decoderStarted = false;
+
+    delay(20);
+
+    if (mp3File)
+        mp3File.close();
+
+    Serial.println(
+        "TARS: MP3 decoder STOP"
+    );
 }
 
 // ============================================================
@@ -567,14 +670,18 @@ void stopBluetooth()
         return;
 
     Serial.println(
-        "[BT] STOP"
+        "TARS: Bluetooth OFF"
     );
 
-    a2dp.end(true);
+    a2dp_source.end(true);
 
     btStarted = false;
 
-    delay(300);
+    delay(200);
+
+    Serial.println(
+        "TARS: Bluetooth released"
+    );
 }
 
 // ============================================================
@@ -583,262 +690,220 @@ void stopBluetooth()
 
 bool playMP3()
 {
-    Serial.println();
-    Serial.println("==============================");
-    Serial.println("[AUDIO] PLAY MP3");
-    Serial.println("==============================");
+    if (!startDecoder())
+        return false;
 
-    mp3File =
-        LittleFS.open(
-            MP3_FILE,
-            FILE_READ
-        );
-
-    if (!mp3File)
+    if (!startBluetooth())
     {
-        Serial.println(
-            "[AUDIO] FILE OPEN FAILED"
-        );
-
+        stopDecoder();
         return false;
     }
 
-    size_t fileSize =
-        mp3File.size();
-
-    Serial.print(
-        "[AUDIO] FILE SIZE: "
+    Serial.println(
+        "TARS: PLAYING"
     );
 
-    Serial.println(fileSize);
-
-    if (fileSize < 100)
-    {
-        mp3File.close();
-
-        return false;
-    }
-
     oledText(
-        "TARS\nberbicara..."
+        "TARS\nBerbicara..."
     );
 
     /*
-     * AudioTools chain:
+     * A2DP callback berjalan di task Bluetooth.
+     * Selama callback masih meminta PCM, decoder
+     * akan membaca MP3 dan mengubahnya menjadi PCM.
      *
-     * LittleFS MP3
-     *      ↓
-     * StreamCopy
-     *      ↓
-     * MP3DecoderHelix
-     *      ↓
-     * A2DPStream
-     *      ↓
-     * Bluetooth headset
-     *
-     * AudioTools' EncodedAudioStream
-     * handles the MP3 → PCM stage.
+     * Kita hanya menunggu sampai decoder mencapai EOF.
      */
-
-    decoder.begin();
-
-    StreamCopy copier(
-        decoder,
-        mp3File
-    );
-
-    unsigned long lastData =
+    uint32_t start =
         millis();
 
-    while (mp3File.available())
+    while (!audioFinished)
     {
-        size_t copied =
-            copier.copy();
+        delay(10);
 
-        if (copied > 0)
+        /*
+         * Safety timeout:
+         * jangan biarkan TARS menggantung selamanya
+         * jika file/decoder bermasalah.
+         */
+        if (millis() - start > 120000UL)
         {
-            lastData =
-                millis();
+            Serial.println(
+                "TARS: playback timeout"
+            );
+
+            break;
         }
-        else
-        {
-            delay(1);
-
-            if (
-                millis() - lastData >
-                5000
-            )
-            {
-                Serial.println(
-                    "[AUDIO] STREAM TIMEOUT"
-                );
-
-                break;
-            }
-        }
-
-        yield();
     }
 
+    /*
+     * Beri A2DP sedikit waktu untuk mengirim
+     * buffer PCM terakhir.
+     */
     delay(300);
 
-    copier.end();
+    stopDecoder();
 
-    decoder.end();
-
-    mp3File.close();
-
-    Serial.println(
-        "[AUDIO] PLAY FINISHED"
-    );
+    stopBluetooth();
 
     return true;
 }
 
 // ============================================================
-// FULL TARS CYCLE
+// TARS READY
 // ============================================================
 
-void runTARSCycle(
+void showReady()
+{
+    oledText(
+        "TARS\nSiap menunggu..."
+    );
+
+    Serial.println();
+    Serial.println(
+        "================================"
+    );
+    Serial.println(
+        "TARS READY"
+    );
+    Serial.println(
+        "Ketik pertanyaan di Serial"
+    );
+    Serial.println(
+        "================================"
+    );
+}
+
+// ============================================================
+// PROCESS QUESTION
+// ============================================================
+
+void processQuestion(
     const String &question
 )
 {
+    if (question.length() == 0)
+        return;
+
     Serial.println();
     Serial.println(
-        "################################"
+        "TARS: Pertanyaan:"
     );
-
-    Serial.println(
-        "# START TARS CYCLE"
-    );
-
-    Serial.print(
-        "# QUESTION: "
-    );
-
-    Serial.println(
-        question
-    );
-
-    Serial.println(
-        "################################"
-    );
+    Serial.println(question);
 
     oledText(
-        "TARS\nberpikir..."
+        "TARS\nBerpikir..."
     );
 
-    // --------------------------------
-    // WIFI
-    // --------------------------------
-
-    if (!connectWiFi())
-    {
-        oledText(
-            "WiFi gagal"
-        );
-
-        return;
-    }
-
-    // --------------------------------
-    // ASK AI
-    // --------------------------------
+    // --------------------------------------------------------
+    // 1. ASK AI
+    // --------------------------------------------------------
 
     String answer;
 
-    if (!askTARS(
-        question,
-        answer
-    ))
+    if (!askTars(
+            question,
+            answer))
     {
         oledText(
-            "TARS\nAI error"
-        );
-
-        return;
-    }
-
-    oledTyping(answer);
-
-    // --------------------------------
-    // TTS MP3
-    // --------------------------------
-
-    if (!downloadTTS(answer))
-    {
-        oledText(
-            "TARS\nTTS error"
-        );
-
-        return;
-    }
-
-    // --------------------------------
-    // WIFI OFF
-    // --------------------------------
-
-    wifiOff();
-
-    // --------------------------------
-    // BLUETOOTH
-    // --------------------------------
-
-    if (!startBluetooth())
-    {
-        stopBluetooth();
-
-        LittleFS.remove(
-            MP3_FILE
+            "TARS\nGagal menghubungi Cloud"
         );
 
         connectWiFi();
+        return;
+    }
+
+    // --------------------------------------------------------
+    // 2. DISPLAY ANSWER
+    // --------------------------------------------------------
+
+    oledTyping(answer);
+
+    // --------------------------------------------------------
+    // 3. DOWNLOAD TTS
+    // --------------------------------------------------------
+
+    oledText(
+        "TARS\nMenyiapkan suara..."
+    );
+
+    if (!downloadTTS(answer))
+    {
+        Serial.println(
+            "TARS: TTS gagal"
+        );
+
+        oledText(
+            "TARS\nTTS gagal"
+        );
 
         return;
     }
 
-    // --------------------------------
-    // PLAY
-    // --------------------------------
+    // --------------------------------------------------------
+    // 4. WIFI OFF
+    // --------------------------------------------------------
+
+    wifiOff();
+
+    // --------------------------------------------------------
+    // 5. MP3 -> A2DP
+    // --------------------------------------------------------
 
     playMP3();
 
-    // --------------------------------
-    // BT OFF
-    // --------------------------------
+    // --------------------------------------------------------
+    // 6. MP3 DELETE
+    // --------------------------------------------------------
 
-    stopBluetooth();
+    if (LittleFS.exists(MP3_FILE))
+        LittleFS.remove(MP3_FILE);
 
-    // --------------------------------
-    // DELETE MP3
-    // --------------------------------
-
-    LittleFS.remove(
-        MP3_FILE
-    );
-
-    // --------------------------------
-    // WIFI ON AGAIN
-    // --------------------------------
+    // --------------------------------------------------------
+    // 7. WIFI ON AGAIN
+    // --------------------------------------------------------
 
     connectWiFi();
 
-    oledText(
-        "TARS\nmenunggu..."
-    );
+    showReady();
+}
 
-    Serial.println();
-    Serial.println(
-        "################################"
-    );
+// ============================================================
+// SERIAL INPUT
+// ============================================================
 
-    Serial.println(
-        "# TARS READY"
-    );
+String serialBuffer;
 
-    Serial.println(
-        "################################"
-    );
+void handleSerial()
+{
+    while (Serial.available())
+    {
+        char c =
+            Serial.read();
+
+        if (c == '\r')
+            continue;
+
+        if (c == '\n')
+        {
+            if (serialBuffer.length() > 0)
+            {
+                String question =
+                    serialBuffer;
+
+                serialBuffer = "";
+
+                processQuestion(
+                    question
+                );
+            }
+        }
+        else
+        {
+            if (serialBuffer.length() < 300)
+                serialBuffer += c;
+        }
+    }
 }
 
 // ============================================================
@@ -847,167 +912,87 @@ void runTARSCycle(
 
 void setup()
 {
-    Serial.begin(
-        SERIAL_BAUD
-    );
+    Serial.begin(115200);
 
-    delay(500);
+    delay(1000);
 
     Serial.println();
     Serial.println(
-        "===================================="
+        "================================"
     );
-
     Serial.println(
-        "TARS ESP32 FINAL"
+        "       TARS ESP32 START"
     );
-
     Serial.println(
-        "AI + MP3 + A2DP + OLED"
+        "================================"
     );
 
-    Serial.println(
-        "===================================="
-    );
-
-    // --------------------------------
+    // --------------------------------------------------------
     // OLED
-    // --------------------------------
+    // --------------------------------------------------------
 
     Wire.begin(
         OLED_SDA,
         OLED_SCL
     );
 
-    if (
-        !oled.begin(
+    if (!display.begin(
             SSD1306_SWITCHCAPVCC,
-            OLED_ADDR
-        )
-    )
+            OLED_ADDR))
     {
         Serial.println(
-            "[OLED] FAILED"
+            "OLED gagal"
         );
     }
     else
     {
         oledText(
-            "TARS\nBOOT"
+            "TARS\nBooting..."
         );
     }
 
-    // --------------------------------
-    // FILESYSTEM
-    // --------------------------------
+    // --------------------------------------------------------
+    // LITTLEFS
+    // --------------------------------------------------------
 
     if (!LittleFS.begin(true))
     {
         Serial.println(
-            "[FS] FAILED"
+            "TARS: LittleFS gagal"
         );
 
         oledText(
-            "LittleFS\nERROR"
+            "TARS\nLittleFS gagal"
         );
-    }
-    else
-    {
-        Serial.println(
-            "[FS] OK"
-        );
-    }
 
-    // --------------------------------
-    // RAM
-    // --------------------------------
-
-    Serial.print(
-        "[RAM] FREE HEAP: "
-    );
+        while (true)
+            delay(1000);
+    }
 
     Serial.println(
-        ESP.getFreeHeap()
+        "TARS: LittleFS OK"
     );
 
-    // --------------------------------
+    // --------------------------------------------------------
     // WIFI
-    // --------------------------------
+    // --------------------------------------------------------
 
     connectWiFi();
 
-    oledText(
-        "TARS\nREADY"
-    );
+    // --------------------------------------------------------
+    // READY
+    // --------------------------------------------------------
 
-    Serial.println();
-    Serial.println(
-        "===================================="
-    );
-
-    Serial.println(
-        "Ketik pertanyaan di Serial Monitor"
-    );
-
-    Serial.println(
-        "===================================="
-    );
+    showReady();
 }
 
 // ============================================================
 // LOOP
 // ============================================================
 
-String serialQuestion;
-
 void loop()
 {
-    while (Serial.available())
-    {
-        char c =
-            Serial.read();
-
-        if (
-            c == '\n' ||
-            c == '\r'
-        )
-        {
-            if (
-                serialQuestion.length() >
-                0
-            )
-            {
-                String question =
-                    serialQuestion;
-
-                serialQuestion = "";
-
-                Serial.println();
-
-                Serial.println(
-                    "[USER]"
-                );
-
-                Serial.println(
-                    question
-                );
-
-                runTARSCycle(
-                    question
-                );
-            }
-        }
-        else
-        {
-            if (
-                serialQuestion.length() <
-                300
-            )
-            {
-                serialQuestion += c;
-            }
-        }
-    }
+    handleSerial();
 
     delay(5);
 }
