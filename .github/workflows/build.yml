@@ -21,6 +21,24 @@ jobs:
           python -m pip install --upgrade pip
           pip install -U platformio
 
+      - name: Verify partition table
+        shell: bash
+        run: |
+          echo "========================================"
+          echo "VERIFY PARTITION TABLE"
+          echo "========================================"
+
+          cat partitions.csv
+
+          grep -Eq '^spiffs,[[:space:]]*data,[[:space:]]*spiffs,[[:space:]]*0x2A0000,[[:space:]]*0x160000' partitions.csv || {
+            echo "ERROR: Partisi spiffs tidak sesuai!"
+            echo "Harus:"
+            echo "spiffs,data,spiffs,0x2A0000,0x160000"
+            exit 1
+          }
+
+          echo "OK - partisi spiffs sesuai"
+
       - name: Prepare LittleFS
         shell: bash
         run: |
@@ -44,98 +62,49 @@ jobs:
           BOOTLOADER_ELF="$FRAMEWORK/tools/sdk/esp32/bin/bootloader_dio_40m.elf"
           BOOT_APP0="$FRAMEWORK/tools/partitions/boot_app0.bin"
 
-          if [ ! -f "$BOOTLOADER_ELF" ]; then
+          test -f "$BOOTLOADER_ELF" || {
             echo "ERROR: bootloader_dio_40m.elf tidak ditemukan"
             exit 1
-          fi
+          }
 
-          if [ ! -f "$BOOT_APP0" ]; then
+          test -f "$BOOT_APP0" || {
             echo "ERROR: boot_app0.bin tidak ditemukan"
             exit 1
-          fi
+          }
 
-          if [ ! -f "$ESPTOOL" ]; then
+          test -f "$ESPTOOL" || {
             echo "ERROR: esptool.py tidak ditemukan"
             exit 1
-          fi
+          }
 
           echo "FRAMEWORK=$FRAMEWORK" >> "$GITHUB_ENV"
           echo "BOOTLOADER_ELF=$BOOTLOADER_ELF" >> "$GITHUB_ENV"
           echo "BOOT_APP0=$BOOT_APP0" >> "$GITHUB_ENV"
           echo "ESPTOOL=$ESPTOOL" >> "$GITHUB_ENV"
 
-          echo "Framework:"
-          echo "$FRAMEWORK"
-
-          echo "Bootloader ELF:"
-          echo "$BOOTLOADER_ELF"
-
-          echo "Boot App0:"
-          echo "$BOOT_APP0"
-
-          echo "Esptool:"
-          echo "$ESPTOOL"
-
       - name: Convert bootloader ELF to BIN
         shell: bash
         run: |
-          echo "========================================"
-          echo "CONVERTING BOOTLOADER ELF"
-          echo "========================================"
-
           python "$ESPTOOL" \
             --chip esp32 \
             elf2image \
             "$BOOTLOADER_ELF" \
             -o bootloader.bin
 
-          if [ ! -f bootloader.bin ]; then
-            echo "ERROR: bootloader.bin gagal dibuat"
-            exit 1
-          fi
-
-          echo ""
-          echo "Bootloader berhasil dibuat:"
-          ls -lh bootloader.bin
+          test -f bootloader.bin
 
       - name: Verify build files
         shell: bash
         run: |
           BUILD=".pio/build/tars"
 
-          echo "========================================"
-          echo "VERIFY BUILD FILES"
-          echo "========================================"
+          test -f bootloader.bin
+          test -f "$BUILD/partitions.bin"
+          test -f "$BUILD/firmware.bin"
+          test -f "$BUILD/littlefs.bin"
+          test -f "$BOOT_APP0"
 
-          test -f bootloader.bin || {
-            echo "ERROR: bootloader.bin tidak ada"
-            exit 1
-          }
-
-          test -f "$BUILD/partitions.bin" || {
-            echo "ERROR: partitions.bin tidak ada"
-            exit 1
-          }
-
-          test -f "$BUILD/firmware.bin" || {
-            echo "ERROR: firmware.bin tidak ada"
-            exit 1
-          }
-
-          test -f "$BUILD/littlefs.bin" || {
-            echo "ERROR: littlefs.bin tidak ada"
-            exit 1
-          }
-
-          test -f "$BOOT_APP0" || {
-            echo "ERROR: boot_app0.bin tidak ada"
-            exit 1
-          }
-
-          echo ""
-          echo "Semua file tersedia:"
-          echo ""
-
+          echo "Build files:"
           ls -lh bootloader.bin
           ls -lh "$BUILD/partitions.bin"
           ls -lh "$BUILD/firmware.bin"
@@ -146,10 +115,6 @@ jobs:
         shell: bash
         run: |
           BUILD=".pio/build/tars"
-
-          echo "========================================"
-          echo "MERGING TARS ESP32 FIRMWARE"
-          echo "========================================"
 
           python "$ESPTOOL" \
             --chip esp32 \
@@ -164,13 +129,6 @@ jobs:
             0x10000 "$BUILD/firmware.bin" \
             0x2A0000 "$BUILD/littlefs.bin"
 
-          echo ""
-          echo "========================================"
-          echo "MERGE BERHASIL"
-          echo "========================================"
-
-          ls -lh TARS-ESP32.bin
-
       - name: Verify final BIN
         shell: bash
         run: |
@@ -178,10 +136,6 @@ jobs:
           import os
 
           path = "TARS-ESP32.bin"
-
-          if not os.path.isfile(path):
-              raise SystemExit("ERROR: TARS-ESP32.bin tidak ditemukan")
-
           size = os.path.getsize(path)
 
           print("========================================")
@@ -190,15 +144,17 @@ jobs:
           print("File :", path)
           print("Size :", size, "bytes")
           print("Size :", round(size / 1024 / 1024, 2), "MB")
-          print("Flash: 4 MB")
 
           if size > 0x400000:
-              raise SystemExit(
-                  "ERROR: TARS-ESP32.bin melebihi kapasitas flash 4 MB"
-              )
+              raise SystemExit("ERROR: BIN melebihi 4 MB")
 
-          print("")
-          print("OK - firmware berada dalam batas 4 MB")
+          if size != 0x400000:
+              raise SystemExit("ERROR: merged BIN bukan 4 MB penuh")
+
+          print("OK - merged BIN tepat 4 MB")
+          print("LittleFS/spiffs offset: 0x2A0000")
+          print("LittleFS/spiffs size  : 0x160000")
+          print("Flash address          : 0x0000")
           PY
 
       - name: Upload TARS firmware
