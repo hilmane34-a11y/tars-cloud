@@ -35,160 +35,130 @@ jobs:
         run: |
           pio run -e tars -t buildfs
 
-      - name: Find ESP32 build files
+      - name: Locate ESP32 tools
         shell: bash
         run: |
-          echo "========================================"
-          echo "SEARCHING ESP32 FILES"
-          echo "========================================"
+          FRAMEWORK="$HOME/.platformio/packages/framework-arduinoespressif32"
+          ESPTOOL="$HOME/.platformio/packages/tool-esptoolpy/esptool.py"
 
-          echo ""
-          echo "=== All bootloader.bin ==="
-          find "$HOME/.platformio" -type f -name "bootloader.bin" -print || true
+          BOOTLOADER_ELF="$FRAMEWORK/tools/sdk/esp32/bin/bootloader_dio_40m.elf"
+          BOOT_APP0="$FRAMEWORK/tools/partitions/boot_app0.bin"
 
-          echo ""
-          echo "=== All boot_app0.bin ==="
-          find "$HOME/.platformio" -type f -name "boot_app0.bin" -print || true
-
-          echo ""
-          echo "=== All partitions.bin ==="
-          find ".pio" "$HOME/.platformio" \
-            -type f -name "partitions.bin" -print || true
-
-          echo ""
-          echo "=== PlatformIO packages ==="
-          find "$HOME/.platformio/packages" \
-            -maxdepth 1 \
-            -mindepth 1 \
-            -type d \
-            -printf "%f\n" \
-            | sort
-
-      - name: Locate bootloader
-        shell: bash
-        run: |
-          BOOTLOADER=$(find "$HOME/.platformio" \
-            -type f \
-            -name "bootloader.bin" \
-            | head -n 1)
-
-          if [ -z "$BOOTLOADER" ]; then
-            echo ""
-            echo "ERROR: bootloader.bin tidak ditemukan di PlatformIO."
-            echo ""
-            echo "Mencari file bootloader lain:"
-            find "$HOME/.platformio" \
-              -type f \
-              \( -iname "*bootloader*" -o -iname "*boot*" \) \
-              -print \
-              | head -n 100
+          if [ ! -f "$BOOTLOADER_ELF" ]; then
+            echo "ERROR: bootloader_dio_40m.elf tidak ditemukan"
             exit 1
           fi
 
-          echo "BOOTLOADER=$BOOTLOADER" >> "$GITHUB_ENV"
-
-          echo ""
-          echo "BOOTLOADER:"
-          echo "$BOOTLOADER"
-
-      - name: Locate boot_app0
-        shell: bash
-        run: |
-          BOOT_APP0=$(find "$HOME/.platformio" \
-            -type f \
-            -name "boot_app0.bin" \
-            | head -n 1)
-
-          if [ -z "$BOOT_APP0" ]; then
+          if [ ! -f "$BOOT_APP0" ]; then
             echo "ERROR: boot_app0.bin tidak ditemukan"
             exit 1
           fi
 
-          echo "BOOT_APP0=$BOOT_APP0" >> "$GITHUB_ENV"
-
-          echo ""
-          echo "BOOT_APP0:"
-          echo "$BOOT_APP0"
-
-      - name: Locate esptool
-        shell: bash
-        run: |
-          ESPTOOL=$(find "$HOME/.platformio/packages/tool-esptoolpy" \
-            -type f \
-            \( -name "esptool.py" -o -name "esptool" \) \
-            | head -n 1)
-
-          if [ -z "$ESPTOOL" ]; then
-            echo "ERROR: esptool tidak ditemukan"
+          if [ ! -f "$ESPTOOL" ]; then
+            echo "ERROR: esptool.py tidak ditemukan"
             exit 1
           fi
 
+          echo "FRAMEWORK=$FRAMEWORK" >> "$GITHUB_ENV"
+          echo "BOOTLOADER_ELF=$BOOTLOADER_ELF" >> "$GITHUB_ENV"
+          echo "BOOT_APP0=$BOOT_APP0" >> "$GITHUB_ENV"
           echo "ESPTOOL=$ESPTOOL" >> "$GITHUB_ENV"
 
-          echo ""
-          echo "ESPTOOL:"
+          echo "Framework:"
+          echo "$FRAMEWORK"
+
+          echo "Bootloader ELF:"
+          echo "$BOOTLOADER_ELF"
+
+          echo "Boot App0:"
+          echo "$BOOT_APP0"
+
+          echo "Esptool:"
           echo "$ESPTOOL"
 
-      - name: Verify required files
+      - name: Convert bootloader ELF to BIN
+        shell: bash
+        run: |
+          echo "========================================"
+          echo "CONVERTING BOOTLOADER ELF"
+          echo "========================================"
+
+          python "$ESPTOOL" \
+            --chip esp32 \
+            elf2image \
+            "$BOOTLOADER_ELF" \
+            -o bootloader.bin
+
+          if [ ! -f bootloader.bin ]; then
+            echo "ERROR: bootloader.bin gagal dibuat"
+            exit 1
+          fi
+
+          echo ""
+          echo "Bootloader berhasil dibuat:"
+          ls -lh bootloader.bin
+
+      - name: Verify build files
         shell: bash
         run: |
           BUILD=".pio/build/tars"
 
           echo "========================================"
-          echo "VERIFYING BUILD"
+          echo "VERIFY BUILD FILES"
           echo "========================================"
 
-          test -f "$BOOTLOADER" || {
-            echo "ERROR: bootloader.bin tidak ditemukan"
-            exit 1
-          }
-
-          test -f "$BOOT_APP0" || {
-            echo "ERROR: boot_app0.bin tidak ditemukan"
+          test -f bootloader.bin || {
+            echo "ERROR: bootloader.bin tidak ada"
             exit 1
           }
 
           test -f "$BUILD/partitions.bin" || {
-            echo "ERROR: partitions.bin tidak ditemukan"
+            echo "ERROR: partitions.bin tidak ada"
             exit 1
           }
 
           test -f "$BUILD/firmware.bin" || {
-            echo "ERROR: firmware.bin tidak ditemukan"
+            echo "ERROR: firmware.bin tidak ada"
             exit 1
           }
 
           test -f "$BUILD/littlefs.bin" || {
-            echo "ERROR: littlefs.bin tidak ditemukan"
+            echo "ERROR: littlefs.bin tidak ada"
+            exit 1
+          }
+
+          test -f "$BOOT_APP0" || {
+            echo "ERROR: boot_app0.bin tidak ada"
             exit 1
           }
 
           echo ""
-          echo "SEMUA FILE TERSEDIA:"
+          echo "Semua file tersedia:"
           echo ""
 
-          ls -lh "$BOOTLOADER"
-          ls -lh "$BOOT_APP0"
+          ls -lh bootloader.bin
           ls -lh "$BUILD/partitions.bin"
           ls -lh "$BUILD/firmware.bin"
           ls -lh "$BUILD/littlefs.bin"
+          ls -lh "$BOOT_APP0"
 
-      - name: Merge firmware
+      - name: Merge TARS firmware
         shell: bash
         run: |
           BUILD=".pio/build/tars"
 
           echo "========================================"
-          echo "MERGING TARS ESP32"
+          echo "MERGING TARS ESP32 FIRMWARE"
           echo "========================================"
 
           python "$ESPTOOL" \
-            --chip esp32 merge_bin \
+            --chip esp32 \
+            merge_bin \
             -o TARS-ESP32.bin \
             --flash_mode dio \
             --flash_freq 40m \
             --flash_size 4MB \
-            0x1000 "$BOOTLOADER" \
+            0x1000 bootloader.bin \
             0x8000 "$BUILD/partitions.bin" \
             0xE000 "$BOOT_APP0" \
             0x10000 "$BUILD/firmware.bin" \
@@ -196,7 +166,7 @@ jobs:
 
           echo ""
           echo "========================================"
-          echo "MERGE SUCCESS"
+          echo "MERGE BERHASIL"
           echo "========================================"
 
           ls -lh TARS-ESP32.bin
@@ -224,11 +194,11 @@ jobs:
 
           if size > 0x400000:
               raise SystemExit(
-                  "ERROR: TARS-ESP32.bin lebih besar dari 4 MB"
+                  "ERROR: TARS-ESP32.bin melebihi kapasitas flash 4 MB"
               )
 
           print("")
-          print("OK - ukuran cocok untuk ESP32 4MB")
+          print("OK - firmware berada dalam batas 4 MB")
           PY
 
       - name: Upload TARS firmware
