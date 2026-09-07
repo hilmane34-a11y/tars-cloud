@@ -35,34 +35,66 @@ jobs:
         run: |
           pio run -e tars -t buildfs
 
-      - name: Generate bootloader
+      - name: Find ESP32 build files
         shell: bash
         run: |
-          echo "=== Generating ESP32 bootloader ==="
-
-          pio run -e tars -t bootloader
+          echo "========================================"
+          echo "SEARCHING ESP32 FILES"
+          echo "========================================"
 
           echo ""
-          echo "=== Searching generated bootloader ==="
+          echo "=== All bootloader.bin ==="
+          find "$HOME/.platformio" -type f -name "bootloader.bin" -print || true
 
-          find .pio -type f -name "bootloader.bin" -print
+          echo ""
+          echo "=== All boot_app0.bin ==="
+          find "$HOME/.platformio" -type f -name "boot_app0.bin" -print || true
 
-          BOOTLOADER=$(find .pio -type f -name "bootloader.bin" | head -n 1)
+          echo ""
+          echo "=== All partitions.bin ==="
+          find ".pio" "$HOME/.platformio" \
+            -type f -name "partitions.bin" -print || true
+
+          echo ""
+          echo "=== PlatformIO packages ==="
+          find "$HOME/.platformio/packages" \
+            -maxdepth 1 \
+            -mindepth 1 \
+            -type d \
+            -printf "%f\n" \
+            | sort
+
+      - name: Locate bootloader
+        shell: bash
+        run: |
+          BOOTLOADER=$(find "$HOME/.platformio" \
+            -type f \
+            -name "bootloader.bin" \
+            | head -n 1)
 
           if [ -z "$BOOTLOADER" ]; then
-            echo "ERROR: bootloader.bin tidak berhasil dibuat"
+            echo ""
+            echo "ERROR: bootloader.bin tidak ditemukan di PlatformIO."
+            echo ""
+            echo "Mencari file bootloader lain:"
+            find "$HOME/.platformio" \
+              -type f \
+              \( -iname "*bootloader*" -o -iname "*boot*" \) \
+              -print \
+              | head -n 100
             exit 1
           fi
 
           echo "BOOTLOADER=$BOOTLOADER" >> "$GITHUB_ENV"
 
-          echo "Bootloader ditemukan:"
+          echo ""
+          echo "BOOTLOADER:"
           echo "$BOOTLOADER"
 
       - name: Locate boot_app0
         shell: bash
         run: |
-          BOOT_APP0=$(find "$HOME/.platformio/packages" \
+          BOOT_APP0=$(find "$HOME/.platformio" \
             -type f \
             -name "boot_app0.bin" \
             | head -n 1)
@@ -74,7 +106,8 @@ jobs:
 
           echo "BOOT_APP0=$BOOT_APP0" >> "$GITHUB_ENV"
 
-          echo "Boot App0 ditemukan:"
+          echo ""
+          echo "BOOT_APP0:"
           echo "$BOOT_APP0"
 
       - name: Locate esptool
@@ -92,60 +125,61 @@ jobs:
 
           echo "ESPTOOL=$ESPTOOL" >> "$GITHUB_ENV"
 
-          echo "Esptool:"
+          echo ""
+          echo "ESPTOOL:"
           echo "$ESPTOOL"
 
-      - name: Verify build files
+      - name: Verify required files
         shell: bash
         run: |
           BUILD=".pio/build/tars"
 
           echo "========================================"
-          echo "VERIFY BUILD FILES"
+          echo "VERIFYING BUILD"
           echo "========================================"
 
           test -f "$BOOTLOADER" || {
-            echo "ERROR: bootloader.bin tidak ada"
-            exit 1
-          }
-
-          test -f "$BUILD/partitions.bin" || {
-            echo "ERROR: partitions.bin tidak ada"
+            echo "ERROR: bootloader.bin tidak ditemukan"
             exit 1
           }
 
           test -f "$BOOT_APP0" || {
-            echo "ERROR: boot_app0.bin tidak ada"
+            echo "ERROR: boot_app0.bin tidak ditemukan"
+            exit 1
+          }
+
+          test -f "$BUILD/partitions.bin" || {
+            echo "ERROR: partitions.bin tidak ditemukan"
             exit 1
           }
 
           test -f "$BUILD/firmware.bin" || {
-            echo "ERROR: firmware.bin tidak ada"
+            echo "ERROR: firmware.bin tidak ditemukan"
             exit 1
           }
 
           test -f "$BUILD/littlefs.bin" || {
-            echo "ERROR: littlefs.bin tidak ada"
+            echo "ERROR: littlefs.bin tidak ditemukan"
             exit 1
           }
 
           echo ""
-          echo "Semua file tersedia:"
+          echo "SEMUA FILE TERSEDIA:"
           echo ""
 
           ls -lh "$BOOTLOADER"
-          ls -lh "$BUILD/partitions.bin"
           ls -lh "$BOOT_APP0"
+          ls -lh "$BUILD/partitions.bin"
           ls -lh "$BUILD/firmware.bin"
           ls -lh "$BUILD/littlefs.bin"
 
-      - name: Create merged firmware
+      - name: Merge firmware
         shell: bash
         run: |
           BUILD=".pio/build/tars"
 
           echo "========================================"
-          echo "MERGING TARS FIRMWARE"
+          echo "MERGING TARS ESP32"
           echo "========================================"
 
           python "$ESPTOOL" \
@@ -162,12 +196,12 @@ jobs:
 
           echo ""
           echo "========================================"
-          echo "MERGE BERHASIL"
+          echo "MERGE SUCCESS"
           echo "========================================"
 
           ls -lh TARS-ESP32.bin
 
-      - name: Verify final firmware
+      - name: Verify final BIN
         shell: bash
         run: |
           python - <<'PY'
@@ -181,20 +215,20 @@ jobs:
           size = os.path.getsize(path)
 
           print("========================================")
-          print("FINAL FIRMWARE")
+          print("TARS FINAL FIRMWARE")
           print("========================================")
-          print("File   :", path)
-          print("Bytes  :", size)
-          print("MB     :", round(size / 1024 / 1024, 2))
-          print("Flash  : 4 MB")
+          print("File :", path)
+          print("Size :", size, "bytes")
+          print("Size :", round(size / 1024 / 1024, 2), "MB")
+          print("Flash: 4 MB")
 
           if size > 0x400000:
               raise SystemExit(
-                  "ERROR: TARS-ESP32.bin melebihi flash 4 MB"
+                  "ERROR: TARS-ESP32.bin lebih besar dari 4 MB"
               )
 
           print("")
-          print("OK: firmware berada dalam batas flash 4 MB")
+          print("OK - ukuran cocok untuk ESP32 4MB")
           PY
 
       - name: Upload TARS firmware
