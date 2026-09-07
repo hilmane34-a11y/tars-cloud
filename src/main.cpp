@@ -1,94 +1,46 @@
-#include <Arduino.h>
-#include <WiFi.h>
-#include <Wire.h>
-#include <Adafruit_GFX.h>
-#include <Adafruit_SSD1306.h>
-#include "BluetoothA2DPSource.h"
+#pragma once
 
-#include "AudioTools.h"
-#include "AudioTools/AudioCodecs/CodecMP3Helix.h"
+// ============================================================
+// WIFI
+// ============================================================
 
-#include "config.h"
+#define WIFI_SSID       "HomeManz"
+#define WIFI_PASSWORD   "rumahanak4"
 
-Adafruit_SSD1306 oled(
-    OLED_WIDTH,
-    OLED_HEIGHT,
-    &Wire,
-    -1
-);
+// ============================================================
+// TARS CLOUD
+// ============================================================
 
-BluetoothA2DPSource a2dp;
+#define TARS_CLOUD_URL  "https://tars-cloud-v1.hilmane34.workers.dev"
 
-void oledText(const char *text)
-{
-    oled.clearDisplay();
-    oled.setTextSize(1);
-    oled.setTextColor(SSD1306_WHITE);
-    oled.setCursor(0, 0);
-    oled.println(text);
-    oled.display();
-}
+// ============================================================
+// BLUETOOTH HEADSET
+// ============================================================
 
-int32_t get_audio_data(uint8_t *data, int32_t len)
-{
-    memset(data, 0, len);
-    return len;
-}
+#define BT_HEADSET_NAME "I7-TWS"
 
-void setup()
-{
-    Serial.begin(115200);
-    delay(500);
+// ============================================================
+// OLED SSD1306
+// ============================================================
 
-    Wire.begin(OLED_SDA, OLED_SCL);
+#define OLED_SDA        21
+#define OLED_SCL        22
+#define OLED_ADDR       0x3C
 
-    if (!oled.begin(
-        SSD1306_SWITCHCAPVCC,
-        OLED_ADDR
-    ))
-    {
-        while (true)
-        {
-            delay(1000);
-        }
-    }
+#define OLED_WIDTH      128
+#define OLED_HEIGHT     64
 
-    oledText("TARS BOOT");
+// ============================================================
+// MP3
+// ============================================================
 
-    WiFi.mode(WIFI_STA);
-    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+#define MP3_FILE        "/tars.mp3"
 
-    oledText("WIFI...");
+// Maximum time waiting for Bluetooth connection
+#define BT_CONNECT_TIMEOUT 20000
 
-    while (WiFi.status() != WL_CONNECTED)
-    {
-        delay(300);
-    }
+// ============================================================
+// TARS
+// ============================================================
 
-    oledText("WIFI OK");
-
-    delay(1000);
-
-    oledText("BT START");
-
-    a2dp.set_data_callback(get_audio_data);
-    a2dp.start(BT_HEADSET_NAME);
-
-    oledText("TARS READY");
-
-    Serial.println();
-    Serial.println("==============================");
-    Serial.println("TARS ESP32");
-    Serial.println("==============================");
-    Serial.println("OLED     : OK");
-    Serial.println("WIFI     : OK");
-    Serial.println("A2DP     : START");
-    Serial.print("HEADSET  : ");
-    Serial.println(BT_HEADSET_NAME);
-    Serial.println("==============================");
-}
-
-void loop()
-{
-    delay(20);
-}
+#define SERIAL_BAUD     115200
