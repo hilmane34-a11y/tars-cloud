@@ -43,7 +43,7 @@ static const uint32_t TEXT_SPEED_MS = 35;
 static const size_t TTS_MAX_CHARS = 450;
 
 // ============================================================
-// AUDIO VOLUME
+// AUDIO
 // ============================================================
 
 static const int32_t PCM_GAIN = 2;
@@ -130,15 +130,17 @@ static bool syncNTPOnce()
 }
 
 // ============================================================
-// PCM BUFFER
+// PCM RING BUFFER
 // ============================================================
 
-// 32 KB circular PCM buffer.
-// Lebih aman untuk output 22050 mono -> 44100 stereo.
 static const size_t PCM_BUFFER_SIZE = 32768;
 
-// Prime cukup besar tetapi tidak memenuhi seluruh buffer.
-static const size_t PCM_PRIME_BYTES = 16384;
+// Jangan memenuhi buffer sebelum Bluetooth hidup.
+static const size_t PCM_PRIME_BYTES = 8192;
+
+// Batas data MP3 yang diberikan ke decoder setiap copy.
+// Ini mencegah satu copy menghasilkan PCM terlalu besar.
+static const size_t MP3_COPY_BUFFER_SIZE = 1024;
 
 static uint8_t pcmBuffer[PCM_BUFFER_SIZE];
 
@@ -222,7 +224,7 @@ static bool mp3InputFinished = false;
 static bool playbackRunning = false;
 
 // ============================================================
-// PCM OUTPUT
+// PCM OUTPUT STREAM
 // ============================================================
 
 class PCMOutputStream : public AudioStream
@@ -256,10 +258,15 @@ public:
     }
 
     // --------------------------------------------------------
-    // PENTING:
-    // availableForWrite() harus menghitung ukuran OUTPUT.
+    // availableForWrite
     //
-    // 22050 mono -> 44100 stereo = 4x output.
+    // IMPORTANT:
+    // Ini adalah kapasitas stream yang dilihat oleh
+    // EncodedAudioStream / StreamCopy.
+    //
+    // Jangan dibagi 4 berdasarkan format output.
+    // Kita batasi juga agar MP3 StreamCopy tidak memberikan
+    // chunk terlalu besar ke decoder.
     // --------------------------------------------------------
 
     int availableForWrite() override
@@ -271,42 +278,24 @@ public:
 
         portEXIT_CRITICAL(&pcmMux);
 
-        if (sourceInfo.bits_per_sample != 16)
+        if (freeBytes == 0)
             return 0;
 
-        if (
-            sourceInfo.sample_rate == 22050 &&
-            sourceInfo.channels == 1
-        )
-        {
-            return (int)(freeBytes / 4);
-        }
+        if (freeBytes < 4608)
+            return 0;
 
-        if (
-            sourceInfo.sample_rate == 44100 &&
-            sourceInfo.channels == 1
-        )
-        {
-            return (int)(freeBytes / 2);
-        }
+        // Jangan izinkan satu operasi StreamCopy terlalu besar.
+        if (freeBytes > MP3_COPY_BUFFER_SIZE)
+            return MP3_COPY_BUFFER_SIZE;
 
-        if (
-            sourceInfo.sample_rate == 44100 &&
-            sourceInfo.channels == 2
-        )
-        {
-            return (int)freeBytes;
-        }
-
-        return 0;
+        return (int)freeBytes;
     }
 
     // --------------------------------------------------------
     // WRITE
     //
-    // Tidak pernah melakukan partial write.
-    // Kalau seluruh output tidak muat, return 0.
-    // Ini mencegah Helix menerima hasil setengah frame.
+    // Satu blok decoder harus diterima penuh.
+    // Tidak boleh partial write.
     // --------------------------------------------------------
 
     size_t write(
@@ -328,7 +317,7 @@ public:
 
         // ----------------------------------------------------
         // 44100 stereo
-        // input 2 byte -> output 2 byte
+        // 2 byte input -> 2 byte output
         // ----------------------------------------------------
 
         if (
@@ -336,16 +325,25 @@ public:
             channels == 2
         )
         {
-            size_t outputBytes = size;
+            size_t usableSize =
+                size & ~((size_t)1);
 
-            if (!canWrite(outputBytes))
+            if (usableSize == 0)
+                return 0;
+
+            size_t outputBytes =
+                usableSize;
+
+            if (!reserveSpace(outputBytes))
                 return 0;
 
             const int16_t *samples =
                 (const int16_t *)data;
 
             size_t sampleCount =
-                size / 2;
+                usableSize / 2;
+
+            portENTER_CRITICAL(&pcmMux);
 
             for (size_t i = 0;
                  i < sampleCount;
@@ -354,17 +352,19 @@ public:
                 int16_t s =
                     boostPCM(samples[i]);
 
-                writeRawDirect(
+                writeRawLocked(
                     (const uint8_t *)&s,
                     2
                 );
             }
 
-            return sampleCount * 2;
+            portEXIT_CRITICAL(&pcmMux);
+
+            return usableSize;
         }
 
         // ----------------------------------------------------
-        // 44100 mono -> stereo
+        // 44100 mono -> 44100 stereo
         // 2 byte input -> 4 byte output
         // ----------------------------------------------------
 
@@ -373,17 +373,25 @@ public:
             channels == 1
         )
         {
-            size_t outputBytes =
-                (size / 2) * 4;
+            size_t usableSize =
+                size & ~((size_t)1);
 
-            if (!canWrite(outputBytes))
+            if (usableSize == 0)
+                return 0;
+
+            size_t sampleCount =
+                usableSize / 2;
+
+            size_t outputBytes =
+                sampleCount * 4;
+
+            if (!reserveSpace(outputBytes))
                 return 0;
 
             const int16_t *samples =
                 (const int16_t *)data;
 
-            size_t sampleCount =
-                size / 2;
+            portENTER_CRITICAL(&pcmMux);
 
             for (size_t i = 0;
                  i < sampleCount;
@@ -397,13 +405,15 @@ public:
                 memcpy(out, &s, 2);
                 memcpy(out + 2, &s, 2);
 
-                writeRawDirect(
+                writeRawLocked(
                     out,
                     4
                 );
             }
 
-            return sampleCount * 2;
+            portEXIT_CRITICAL(&pcmMux);
+
+            return usableSize;
         }
 
         // ----------------------------------------------------
@@ -413,7 +423,10 @@ public:
         // ->
         // 8 byte output
         //
-        // Duplicate sample 2x untuk 44100 Hz.
+        // sample di-double:
+        //
+        // L,R
+        // L,R
         // ----------------------------------------------------
 
         if (
@@ -421,17 +434,25 @@ public:
             channels == 1
         )
         {
+            size_t usableSize =
+                size & ~((size_t)1);
+
+            if (usableSize == 0)
+                return 0;
+
             size_t sampleCount =
-                size / 2;
+                usableSize / 2;
 
             size_t outputBytes =
                 sampleCount * 8;
 
-            if (!canWrite(outputBytes))
+            if (!reserveSpace(outputBytes))
                 return 0;
 
             const int16_t *samples =
                 (const int16_t *)data;
+
+            portENTER_CRITICAL(&pcmMux);
 
             for (size_t i = 0;
                  i < sampleCount;
@@ -450,17 +471,23 @@ public:
                 memcpy(out + 4, &s, 2);
                 memcpy(out + 6, &s, 2);
 
-                writeRawDirect(
+                writeRawLocked(
                     out,
                     8
                 );
             }
 
-            return sampleCount * 2;
+            portEXIT_CRITICAL(&pcmMux);
+
+            return usableSize;
         }
 
         return 0;
     }
+
+    // --------------------------------------------------------
+    // A2DP membaca PCM dari ring buffer
+    // --------------------------------------------------------
 
     size_t readPCM(
         uint8_t *data,
@@ -543,24 +570,40 @@ public:
 
 private:
 
-    bool canWrite(
+    // --------------------------------------------------------
+    // Reserve seluruh output sebelum menulis.
+    // --------------------------------------------------------
+
+    bool reserveSpace(
         size_t outputBytes
     )
     {
+        if (
+            outputBytes == 0 ||
+            outputBytes > PCM_BUFFER_SIZE
+        )
+        {
+            return false;
+        }
+
         portENTER_CRITICAL(&pcmMux);
 
         size_t freeBytes =
             PCM_BUFFER_SIZE - pcmUsed;
 
-        bool result =
+        bool ok =
             freeBytes >= outputBytes;
 
         portEXIT_CRITICAL(&pcmMux);
 
-        return result;
+        return ok;
     }
 
-    void writeRawDirect(
+    // --------------------------------------------------------
+    // Harus dipanggil ketika pcmMux sudah locked.
+    // --------------------------------------------------------
+
+    void writeRawLocked(
         const uint8_t *data,
         size_t size
     )
@@ -601,14 +644,20 @@ private:
 
 PCMOutputStream pcmOutput;
 
+// ============================================================
+// DECODER PIPELINE
+// ============================================================
+
 EncodedAudioStream decoder(
     &pcmOutput,
     &mp3Decoder
 );
 
+// Buffer copy MP3 sengaja kecil.
 StreamCopy mp3Copier(
     decoder,
-    mp3File
+    mp3File,
+    MP3_COPY_BUFFER_SIZE
 );
 
 // ============================================================
@@ -1426,7 +1475,8 @@ int32_t getAudioData(
             wanted
         );
 
-    // A2DP selalu mendapat jumlah byte yang diminta.
+    // Jika decoder belum sempat mengisi,
+    // A2DP tetap mendapat PCM valid berupa silence.
     if (got < wanted)
     {
         memset(
@@ -1631,12 +1681,19 @@ bool primePCM()
 
             if (copied == 0)
             {
-                mp3InputFinished =
-                    true;
+                // Jangan langsung menganggap EOF hanya
+                // karena decoder sedang menunggu ruang.
+                if (
+                    mp3File.available() <= 0
+                )
+                {
+                    mp3InputFinished =
+                        true;
 
-                Serial.println(
-                    "TARS: MP3 EOF DURING PRIME"
-                );
+                    Serial.println(
+                        "TARS: MP3 EOF DURING PRIME"
+                    );
+                }
             }
         }
 
@@ -1676,7 +1733,7 @@ bool playMP3()
         return false;
 
     // --------------------------------------------------------
-    // Prime PCM SEBELUM Bluetooth.
+    // Prime hanya 8 KB.
     // --------------------------------------------------------
 
     if (!primePCM())
@@ -1691,7 +1748,7 @@ bool playMP3()
     }
 
     // --------------------------------------------------------
-    // Baru Bluetooth.
+    // Bluetooth hidup setelah PCM sudah tersedia.
     // --------------------------------------------------------
 
     if (!startBluetooth())
@@ -1729,22 +1786,35 @@ bool playMP3()
     )
     {
         // ----------------------------------------------------
-        // Decoder terus mengisi buffer.
+        // Decoder berjalan bersamaan dengan A2DP.
         // ----------------------------------------------------
 
         if (!mp3InputFinished)
         {
-            size_t copied =
-                mp3Copier.copy();
+            size_t freePCM =
+                PCM_BUFFER_SIZE -
+                pcmOutput.availablePCM();
 
-            if (copied == 0)
+            // Hanya decode jika masih ada ruang cukup.
+            if (freePCM >= 8192)
             {
-                mp3InputFinished =
-                    true;
+                size_t copied =
+                    mp3Copier.copy();
 
-                Serial.println(
-                    "TARS: MP3 INPUT EOF"
-                );
+                if (copied == 0)
+                {
+                    if (
+                        mp3File.available() <= 0
+                    )
+                    {
+                        mp3InputFinished =
+                            true;
+
+                        Serial.println(
+                            "TARS: MP3 INPUT EOF"
+                        );
+                    }
+                }
             }
         }
 
@@ -1768,7 +1838,7 @@ bool playMP3()
         }
 
         // ----------------------------------------------------
-        // MP3 habis + PCM habis.
+        // MP3 sudah habis dan PCM sudah terkuras.
         // ----------------------------------------------------
 
         if (
@@ -1950,7 +2020,7 @@ void processQuestion(
 
     // --------------------------------------------------------
     // WiFi ON kembali.
-    // Tidak NTP lagi.
+    // NTP TIDAK diulang.
     // --------------------------------------------------------
 
     if (
@@ -2374,6 +2444,14 @@ void setup()
 
     Serial.println(
         "PCM  : 32KB SAFE BUFFER"
+    );
+
+    Serial.println(
+        "PRIME: 8KB"
+    );
+
+    Serial.println(
+        "MP3 COPY: 1KB"
     );
 
     Serial.println(
