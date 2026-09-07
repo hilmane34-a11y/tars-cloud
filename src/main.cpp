@@ -4,6 +4,8 @@
 #include <HTTPClient.h>
 #include <LittleFS.h>
 #include <Wire.h>
+#include <time.h>
+
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <ArduinoJson.h>
@@ -11,7 +13,6 @@
 #include "BluetoothA2DPSource.h"
 #include "AudioTools.h"
 #include "AudioTools/AudioCodecs/CodecMP3Helix.h"
-
 #include "config.h"
 
 // ============================================================
@@ -33,11 +34,20 @@ static const char *TARS_TTS_URL =
 // ============================================================
 
 static const uint32_t WIFI_TIMEOUT_MS = 15000;
-static const uint32_t BT_TIMEOUT_MS   = 20000;
+static const uint32_t NTP_ATTEMPT_TIMEOUT_MS = 5000;
+static const uint32_t NTP_RETRY_DELAY_MS = 1000;
+static const uint32_t BT_TIMEOUT_MS = 20000;
 static const uint32_t PLAY_TIMEOUT_MS = 120000;
 
 static const uint32_t OLED_REFRESH_MS = 80;
-static const uint32_t TEXT_SPEED_MS   = 35;
+static const uint32_t TEXT_SPEED_MS = 35;
+
+// NTP WAJIB minimal 4 percobaan.
+// Kalau setelah 4 kali belum valid,
+// akan terus mencoba sampai valid.
+static const uint8_t NTP_MIN_ATTEMPTS = 4;
+
+static const size_t PCM_PRIME_BYTES = 4096;
 
 // ============================================================
 // PCM BUFFER
@@ -47,9 +57,9 @@ static const size_t PCM_BUFFER_SIZE = 16384;
 
 static uint8_t pcmBuffer[PCM_BUFFER_SIZE];
 
-static volatile size_t pcmReadPos  = 0;
+static volatile size_t pcmReadPos = 0;
 static volatile size_t pcmWritePos = 0;
-static volatile size_t pcmUsed     = 0;
+static volatile size_t pcmUsed = 0;
 
 static portMUX_TYPE pcmMux =
     portMUX_INITIALIZER_UNLOCKED;
@@ -72,7 +82,7 @@ File mp3File;
 MP3DecoderHelix mp3Decoder;
 
 // ============================================================
-// SYSTEM STATE
+// TARS STATE
 // ============================================================
 
 enum TarsState
@@ -89,13 +99,11 @@ static volatile TarsState tarsState =
     TARS_BOOT;
 
 static volatile bool wifiIsOn = false;
-static volatile bool btIsOn   = false;
+static volatile bool btIsOn = false;
 static volatile bool workerBusy = false;
 
 // ============================================================
-// SPEAKING TEXT
-// Hanya worker yang menulis.
-// loop() hanya membaca untuk OLED.
+// SPEECH
 // ============================================================
 
 static String speechText;
@@ -103,22 +111,34 @@ static String speechText;
 static volatile size_t speechVisibleChars = 0;
 static volatile uint32_t speechLastUpdate = 0;
 
+// ============================================================
+// OLED
+// ============================================================
+
 static uint32_t oledLastRefresh = 0;
 static uint32_t panelAnimation = 0;
 
 // ============================================================
-// SERIAL INPUT
+// SERIAL QUEUE
 // ============================================================
 
-static String serialInput;
+struct QuestionMessage
+{
+    char text[301];
+};
+
+static QueueHandle_t questionQueue = nullptr;
+
+static char serialLine[301];
+static size_t serialLineLength = 0;
 
 // ============================================================
 // AUDIO STATE
 // ============================================================
 
 static bool audioDecoderReady = false;
-static bool mp3InputFinished  = false;
-static bool playbackRunning   = false;
+static bool mp3InputFinished = false;
+static bool playbackRunning = false;
 
 // ============================================================
 // PCM OUTPUT STREAM
@@ -179,7 +199,6 @@ public:
             if (freeBytes == 0)
             {
                 portEXIT_CRITICAL(&pcmMux);
-
                 delay(1);
                 continue;
             }
@@ -264,8 +283,7 @@ public:
     {
         portENTER_CRITICAL(&pcmMux);
 
-        size_t value =
-            pcmUsed;
+        size_t value = pcmUsed;
 
         portEXIT_CRITICAL(&pcmMux);
 
@@ -297,38 +315,8 @@ StreamCopy mp3Copier(
 );
 
 // ============================================================
-// OLED LOW LEVEL
-// ============================================================
-
-static void drawPanelFrame()
-{
-    oled.drawRect(
-        0,
-        0,
-        128,
-        64,
-        SSD1306_WHITE
-    );
-
-    oled.drawLine(
-        0,
-        11,
-        127,
-        11,
-        SSD1306_WHITE
-    );
-
-    oled.drawLine(
-        0,
-        53,
-        127,
-        53,
-        SSD1306_WHITE
-    );
-}
-
-// ============================================================
-// OLED STATUS HEADER
+// OLED
+// TANPA BORDER / KOTAK TEPI
 // ============================================================
 
 static void drawHeader(
@@ -343,11 +331,17 @@ static void drawHeader(
 
     oled.setCursor(76, 2);
     oled.print(status);
-}
 
-// ============================================================
-// OLED CONNECTION STATUS
-// ============================================================
+    // Garis header pendek,
+    // tidak menyentuh tepi OLED.
+    oled.drawLine(
+        4,
+        11,
+        123,
+        11,
+        SSD1306_WHITE
+    );
+}
 
 static void drawConnectionStatus()
 {
@@ -355,30 +349,16 @@ static void drawConnectionStatus()
     oled.setTextColor(SSD1306_WHITE);
 
     oled.setCursor(4, 56);
-
     oled.print("W:");
-
-    oled.print(
-        wifiIsOn ? "ON" : "OFF"
-    );
+    oled.print(wifiIsOn ? "ON" : "OFF");
 
     oled.setCursor(68, 56);
-
     oled.print("BT:");
-
-    oled.print(
-        btIsOn ? "ON" : "OFF"
-    );
+    oled.print(btIsOn ? "ON" : "OFF");
 }
-
-// ============================================================
-// OLED WAITING PANEL
-// ============================================================
 
 static void drawWaitingPanel()
 {
-    drawPanelFrame();
-
     drawHeader("READY");
 
     oled.setTextSize(1);
@@ -389,17 +369,8 @@ static void drawWaitingPanel()
     oled.setCursor(6, 29);
     oled.print("AWAITING COMMAND");
 
-    // indikator mekanis
     int offset =
         (panelAnimation / 2) % 10;
-
-    oled.drawRect(
-        6,
-        41,
-        116,
-        6,
-        SSD1306_WHITE
-    );
 
     for (int i = 0; i < 10; i++)
     {
@@ -408,24 +379,26 @@ static void drawWaitingPanel()
 
         oled.fillRect(
             9 + i * 11,
-            43,
+            42,
             7,
             2,
             SSD1306_WHITE
         );
     }
 
+    oled.fillRect(
+        9 + offset * 11,
+        41,
+        7,
+        4,
+        SSD1306_WHITE
+    );
+
     drawConnectionStatus();
 }
 
-// ============================================================
-// OLED THINKING PANEL
-// ============================================================
-
 static void drawThinkingPanel()
 {
-    drawPanelFrame();
-
     drawHeader("THINK");
 
     oled.setTextSize(1);
@@ -469,14 +442,8 @@ static void drawThinkingPanel()
     drawConnectionStatus();
 }
 
-// ============================================================
-// OLED PREPARING AUDIO
-// ============================================================
-
 static void drawPreparingPanel()
 {
-    drawPanelFrame();
-
     drawHeader("AUDIO");
 
     oled.setTextSize(1);
@@ -520,35 +487,27 @@ static void drawPreparingPanel()
     drawConnectionStatus();
 }
 
-// ============================================================
-// OLED SPEAKING TEXT
-// ============================================================
-
 static void drawSpeakingPanel()
 {
-    drawPanelFrame();
-
     drawHeader("SPEAK");
 
     oled.setTextSize(1);
 
-    const size_t visible =
+    size_t visible =
         speechVisibleChars;
 
-    const size_t length =
+    size_t length =
         speechText.length();
 
-    size_t charsPerLine = 20;
-    size_t maxLines = 4;
+    const size_t charsPerLine = 20;
+    const size_t maxLines = 4;
 
     size_t startIndex = 0;
 
-    /*
-     * Tampilkan bagian teks terbaru
-     * agar layar tidak berhenti pada
-     * awal jawaban ketika jawabannya panjang.
-     */
-    if (visible > charsPerLine * maxLines)
+    if (
+        visible >
+        charsPerLine * maxLines
+    )
     {
         startIndex =
             visible -
@@ -593,7 +552,6 @@ static void drawSpeakingPanel()
         }
     }
 
-    // Audio indicator
     int wave =
         (panelAnimation / 2) % 10;
 
@@ -614,14 +572,8 @@ static void drawSpeakingPanel()
     drawConnectionStatus();
 }
 
-// ============================================================
-// OLED ERROR
-// ============================================================
-
 static void drawErrorPanel()
 {
-    drawPanelFrame();
-
     drawHeader("ERROR");
 
     oled.setTextSize(1);
@@ -632,22 +584,11 @@ static void drawErrorPanel()
     oled.setCursor(6, 32);
     oled.print("CHECK CONNECTION");
 
-    oled.drawRect(
-        6,
-        43,
-        116,
-        5,
-        SSD1306_WHITE
-    );
-
     drawConnectionStatus();
 }
 
 // ============================================================
-// OLED RENDER
-//
-// Hanya dipanggil dari loop utama.
-// Jadi worker task tidak menyentuh OLED.
+// OLED UPDATE
 // ============================================================
 
 static void updateOLED()
@@ -697,9 +638,6 @@ static void updateOLED()
             break;
     }
 
-    /*
-     * Typing non-blocking.
-     */
     if (
         tarsState == TARS_SPEAKING &&
         speechVisibleChars <
@@ -722,22 +660,198 @@ static void updateOLED()
 }
 
 // ============================================================
+// NTP
+// ============================================================
+
+static bool isTimeValid()
+{
+    time_t now = time(nullptr);
+
+    // 2024-01-01 sebagai batas minimal.
+    // Jika lebih kecil berarti waktu belum benar.
+    return now >= 1704067200;
+}
+
+bool syncNTP()
+{
+    Serial.println();
+    Serial.println(
+        "TARS: NTP START"
+    );
+
+    configTime(
+        7 * 3600,
+        0,
+        "pool.ntp.org",
+        "time.nist.gov",
+        "time.google.com"
+    );
+
+    uint8_t attempt = 0;
+
+    /*
+     * WAJIB minimal 4 percobaan.
+     */
+    while (
+        attempt < NTP_MIN_ATTEMPTS
+    )
+    {
+        attempt++;
+
+        Serial.print(
+            "TARS: NTP attempt "
+        );
+
+        Serial.print(attempt);
+        Serial.print("/");
+        Serial.println(
+            NTP_MIN_ATTEMPTS
+        );
+
+        struct tm timeinfo;
+
+        uint32_t start =
+            millis();
+
+        bool valid = false;
+
+        while (
+            millis() - start <
+            NTP_ATTEMPT_TIMEOUT_MS
+        )
+        {
+            if (
+                getLocalTime(
+                    &timeinfo,
+                    500
+                )
+            )
+            {
+                if (
+                    isTimeValid()
+                )
+                {
+                    valid = true;
+                    break;
+                }
+            }
+
+            delay(100);
+        }
+
+        if (valid)
+        {
+            Serial.printf(
+                "TARS: NTP OK %04d-%02d-%02d %02d:%02d:%02d\n",
+                timeinfo.tm_year + 1900,
+                timeinfo.tm_mon + 1,
+                timeinfo.tm_mday,
+                timeinfo.tm_hour,
+                timeinfo.tm_min,
+                timeinfo.tm_sec
+            );
+        }
+        else
+        {
+            Serial.println(
+                "TARS: NTP belum valid"
+            );
+        }
+
+        /*
+         * Jangan langsung selesai.
+         * Minimal 4 attempt tetap dijalankan.
+         */
+        if (
+            attempt < NTP_MIN_ATTEMPTS
+        )
+        {
+            delay(
+                NTP_RETRY_DELAY_MS
+            );
+        }
+    }
+
+    /*
+     * Setelah 4 attempt, cek lagi.
+     * Kalau belum valid, terus retry
+     * sampai benar-benar valid.
+     */
+    while (
+        !isTimeValid()
+    )
+    {
+        Serial.println(
+            "TARS: NTP belum sinkron."
+        );
+
+        Serial.println(
+            "TARS: retry sampai waktu valid..."
+        );
+
+        delay(
+            NTP_RETRY_DELAY_MS
+        );
+
+        configTime(
+            7 * 3600,
+            0,
+            "pool.ntp.org",
+            "time.nist.gov",
+            "time.google.com"
+        );
+
+        struct tm timeinfo;
+
+        if (
+            getLocalTime(
+                &timeinfo,
+                3000
+            )
+        )
+        {
+            if (
+                isTimeValid()
+            )
+            {
+                Serial.printf(
+                    "TARS: NTP VALID %04d-%02d-%02d %02d:%02d:%02d\n",
+                    timeinfo.tm_year + 1900,
+                    timeinfo.tm_mon + 1,
+                    timeinfo.tm_mday,
+                    timeinfo.tm_hour,
+                    timeinfo.tm_min,
+                    timeinfo.tm_sec
+                );
+
+                return true;
+            }
+        }
+    }
+
+    return true;
+}
+
+// ============================================================
 // WIFI CONNECT
-//
-// Worker task boleh blocking di sini.
-// loop utama tetap jalan.
 // ============================================================
 
 bool connectWiFi()
 {
-    if (WiFi.status() == WL_CONNECTED)
+    if (
+        WiFi.status() ==
+        WL_CONNECTED
+    )
     {
         wifiIsOn = true;
-        return true;
+
+        return syncNTP();
     }
 
     Serial.println();
-    Serial.println("TARS: WiFi ON");
+    Serial.println(
+        "TARS: WiFi ON"
+    );
 
     WiFi.mode(WIFI_STA);
 
@@ -750,7 +864,8 @@ bool connectWiFi()
         millis();
 
     while (
-        WiFi.status() != WL_CONNECTED
+        WiFi.status() !=
+        WL_CONNECTED
     )
     {
         delay(250);
@@ -763,7 +878,7 @@ bool connectWiFi()
             wifiIsOn = false;
 
             Serial.println(
-                "TARS: WiFi timeout"
+                "TARS: WiFi TIMEOUT"
             );
 
             return false;
@@ -779,6 +894,21 @@ bool connectWiFi()
     Serial.println(
         WiFi.localIP()
     );
+
+    /*
+     * Setiap WiFi aktif,
+     * NTP harus dipastikan valid.
+     */
+    if (
+        !syncNTP()
+    )
+    {
+        Serial.println(
+            "TARS: NTP FAILED"
+        );
+
+        return false;
+    }
 
     return true;
 }
@@ -803,7 +933,7 @@ void wifiOff()
 }
 
 // ============================================================
-// ASK TARS CLOUD
+// ASK
 // ============================================================
 
 bool askTars(
@@ -931,7 +1061,7 @@ bool askTars(
 }
 
 // ============================================================
-// DOWNLOAD TTS MP3
+// TTS MP3
 // ============================================================
 
 bool downloadTTS(
@@ -1040,8 +1170,7 @@ bool downloadTTS(
     int contentLength =
         http.getSize();
 
-    size_t total =
-        0;
+    size_t total = 0;
 
     uint32_t lastData =
         millis();
@@ -1134,7 +1263,7 @@ bool downloadTTS(
         );
 
         Serial.println(
-            "TARS: MP3 invalid"
+            "TARS: MP3 INVALID"
         );
 
         return false;
@@ -1145,14 +1274,6 @@ bool downloadTTS(
 
 // ============================================================
 // A2DP CALLBACK
-//
-// TIDAK melakukan:
-// - WiFi
-// - HTTP
-// - MP3 decode
-// - Serial print
-//
-// Hanya mengambil PCM.
 // ============================================================
 
 int32_t getAudioData(
@@ -1187,11 +1308,93 @@ int32_t getAudioData(
 }
 
 // ============================================================
+// START DECODER
+// ============================================================
+
+bool startDecoder()
+{
+    if (
+        !LittleFS.exists(
+            MP3_FILE
+        )
+    )
+    {
+        Serial.println(
+            "TARS: MP3 tidak ada"
+        );
+
+        return false;
+    }
+
+    mp3File =
+        LittleFS.open(
+            MP3_FILE,
+            FILE_READ
+        );
+
+    if (!mp3File)
+    {
+        Serial.println(
+            "TARS: MP3 OPEN gagal"
+        );
+
+        return false;
+    }
+
+    pcmOutput.clearBuffer();
+
+    mp3InputFinished = false;
+    audioDecoderReady = false;
+
+    if (
+        !decoder.begin()
+    )
+    {
+        Serial.println(
+            "TARS: MP3 DECODER gagal"
+        );
+
+        mp3File.close();
+
+        return false;
+    }
+
+    audioDecoderReady = true;
+
+    Serial.println(
+        "TARS: MP3 DECODER READY"
+    );
+
+    return true;
+}
+
+// ============================================================
+// STOP DECODER
+// ============================================================
+
+void stopDecoder()
+{
+    audioDecoderReady = false;
+
+    delay(50);
+
+    if (mp3File)
+    {
+        mp3File.close();
+    }
+
+    Serial.println(
+        "TARS: MP3 DECODER STOP"
+    );
+}
+
+// ============================================================
 // START BLUETOOTH
 // ============================================================
 
 bool startBluetooth()
 {
+    Serial.println();
     Serial.println(
         "TARS: Bluetooth START"
     );
@@ -1224,7 +1427,7 @@ bool startBluetooth()
         )
         {
             Serial.println(
-                "TARS: Bluetooth timeout"
+                "TARS: Bluetooth TIMEOUT"
             );
 
             btIsOn = false;
@@ -1239,6 +1442,11 @@ bool startBluetooth()
         "TARS: I7-TWS CONNECTED"
     );
 
+    /*
+     * JANGAN stop Bluetooth di sini.
+     *
+     * Berikutnya PCM akan di-prime.
+     */
     return true;
 }
 
@@ -1264,79 +1472,71 @@ void stopBluetooth()
 }
 
 // ============================================================
-// START DECODER
+// PRIME PCM
 // ============================================================
 
-bool startDecoder()
+bool primePCM()
 {
-    if (!mp3File)
-    {
-        mp3File =
-            LittleFS.open(
-                MP3_FILE,
-                FILE_READ
-            );
-    }
+    Serial.println(
+        "TARS: PCM PRIMING"
+    );
 
-    if (!mp3File)
-    {
-        Serial.println(
-            "TARS: MP3 open gagal"
-        );
+    uint32_t start =
+        millis();
 
-        return false;
-    }
-
-    pcmOutput.clearBuffer();
-
-    mp3InputFinished =
-        false;
-
-    audioDecoderReady =
-        false;
-
-    if (
-        !decoder.begin()
+    while (
+        pcmOutput.availablePCM() <
+        PCM_PRIME_BYTES
     )
     {
-        Serial.println(
-            "TARS: MP3 decoder gagal"
-        );
+        if (
+            !audioDecoderReady ||
+            !mp3File
+        )
+        {
+            return false;
+        }
 
-        mp3File.close();
+        if (!mp3InputFinished)
+        {
+            size_t copied =
+                mp3Copier.copy();
 
-        return false;
+            if (copied == 0)
+            {
+                mp3InputFinished =
+                    true;
+
+                Serial.println(
+                    "TARS: MP3 EOF DURING PRIME"
+                );
+            }
+        }
+
+        if (
+            millis() - start >
+            10000
+        )
+        {
+            Serial.println(
+                "TARS: PCM PRIME TIMEOUT"
+            );
+
+            return false;
+        }
+
+        delay(1);
     }
 
-    audioDecoderReady =
-        true;
+    Serial.print(
+        "TARS: PCM PRIMED = "
+    );
 
     Serial.println(
-        "TARS: MP3 decoder READY"
+        pcmOutput.availablePCM()
     );
 
     return true;
-}
-
-// ============================================================
-// STOP DECODER
-// ============================================================
-
-void stopDecoder()
-{
-    audioDecoderReady =
-        false;
-
-    delay(50);
-
-    if (mp3File)
-    {
-        mp3File.close();
-    }
-
-    Serial.println(
-        "TARS: MP3 decoder STOP"
-    );
 }
 
 // ============================================================
@@ -1345,33 +1545,59 @@ void stopDecoder()
 
 bool playMP3()
 {
-    if (!startBluetooth())
-    {
-        stopBluetooth();
-        return false;
-    }
+    /*
+     * URUTAN PENTING:
+     *
+     * DECODER READY
+     *       ↓
+     * BLUETOOTH START
+     *       ↓
+     * I7-TWS CONNECTED
+     *       ↓
+     * PCM PRIMING
+     *       ↓
+     * PLAY START
+     *       ↓
+     * AUDIO
+     *       ↓
+     * PCM HABIS
+     *       ↓
+     * DECODER STOP
+     *       ↓
+     * BLUETOOTH OFF
+     */
 
     if (!startDecoder())
+        return false;
+
+    if (!startBluetooth())
     {
+        stopDecoder();
         stopBluetooth();
+
         return false;
     }
 
-    playbackRunning =
-        true;
+    if (!primePCM())
+    {
+        stopDecoder();
+        stopBluetooth();
 
-    mp3InputFinished =
-        false;
+        return false;
+    }
+
+    playbackRunning = true;
+    mp3InputFinished = false;
 
     tarsState =
         TARS_SPEAKING;
 
-    speechVisibleChars =
-        0;
+    speechVisibleChars = 0;
 
     speechLastUpdate =
         millis();
 
+    Serial.println();
     Serial.println(
         "TARS: PLAY START"
     );
@@ -1400,11 +1626,31 @@ bool playMP3()
         }
 
         if (
+            a2dpSource.get_connection_state() !=
+            ESP_A2D_CONNECTION_STATE_CONNECTED
+        )
+        {
+            Serial.println(
+                "TARS: A2DP DISCONNECTED"
+            );
+
+            playbackRunning =
+                false;
+
+            break;
+        }
+
+        /*
+         * MP3 EOF + PCM buffer kosong
+         * berarti seluruh audio sudah
+         * dikonsumsi A2DP.
+         */
+        if (
             mp3InputFinished &&
             pcmOutput.availablePCM() == 0
         )
         {
-            delay(250);
+            delay(150);
 
             if (
                 pcmOutput.availablePCM() == 0
@@ -1416,44 +1662,33 @@ bool playMP3()
         }
 
         if (
-            a2dpSource.get_connection_state() !=
-            ESP_A2D_CONNECTION_STATE_CONNECTED
-        )
-        {
-            Serial.println(
-                "TARS: A2DP disconnected"
-            );
-
-            playbackRunning =
-                false;
-        }
-
-        if (
             millis() - start >
             PLAY_TIMEOUT_MS
         )
         {
             Serial.println(
-                "TARS: playback timeout"
+                "TARS: PLAYBACK TIMEOUT"
             );
 
             playbackRunning =
                 false;
         }
 
-        /*
-         * Sangat penting:
-         * worker task tidak menguasai CPU terus.
-         * loop utama tetap berjalan untuk OLED
-         * dan Serial.
-         */
         delay(1);
     }
 
     delay(100);
 
+    Serial.println(
+        "TARS: PLAY FINISHED"
+    );
+
     stopDecoder();
 
+    /*
+     * Bluetooth baru dimatikan
+     * setelah audio benar-benar selesai.
+     */
     stopBluetooth();
 
     Serial.println(
@@ -1465,9 +1700,6 @@ bool playMP3()
 
 // ============================================================
 // PROCESS QUESTION
-//
-// Berjalan di FreeRTOS worker task,
-// bukan di loop utama.
 // ============================================================
 
 void processQuestion(
@@ -1497,7 +1729,7 @@ void processQuestion(
         TARS_THINKING;
 
     // --------------------------------------------------------
-    // ASK AI
+    // ASK
     // --------------------------------------------------------
 
     String answer;
@@ -1516,9 +1748,9 @@ void processQuestion(
         tarsState =
             TARS_ERROR;
 
-        connectWiFi();
-
         delay(1500);
+
+        connectWiFi();
 
         tarsState =
             TARS_WAITING;
@@ -1527,7 +1759,7 @@ void processQuestion(
     }
 
     // --------------------------------------------------------
-    // SIMPAN TEXT UNTUK OLED
+    // OLED SPEECH TEXT
     // --------------------------------------------------------
 
     speechText =
@@ -1573,10 +1805,13 @@ void processQuestion(
     wifiOff();
 
     // --------------------------------------------------------
-    // PLAY MP3
+    // PLAY
     // --------------------------------------------------------
 
-    if (!playMP3())
+    bool played =
+        playMP3();
+
+    if (!played)
     {
         Serial.println(
             "TARS: PLAY FAILED"
@@ -1604,10 +1839,22 @@ void processQuestion(
     }
 
     // --------------------------------------------------------
-    // WIFI ON
+    // WIFI ON + NTP
     // --------------------------------------------------------
 
-    connectWiFi();
+    if (
+        !connectWiFi()
+    )
+    {
+        Serial.println(
+            "TARS: WiFi/NTP recovery FAILED"
+        );
+
+        tarsState =
+            TARS_ERROR;
+
+        delay(1500);
+    }
 
     speechVisibleChars =
         speechText.length();
@@ -1619,77 +1866,48 @@ void processQuestion(
     Serial.println(
         "TARS READY"
     );
+
     Serial.println(
         "Ketik pertanyaan:"
     );
 }
 
 // ============================================================
-// FREE RTOS WORKER
+// WORKER TASK
 // ============================================================
 
 static void tarsWorkerTask(
     void *parameter
 )
 {
-    String question;
+    QuestionMessage message;
 
     while (true)
     {
-        /*
-         * Worker hanya aktif ketika
-         * ada pertanyaan baru.
-         */
         if (
-            workerBusy
+            xQueueReceive(
+                questionQueue,
+                &message,
+                portMAX_DELAY
+            ) == pdTRUE
         )
         {
-            vTaskDelay(
-                pdMS_TO_TICKS(20)
-            );
-
-            continue;
-        }
-
-        /*
-         * Ambil pertanyaan dari
-         * serial queue sederhana.
-         */
-        if (
-            serialInput.length() > 0
-        )
-        {
-            question =
-                serialInput;
-
-            serialInput =
-                "";
-
-            workerBusy =
-                true;
+            String question =
+                String(message.text);
 
             processQuestion(
                 question
             );
 
-            workerBusy =
-                false;
+            question = "";
 
-            question =
-                "";
+            workerBusy = false;
         }
-
-        vTaskDelay(
-            pdMS_TO_TICKS(10)
-        );
     }
 }
 
 // ============================================================
 // SERIAL
-//
-// loop utama hanya membaca karakter.
-// Tidak pernah menjalankan HTTP/TTS/A2DP.
 // ============================================================
 
 void handleSerial()
@@ -1707,7 +1925,7 @@ void handleSerial()
         if (c == '\n')
         {
             if (
-                serialInput.length() == 0
+                serialLineLength == 0
             )
             {
                 continue;
@@ -1719,30 +1937,91 @@ void handleSerial()
                 Serial.println(
                     "TARS: masih memproses."
                 );
+
                 Serial.println(
-                    "Tunggu sampai TARS READY."
+                    "Tunggu TARS READY."
                 );
 
-                serialInput =
-                    "";
+                serialLineLength = 0;
+                serialLine[0] = '\0';
 
                 continue;
             }
 
-            /*
-             * serialInput sudah berisi
-             * pertanyaan.
-             *
-             * Worker task akan mengambilnya.
-             */
+            if (
+                uxQueueMessagesWaiting(
+                    questionQueue
+                ) > 0
+            )
+            {
+                Serial.println(
+                    "TARS: command masih menunggu."
+                );
+
+                serialLineLength = 0;
+                serialLine[0] = '\0';
+
+                continue;
+            }
+
+            QuestionMessage message;
+
+            memset(
+                &message,
+                0,
+                sizeof(message)
+            );
+
+            memcpy(
+                message.text,
+                serialLine,
+                serialLineLength
+            );
+
+            message.text[
+                serialLineLength
+            ] = '\0';
+
+            if (
+                xQueueSend(
+                    questionQueue,
+                    &message,
+                    0
+                ) == pdTRUE
+            )
+            {
+                workerBusy = true;
+
+                Serial.println();
+                Serial.println(
+                    "TARS: COMMAND RECEIVED"
+                );
+            }
+            else
+            {
+                Serial.println(
+                    "TARS: COMMAND QUEUE FULL"
+                );
+            }
+
+            serialLineLength = 0;
+            serialLine[0] = '\0';
+
             continue;
         }
 
         if (
-            serialInput.length() < 300
+            serialLineLength <
+            sizeof(serialLine) - 1
         )
         {
-            serialInput += c;
+            serialLine[
+                serialLineLength++
+            ] = c;
+
+            serialLine[
+                serialLineLength
+            ] = '\0';
         }
     }
 }
@@ -1754,7 +2033,7 @@ void handleSerial()
 void setup()
 {
     Serial.begin(
-        115200
+        SERIAL_BAUD
     );
 
     delay(1000);
@@ -1793,20 +2072,6 @@ void setup()
     else
     {
         oled.clearDisplay();
-        oled.display();
-
-        tarsState =
-            TARS_BOOT;
-
-        oled.clearDisplay();
-
-        oled.drawRect(
-            0,
-            0,
-            128,
-            64,
-            SSD1306_WHITE
-        );
 
         oled.setTextSize(1);
         oled.setTextColor(
@@ -1854,7 +2119,6 @@ void setup()
         while (true)
         {
             updateOLED();
-
             delay(100);
         }
     }
@@ -1870,25 +2134,59 @@ void setup()
     pcmOutput.begin();
 
     // --------------------------------------------------------
-    // WIFI
+    // QUEUE
     // --------------------------------------------------------
+
+    questionQueue =
+        xQueueCreate(
+            1,
+            sizeof(QuestionMessage)
+        );
+
+    if (!questionQueue)
+    {
+        Serial.println(
+            "TARS: QUEUE ERROR"
+        );
+
+        tarsState =
+            TARS_ERROR;
+
+        while (true)
+        {
+            updateOLED();
+            delay(100);
+        }
+    }
+
+    // --------------------------------------------------------
+    // WIFI + NTP
+    // --------------------------------------------------------
+
+    tarsState =
+        TARS_THINKING;
 
     if (
         !connectWiFi()
     )
     {
         Serial.println(
-            "TARS: WiFi belum tersedia"
+            "TARS: WiFi connection FAILED"
         );
+
+        tarsState =
+            TARS_ERROR;
+
+        delay(1500);
     }
 
     // --------------------------------------------------------
-    // START WORKER TASK
+    // WORKER
     // --------------------------------------------------------
 
     xTaskCreatePinnedToCore(
         tarsWorkerTask,
-        "TARS_Worker",
+        "TARS_WORKER",
         8192,
         nullptr,
         1,
@@ -1908,29 +2206,35 @@ void setup()
         "================================"
     );
     Serial.println(
-        "TARS READY"
-    );
-    Serial.println(
-        "Ketik pertanyaan di Serial"
+        "           TARS READY"
     );
     Serial.println(
         "================================"
+    );
+
+    Serial.print(
+        "WiFi : "
+    );
+
+    Serial.println(
+        wifiIsOn ? "ON" : "OFF"
+    );
+
+    Serial.println(
+        "NTP  : SYNCED"
+    );
+
+    Serial.println(
+        "BT   : OFF"
+    );
+
+    Serial.println(
+        "TARS: Ketik pertanyaan lalu ENTER"
     );
 }
 
 // ============================================================
 // LOOP
-//
-// LOOP SEKARANG RINGAN.
-//
-// Tidak ada:
-// - HTTP
-// - WiFi connect blocking
-// - TTS
-// - MP3 decoding
-// - A2DP start
-//
-// Jadi OLED dan Serial tetap responsif.
 // ============================================================
 
 void loop()
