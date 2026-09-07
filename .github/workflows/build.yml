@@ -17,7 +17,9 @@ jobs:
           python-version: "3.11"
 
       - name: Install PlatformIO
-        run: pip install -U platformio
+        run: |
+          python -m pip install --upgrade pip
+          pip install -U platformio
 
       - name: Prepare LittleFS
         shell: bash
@@ -25,42 +27,93 @@ jobs:
           mkdir -p data
           touch data/.gitkeep
 
-      - name: Build TARS
-        run: pio run -e tars
+      - name: Build TARS firmware
+        run: |
+          pio run -e tars
 
       - name: Build LittleFS
-        run: pio run -e tars -t buildfs
+        run: |
+          pio run -e tars -t buildfs
 
-      - name: Create merged firmware
+      - name: Locate ESP32 build tools
         shell: bash
         run: |
-          BUILD=".pio/build/tars"
+          FRAMEWORK="$HOME/.platformio/packages/framework-arduinoespressif32"
 
-          BOOT_APP0=$(find "$HOME/.platformio/packages/framework-arduinoespressif32" \
+          echo "=== Searching bootloader.bin ==="
+          BOOTLOADER=$(find "$FRAMEWORK" \
+            -type f \
+            -name "bootloader.bin" \
+            | head -n 1)
+
+          echo "=== Searching boot_app0.bin ==="
+          BOOT_APP0=$(find "$FRAMEWORK" \
+            -type f \
             -name "boot_app0.bin" \
             | head -n 1)
 
-          ESPTOOL=$(find "$HOME/.platformio/packages/tool-esptoolpy" \
-            -type f \
-            \( -name "esptool.py" -o -name "esptool" \) \
-            | head -n 1)
+          echo "BOOTLOADER=$BOOTLOADER" >> "$GITHUB_ENV"
+          echo "BOOT_APP0=$BOOT_APP0" >> "$GITHUB_ENV"
+
+          echo "Bootloader: $BOOTLOADER"
+          echo "Boot App0 : $BOOT_APP0"
+
+          if [ -z "$BOOTLOADER" ]; then
+            echo "ERROR: bootloader.bin tidak ditemukan"
+            exit 1
+          fi
 
           if [ -z "$BOOT_APP0" ]; then
             echo "ERROR: boot_app0.bin tidak ditemukan"
             exit 1
           fi
 
+      - name: Locate esptool
+        shell: bash
+        run: |
+          ESPTOOL=$(find "$HOME/.platformio/packages/tool-esptoolpy" \
+            -type f \
+            \( -name "esptool.py" -o -name "esptool" \) \
+            | head -n 1)
+
+          echo "ESPTOOL=$ESPTOOL" >> "$GITHUB_ENV"
+
+          echo "Esptool: $ESPTOOL"
+
           if [ -z "$ESPTOOL" ]; then
             echo "ERROR: esptool tidak ditemukan"
             exit 1
           fi
 
-          echo "Bootloader : $BUILD/bootloader/bootloader.bin"
-          echo "Partitions : $BUILD/partitions.bin"
-          echo "Boot App0  : $BOOT_APP0"
-          echo "Firmware   : $BUILD/firmware.bin"
-          echo "LittleFS   : $BUILD/littlefs.bin"
-          echo "Esptool    : $ESPTOOL"
+      - name: Verify build files
+        shell: bash
+        run: |
+          BUILD=".pio/build/tars"
+
+          echo "=== Build files ==="
+
+          ls -lh "$BUILD"
+
+          echo ""
+          echo "=== Required files ==="
+
+          test -f "$BOOTLOADER"
+          test -f "$BUILD/partitions.bin"
+          test -f "$BOOT_APP0"
+          test -f "$BUILD/firmware.bin"
+          test -f "$BUILD/littlefs.bin"
+
+          echo ""
+          echo "Semua file build tersedia."
+
+      - name: Create merged firmware
+        shell: bash
+        run: |
+          BUILD=".pio/build/tars"
+
+          echo "========================================"
+          echo "Creating TARS-ESP32.bin"
+          echo "========================================"
 
           python "$ESPTOOL" \
             --chip esp32 merge_bin \
@@ -68,30 +121,43 @@ jobs:
             --flash_mode dio \
             --flash_freq 40m \
             --flash_size 4MB \
-            0x1000 "$BUILD/bootloader/bootloader.bin" \
+            0x1000 "$BOOTLOADER" \
             0x8000 "$BUILD/partitions.bin" \
             0xE000 "$BOOT_APP0" \
             0x10000 "$BUILD/firmware.bin" \
             0x2A0000 "$BUILD/littlefs.bin"
 
+          echo ""
+          echo "========================================"
+          echo "MERGE BERHASIL"
+          echo "========================================"
+
+          ls -lh TARS-ESP32.bin
+
       - name: Verify merged firmware
         shell: bash
         run: |
-          ls -lh TARS-ESP32.bin
-
           python - <<'PY'
           import os
 
           path = "TARS-ESP32.bin"
+
+          if not os.path.isfile(path):
+              raise SystemExit("ERROR: TARS-ESP32.bin tidak ditemukan")
+
           size = os.path.getsize(path)
 
-          print("TARS-ESP32.bin:", size, "bytes")
-          print("TARS-ESP32.bin:", round(size / 1024 / 1024, 2), "MB")
+          print("File   :", path)
+          print("Ukuran :", size, "bytes")
+          print("Ukuran :", round(size / 1024 / 1024, 2), "MB")
+          print("Flash  : 4 MB")
 
           if size > 0x400000:
-              raise SystemExit("ERROR: firmware melebihi kapasitas flash 4MB")
+              raise SystemExit(
+                  "ERROR: TARS-ESP32.bin melebihi kapasitas flash 4 MB"
+              )
 
-          print("OK: ukuran firmware cocok untuk flash 4MB")
+          print("OK: ukuran firmware masih dalam kapasitas flash 4 MB")
           PY
 
       - name: Upload TARS firmware
