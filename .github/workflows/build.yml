@@ -19,6 +19,12 @@ jobs:
       - name: Install PlatformIO
         run: pip install -U platformio
 
+      - name: Prepare LittleFS
+        shell: bash
+        run: |
+          mkdir -p data
+          touch data/.gitkeep
+
       - name: Build TARS
         run: pio run -e tars
 
@@ -30,6 +36,21 @@ jobs:
         run: |
           BUILD=".pio/build/tars"
 
+          BOOT_APP0=$(find "$HOME/.platformio/packages/framework-arduinoespressif32" \
+            -name "boot_app0.bin" \
+            | head -n 1)
+
+          if [ -z "$BOOT_APP0" ]; then
+            echo "ERROR: boot_app0.bin tidak ditemukan"
+            exit 1
+          fi
+
+          echo "Bootloader : $BUILD/bootloader/bootloader.bin"
+          echo "Partitions : $BUILD/partitions.bin"
+          echo "Boot App0  : $BOOT_APP0"
+          echo "Firmware   : $BUILD/firmware.bin"
+          echo "LittleFS   : $BUILD/littlefs.bin"
+
           python -m esptool \
             --chip esp32 merge_bin \
             -o TARS-ESP32.bin \
@@ -38,17 +59,28 @@ jobs:
             --flash_size 4MB \
             0x1000 "$BUILD/bootloader/bootloader.bin" \
             0x8000 "$BUILD/partitions.bin" \
-            0xe000 "$HOME/.platformio/packages/framework-arduinoespressif32/tools/partitions/boot_app0.bin" \
+            0xE000 "$BOOT_APP0" \
             0x10000 "$BUILD/firmware.bin" \
             0x2A0000 "$BUILD/littlefs.bin"
 
-      - name: Show firmware
+      - name: Verify merged firmware
+        shell: bash
         run: |
           ls -lh TARS-ESP32.bin
+
           python - <<'PY'
           import os
-          size = os.path.getsize("TARS-ESP32.bin")
+
+          path = "TARS-ESP32.bin"
+          size = os.path.getsize(path)
+
           print("TARS-ESP32.bin:", size, "bytes")
+          print("TARS-ESP32.bin:", round(size / 1024 / 1024, 2), "MB")
+
+          if size > 0x400000:
+              raise SystemExit("ERROR: firmware melebihi kapasitas flash 4MB")
+
+          print("OK: ukuran firmware cocok untuk flash 4MB")
           PY
 
       - name: Upload TARS firmware
