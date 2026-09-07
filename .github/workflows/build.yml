@@ -14,20 +14,46 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.x"
+          python-version: "3.11"
 
       - name: Install PlatformIO
-        run: pip install platformio
+        run: pip install -U platformio
 
       - name: Build TARS
-        run: pio run
+        run: pio run -e tars
 
-      - name: Rename firmware
+      - name: Build LittleFS
+        run: pio run -e tars -t buildfs
+
+      - name: Create merged firmware
+        shell: bash
         run: |
-          cp .pio/build/tars/firmware.bin TARS-ESP32.bin
+          BUILD=".pio/build/tars"
+
+          python -m esptool \
+            --chip esp32 merge_bin \
+            -o TARS-ESP32.bin \
+            --flash_mode dio \
+            --flash_freq 40m \
+            --flash_size 4MB \
+            0x1000 "$BUILD/bootloader/bootloader.bin" \
+            0x8000 "$BUILD/partitions.bin" \
+            0xe000 "$HOME/.platformio/packages/framework-arduinoespressif32/tools/partitions/boot_app0.bin" \
+            0x10000 "$BUILD/firmware.bin" \
+            0x2A0000 "$BUILD/littlefs.bin"
+
+      - name: Show firmware
+        run: |
+          ls -lh TARS-ESP32.bin
+          python - <<'PY'
+          import os
+          size = os.path.getsize("TARS-ESP32.bin")
+          print("TARS-ESP32.bin:", size, "bytes")
+          PY
 
       - name: Upload TARS firmware
         uses: actions/upload-artifact@v4
         with:
           name: TARS-ESP32
           path: TARS-ESP32.bin
+          if-no-files-found: error
