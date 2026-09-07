@@ -19,32 +19,30 @@
 
 
 // ============================================================
-// TARS CONFIG
+// TARS ESP32
+// MP3 22050 Hz MONO
+//        ↓
+// Helix PCM 22050 Hz MONO
+//        ↓
+// 2x resample
+//        ↓
+// PCM 44100 Hz STEREO
+//        ↓
+// Ring Buffer
+//        ↓
+// ESP32 A2DP Source
+//        ↓
+// I7-TWS
 // ============================================================
 
-#define WORKER_URL "https://tars-cloud-v1.hilmane34.workers.dev"
 
-#define BT_HEADSET_NAME "I7-TWS"
-
-#define MP3_PATH "/tts.mp3"
-
-#define WIFI_TIMEOUT_MS     15000
-#define BT_TIMEOUT_MS       20000
-#define PLAY_TIMEOUT_MS     120000
-#define NTP_TIMEOUT_MS      15000
-
-#define PCM_BUFFER_SIZE     32768
-#define MP3_COPY_BUFFER     1024
-
-#define PCM_GAIN            2.0f
-
-
-// ============================================================
+// -----------------------------
 // OLED
-// ============================================================
+// -----------------------------
 
-#define OLED_WIDTH  128
-#define OLED_HEIGHT 64
+#define OLED_WIDTH   128
+#define OLED_HEIGHT   64
+#define OLED_ADDR   0x3C
 
 Adafruit_SSD1306 oled(
     OLED_WIDTH,
@@ -54,22 +52,101 @@ Adafruit_SSD1306 oled(
 );
 
 
-// ============================================================
+// -----------------------------
+// NETWORK
+// -----------------------------
+
+static const char *WORKER_URL =
+    "https://tars-cloud-v1.hilmane34.workers.dev";
+
+static const char *ASK_URL =
+    "https://tars-cloud-v1.hilmane34.workers.dev/ask";
+
+static const char *TTS_URL =
+    "https://tars-cloud-v1.hilmane34.workers.dev/tts";
+
+static const char *MP3_PATH =
+    "/tts.mp3";
+
+static const char *NTP_SERVER_1 =
+    "pool.ntp.org";
+
+static const char *NTP_SERVER_2 =
+    "time.nist.gov";
+
+static const long GMT_OFFSET_SEC = 7 * 3600;
+static const int DAYLIGHT_OFFSET_SEC = 0;
+
+static const uint32_t WIFI_TIMEOUT_MS = 15000;
+static const uint32_t NTP_TIMEOUT_MS = 15000;
+static const uint32_t BT_TIMEOUT_MS = 20000;
+static const uint32_t PLAY_TIMEOUT_MS = 120000;
+
+
+// -----------------------------
+// AUDIO
+// -----------------------------
+
+static const uint32_t INPUT_SAMPLE_RATE  = 22050;
+static const uint32_t OUTPUT_SAMPLE_RATE = 44100;
+
+static const uint8_t INPUT_CHANNELS  = 1;
+static const uint8_t OUTPUT_CHANNELS = 2;
+
+static const uint8_t BITS_PER_SAMPLE = 16;
+
+
+// 32 KB final PCM ring buffer.
+// Karena output adalah 44100 stereo 16-bit:
+//
+// 44100 * 2 channel * 2 byte
+// = 176400 byte/detik
+//
+// 32768 byte ≈ 186 ms audio.
+//
+// Cukup untuk smoothing antara decoder dan A2DP.
+static const size_t PCM_RING_SIZE = 32768;
+
+
+// MP3 copy buffer.
+// Jangan terlalu besar karena ESP32 tanpa PSRAM.
+static const size_t MP3_COPY_BUFFER = 1024;
+
+
+// Decoder maksimum PCM satu frame.
+// 1152 mono samples * 2 byte = 2304 byte input PCM.
+//
+// Setelah 2x + stereo:
+// 1152 * 2 * 2 * 2 = 9216 byte output.
+//
+// Namun Helix dapat memberikan blok yang berbeda.
+// Kita beri ruang ring secara bertahap.
+static const size_t PCM_OUTPUT_CHUNK = 2048;
+
+
+// Gain.
+static const float PCM_GAIN = 2.0f;
+
+
+// -----------------------------
 // BLUETOOTH
-// ============================================================
+// -----------------------------
+
+static const char *BT_DEVICE_NAME =
+    "I7-TWS";
 
 BluetoothA2DPSource a2dpSource;
+
+
+// -----------------------------
+// STATE
+// -----------------------------
 
 volatile bool btConnected = false;
 volatile bool btAudioStarted = false;
 volatile bool playbackRunning = false;
 
 volatile uint32_t btCallbackCalls = 0;
-
-
-// ============================================================
-// NTP
-// ============================================================
 
 bool ntpSynced = false;
 
@@ -85,31 +162,50 @@ private:
     uint8_t *buffer = nullptr;
 
     size_t capacity = 0;
-    volatile size_t readPos = 0;
-    volatile size_t writePos = 0;
 
-    portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
+    volatile size_t readIndex = 0;
+    volatile size_t writeIndex = 0;
+    volatile size_t used = 0;
+
+    portMUX_TYPE mux =
+        portMUX_INITIALIZER_UNLOCKED;
 
 
 public:
 
     bool begin(size_t size) {
 
-        capacity = size;
+        if (buffer != nullptr) {
+            free(buffer);
+            buffer = nullptr;
+        }
 
-        buffer = (uint8_t *)malloc(capacity);
+        buffer = (uint8_t *)malloc(size);
 
         if (!buffer) {
             capacity = 0;
             return false;
         }
 
-        readPos = 0;
-        writePos = 0;
+        capacity = size;
 
-        memset(buffer, 0, capacity);
+        clear();
 
         return true;
+    }
+
+
+    void end() {
+
+        if (buffer) {
+            free(buffer);
+            buffer = nullptr;
+        }
+
+        capacity = 0;
+        readIndex = 0;
+        writeIndex = 0;
+        used = 0;
     }
 
 
@@ -117,8 +213,9 @@ public:
 
         portENTER_CRITICAL(&mux);
 
-        readPos = 0;
-        writePos = 0;
+        readIndex = 0;
+        writeIndex = 0;
+        used = 0;
 
         portEXIT_CRITICAL(&mux);
     }
@@ -126,80 +223,86 @@ public:
 
     size_t available() {
 
-        if (capacity == 0)
-            return 0;
+        size_t value;
 
         portENTER_CRITICAL(&mux);
 
-        size_t r = readPos;
-        size_t w = writePos;
-
-        size_t result;
-
-        if (w >= r)
-            result = w - r;
-        else
-            result = capacity - r + w;
+        value = used;
 
         portEXIT_CRITICAL(&mux);
 
-        return result;
+        return value;
     }
 
 
     size_t freeSpace() {
 
-        if (capacity == 0)
-            return 0;
+        size_t value;
 
-        return capacity - available() - 1;
+        portENTER_CRITICAL(&mux);
+
+        value = capacity - used;
+
+        portEXIT_CRITICAL(&mux);
+
+        return value;
     }
 
 
     size_t write(
-        const uint8_t *data,
+        const uint8_t *src,
         size_t len
     ) {
 
-        if (!buffer || !data || len == 0)
+        if (!buffer || !src || len == 0) {
             return 0;
+        }
 
         size_t written = 0;
 
         portENTER_CRITICAL(&mux);
 
-        size_t r = readPos;
-        size_t w = writePos;
-
-        size_t used;
-
-        if (w >= r)
-            used = w - r;
-        else
-            used = capacity - r + w;
-
         size_t freeBytes =
-            capacity - used - 1;
+            capacity - used;
 
-        size_t toWrite =
-            min(len, freeBytes);
-
-
-        while (written < toWrite) {
-
-            buffer[w] =
-                data[written];
-
-            w++;
-
-            if (w >= capacity)
-                w = 0;
-
-            written++;
+        if (len > freeBytes) {
+            len = freeBytes;
         }
 
+        if (len > 0) {
 
-        writePos = w;
+            size_t first =
+                capacity - writeIndex;
+
+            if (first > len) {
+                first = len;
+            }
+
+            memcpy(
+                buffer + writeIndex,
+                src,
+                first
+            );
+
+            size_t second =
+                len - first;
+
+            if (second > 0) {
+
+                memcpy(
+                    buffer,
+                    src + first,
+                    second
+                );
+            }
+
+            writeIndex =
+                (writeIndex + len) % capacity;
+
+            used += len;
+
+            written = len;
+        }
 
         portEXIT_CRITICAL(&mux);
 
@@ -208,50 +311,60 @@ public:
 
 
     size_t read(
-        uint8_t *data,
+        uint8_t *dst,
         size_t len
     ) {
 
-        if (!buffer || !data || len == 0)
+        if (!buffer || !dst || len == 0) {
             return 0;
+        }
 
-        size_t readCount = 0;
+        size_t result = 0;
 
         portENTER_CRITICAL(&mux);
 
-        size_t r = readPos;
-        size_t w = writePos;
-
-        size_t availableBytes;
-
-        if (w >= r)
-            availableBytes = w - r;
-        else
-            availableBytes = capacity - r + w;
-
-        size_t toRead =
-            min(len, availableBytes);
-
-
-        while (readCount < toRead) {
-
-            data[readCount] =
-                buffer[r];
-
-            r++;
-
-            if (r >= capacity)
-                r = 0;
-
-            readCount++;
+        if (len > used) {
+            len = used;
         }
 
+        if (len > 0) {
 
-        readPos = r;
+            size_t first =
+                capacity - readIndex;
+
+            if (first > len) {
+                first = len;
+            }
+
+            memcpy(
+                dst,
+                buffer + readIndex,
+                first
+            );
+
+            size_t second =
+                len - first;
+
+            if (second > 0) {
+
+                memcpy(
+                    dst + first,
+                    buffer,
+                    second
+                );
+            }
+
+            readIndex =
+                (readIndex + len) % capacity;
+
+            used -= len;
+
+            result = len;
+        }
 
         portEXIT_CRITICAL(&mux);
 
-        return readCount;
+        return result;
     }
 };
 
@@ -261,6 +374,29 @@ PCMRingBuffer pcmRing;
 
 // ============================================================
 // PCM OUTPUT STREAM
+//
+// Input:
+//   22050 Hz
+//   mono
+//   16 bit
+//
+// Output:
+//   44100 Hz
+//   stereo
+//   16 bit
+//
+// 1 input sample:
+//
+//   L(sample)
+//   R(sample)
+//
+// kemudian sample yang sama diulang:
+//
+//   frame 1 = L/R current
+//   frame 2 = L/R current
+//
+// sehingga:
+//   22050 → 44100
 // ============================================================
 
 class PCMOutputStream : public AudioStream {
@@ -269,43 +405,40 @@ private:
 
     AudioInfo currentInfo;
 
-    static const size_t OUT_BUFFER_SIZE = 2048;
+    uint8_t outputBuffer[PCM_OUTPUT_CHUNK];
 
-    uint8_t outBuffer[
-        OUT_BUFFER_SIZE
-    ];
+
+    static int16_t applyGain(
+        int16_t sample
+    ) {
+
+        int32_t value =
+            (int32_t)(
+                (float)sample *
+                PCM_GAIN
+            );
+
+        if (value > 32767) {
+            value = 32767;
+        }
+
+        if (value < -32768) {
+            value = -32768;
+        }
+
+        return (int16_t)value;
+    }
 
 
 public:
-
-    AudioInfo audioInfo() override {
-        return currentInfo;
-    }
-
-
-    AudioInfo audioInfoOut() override {
-        return currentInfo;
-    }
-
-
-    bool begin() override {
-
-        currentInfo =
-            AudioInfo();
-
-        return true;
-    }
-
-
-    void end() override {
-    }
-
 
     void setAudioInfo(
         AudioInfo info
     ) override {
 
         currentInfo = info;
+
+        AudioStream::setAudioInfo(info);
 
         Serial.printf(
             "PCM format: %d Hz, %d ch, %d bit\n",
@@ -316,570 +449,239 @@ public:
     }
 
 
-    // --------------------------------------------------------
-    // Conservative input/output ratio.
-    //
-    // 22050 mono -> 44100 stereo = 4x
-    //
-    // We intentionally report an even more conservative
-    // factor to StreamCopy so the ring buffer cannot be
-    // overrun by decoder expansion.
-    // --------------------------------------------------------
-
-    size_t safetyFactor() const {
-
-        if (
-            currentInfo.sample_rate == 22050 &&
-            currentInfo.channels == 1
-        )
-            return 8;
-
-
-        if (
-            currentInfo.sample_rate == 22050 &&
-            currentInfo.channels == 2
-        )
-            return 4;
-
-
-        if (
-            currentInfo.sample_rate == 44100 &&
-            currentInfo.channels == 1
-        )
-            return 4;
-
-
-        if (
-            currentInfo.sample_rate == 44100 &&
-            currentInfo.channels == 2
-        )
-            return 2;
-
-
-        return 8;
-    }
-
-
     int availableForWrite() override {
 
         size_t freeBytes =
             pcmRing.freeSpace();
 
 
-        size_t safeInput =
-            freeBytes / safetyFactor();
+        // Untuk 22050 mono → 44100 stereo:
+        //
+        // 1 input byte PCM
+        // menjadi 4 output bytes.
+        //
+        // Kita sisakan sedikit margin.
+        if (
+            currentInfo.sample_rate == INPUT_SAMPLE_RATE &&
+            currentInfo.channels == INPUT_CHANNELS &&
+            currentInfo.bits_per_sample == BITS_PER_SAMPLE
+        ) {
+
+            size_t inputCapacity =
+                freeBytes / 4;
+
+            if (inputCapacity > 1024) {
+                inputCapacity = 1024;
+            }
+
+            return (int)inputCapacity;
+        }
 
 
-        if (safeInput > 16384)
-            safeInput = 16384;
-
-
-        return (int)safeInput;
+        // Safety fallback.
+        return (int)min(
+            freeBytes,
+            (size_t)1024
+        );
     }
 
 
     size_t write(
         const uint8_t *data,
-        size_t len
+        size_t size
     ) override {
 
-        if (!data || len == 0)
+        if (!data || size == 0) {
             return 0;
+        }
 
+
+        // ----------------------------------------------------
+        // Kita hanya menerima:
+        //
+        // 22050 Hz
+        // mono
+        // 16 bit
+        // ----------------------------------------------------
 
         if (
-            currentInfo.bits_per_sample != 16
-        )
-            return 0;
-
-
-        // ====================================================
-        // 22050 MONO -> 44100 STEREO
-        // ====================================================
-
-        if (
-            currentInfo.sample_rate == 22050 &&
-            currentInfo.channels == 1
+            currentInfo.sample_rate != INPUT_SAMPLE_RATE ||
+            currentInfo.channels != INPUT_CHANNELS ||
+            currentInfo.bits_per_sample != BITS_PER_SAMPLE
         ) {
 
+            Serial.printf(
+                "PCM ERROR: unsupported %d Hz %d ch %d bit\n",
+                currentInfo.sample_rate,
+                currentInfo.channels,
+                currentInfo.bits_per_sample
+            );
+
+            return 0;
+        }
+
+
+        size_t inputBytes =
+            size;
+
+        size_t inputOffset =
+            0;
+
+
+        // ----------------------------------------------------
+        // Process PCM in small chunks.
+        // ----------------------------------------------------
+
+        while (inputOffset < inputBytes) {
+
+            size_t remaining =
+                inputBytes - inputOffset;
+
             size_t samples =
-                len / 2;
+                remaining / 2;
 
 
-            size_t required =
+            // output:
+            //
+            // 1 mono sample
+            // -> 2 stereo frames
+            //
+            // 2 frames × 2 channels × 2 bytes
+            // = 8 bytes
+            //
+
+            size_t maxSamples =
+                sizeof(outputBuffer) / 8;
+
+
+            if (samples > maxSamples) {
+                samples = maxSamples;
+            }
+
+
+            if (samples == 0) {
+                break;
+            }
+
+
+            size_t requiredOutput =
                 samples * 8;
 
 
-            if (
-                pcmRing.freeSpace() <
-                required
-            )
-                return 0;
-
-
-            size_t outPos = 0;
-
-            const int16_t *samplesIn =
-                (const int16_t *)data;
-
-
-            for (
-                size_t i = 0;
-                i < samples;
-                i++
-            ) {
-
-                int32_t s =
-                    samplesIn[i];
-
-
-                s =
-                    (int32_t)(
-                        (float)s *
-                        PCM_GAIN
-                    );
-
-
-                if (s > 32767)
-                    s = 32767;
-
-                if (s < -32768)
-                    s = -32768;
-
-
-                int16_t sample =
-                    (int16_t)s;
-
-
-                // 22050 -> 44100
-                // mono -> stereo
-
-                for (
-                    int repeat = 0;
-                    repeat < 2;
-                    repeat++
-                ) {
-
-                    outBuffer[outPos++] =
-                        sample & 0xFF;
-
-                    outBuffer[outPos++] =
-                        (sample >> 8) & 0xFF;
-
-                    outBuffer[outPos++] =
-                        sample & 0xFF;
-
-                    outBuffer[outPos++] =
-                        (sample >> 8) & 0xFF;
-
-
-                    if (
-                        outPos >=
-                        OUT_BUFFER_SIZE - 8
-                    ) {
-
-                        size_t written =
-                            pcmRing.write(
-                                outBuffer,
-                                outPos
-                            );
-
-
-                        if (
-                            written !=
-                            outPos
-                        )
-                            return 0;
-
-
-                        outPos = 0;
-                    }
-                }
-            }
-
-
-            if (outPos > 0) {
-
-                size_t written =
-                    pcmRing.write(
-                        outBuffer,
-                        outPos
-                    );
-
-
-                if (
-                    written !=
-                    outPos
-                )
-                    return 0;
-            }
-
-
-            return len;
-        }
-
-
-        // ====================================================
-        // 22050 STEREO -> 44100 STEREO
-        // ====================================================
-
-        if (
-            currentInfo.sample_rate == 22050 &&
-            currentInfo.channels == 2
-        ) {
-
-            size_t frames =
-                len / 4;
-
-
-            size_t required =
-                frames * 8;
-
-
-            if (
-                pcmRing.freeSpace() <
-                required
-            )
-                return 0;
-
-
-            size_t outPos = 0;
-
-            const int16_t *samplesIn =
-                (const int16_t *)data;
-
-
-            for (
-                size_t i = 0;
-                i < frames;
-                i++
-            ) {
-
-                int32_t left =
-                    samplesIn[i * 2];
-
-                int32_t right =
-                    samplesIn[i * 2 + 1];
-
-
-                left =
-                    (int32_t)(
-                        (float)left *
-                        PCM_GAIN
-                    );
-
-
-                right =
-                    (int32_t)(
-                        (float)right *
-                        PCM_GAIN
-                    );
-
-
-                if (left > 32767)
-                    left = 32767;
-
-                if (left < -32768)
-                    left = -32768;
-
-
-                if (right > 32767)
-                    right = 32767;
-
-                if (right < -32768)
-                    right = -32768;
-
-
-                int16_t l =
-                    (int16_t)left;
-
-                int16_t r =
-                    (int16_t)right;
-
-
-                for (
-                    int repeat = 0;
-                    repeat < 2;
-                    repeat++
-                ) {
-
-                    outBuffer[outPos++] =
-                        l & 0xFF;
-
-                    outBuffer[outPos++] =
-                        (l >> 8) & 0xFF;
-
-                    outBuffer[outPos++] =
-                        r & 0xFF;
-
-                    outBuffer[outPos++] =
-                        (r >> 8) & 0xFF;
-
-
-                    if (
-                        outPos >=
-                        OUT_BUFFER_SIZE - 8
-                    ) {
-
-                        size_t written =
-                            pcmRing.write(
-                                outBuffer,
-                                outPos
-                            );
-
-
-                        if (
-                            written !=
-                            outPos
-                        )
-                            return 0;
-
-
-                        outPos = 0;
-                    }
-                }
-            }
-
-
-            if (outPos > 0) {
-
-                size_t written =
-                    pcmRing.write(
-                        outBuffer,
-                        outPos
-                    );
-
-
-                if (
-                    written !=
-                    outPos
-                )
-                    return 0;
-            }
-
-
-            return len;
-        }
-
-
-        // ====================================================
-        // 44100 MONO -> 44100 STEREO
-        // ====================================================
-
-        if (
-            currentInfo.sample_rate == 44100 &&
-            currentInfo.channels == 1
-        ) {
-
-            size_t samples =
-                len / 2;
-
-
-            size_t required =
-                samples * 4;
-
-
-            if (
-                pcmRing.freeSpace() <
-                required
-            )
-                return 0;
-
-
-            size_t outPos = 0;
-
-            const int16_t *samplesIn =
-                (const int16_t *)data;
-
-
-            for (
-                size_t i = 0;
-                i < samples;
-                i++
-            ) {
-
-                int32_t s =
-                    samplesIn[i];
-
-
-                s =
-                    (int32_t)(
-                        (float)s *
-                        PCM_GAIN
-                    );
-
-
-                if (s > 32767)
-                    s = 32767;
-
-                if (s < -32768)
-                    s = -32768;
-
-
-                int16_t sample =
-                    (int16_t)s;
-
-
-                outBuffer[outPos++] =
-                    sample & 0xFF;
-
-                outBuffer[outPos++] =
-                    (sample >> 8) & 0xFF;
-
-                outBuffer[outPos++] =
-                    sample & 0xFF;
-
-                outBuffer[outPos++] =
-                    (sample >> 8) & 0xFF;
-
-
-                if (
-                    outPos >=
-                    OUT_BUFFER_SIZE - 4
-                ) {
-
-                    size_t written =
-                        pcmRing.write(
-                            outBuffer,
-                            outPos
-                        );
-
-
-                    if (
-                        written !=
-                        outPos
-                    )
-                        return 0;
-
-
-                    outPos = 0;
-                }
-            }
-
-
-            if (outPos > 0) {
-
-                size_t written =
-                    pcmRing.write(
-                        outBuffer,
-                        outPos
-                    );
-
-
-                if (
-                    written !=
-                    outPos
-                )
-                    return 0;
-            }
-
-
-            return len;
-        }
-
-
-        // ====================================================
-        // 44100 STEREO
-        // ====================================================
-
-        if (
-            currentInfo.sample_rate == 44100 &&
-            currentInfo.channels == 2
-        ) {
-
-            size_t required =
-                len;
-
-
-            if (
-                pcmRing.freeSpace() <
-                required
-            )
-                return 0;
-
-
-            size_t processed = 0;
+            // ------------------------------------------------
+            // IMPORTANT:
+            //
+            // Jangan pernah return 0 hanya karena ring
+            // sedang penuh.
+            //
+            // Tunggu sampai A2DP mengonsumsi data.
+            // ------------------------------------------------
+
+            uint32_t waitStart =
+                millis();
 
 
             while (
-                processed < len
+                pcmRing.freeSpace() <
+                requiredOutput
             ) {
 
-                size_t chunk =
-                    min(
-                        len - processed,
-                        OUT_BUFFER_SIZE
-                    );
-
-
-                memcpy(
-                    outBuffer,
-                    data + processed,
-                    chunk
-                );
-
-
-                int16_t *samples =
-                    (int16_t *)outBuffer;
-
-
-                size_t sampleCount =
-                    chunk / 2;
-
-
-                for (
-                    size_t i = 0;
-                    i < sampleCount;
-                    i++
+                if (
+                    millis() - waitStart >
+                    5000
                 ) {
 
-                    int32_t s =
-                        (int32_t)(
-                            (float)samples[i] *
-                            PCM_GAIN
-                        );
-
-
-                    if (s > 32767)
-                        s = 32767;
-
-                    if (s < -32768)
-                        s = -32768;
-
-
-                    samples[i] =
-                        (int16_t)s;
-                }
-
-
-                size_t written =
-                    pcmRing.write(
-                        outBuffer,
-                        chunk
+                    Serial.println(
+                        "PCM ERROR: ring buffer timeout"
                     );
 
-
-                if (
-                    written !=
-                    chunk
-                )
                     return 0;
+                }
 
-
-                processed += chunk;
+                delay(2);
             }
 
 
-            return len;
+            int16_t *inputSamples =
+                (int16_t *)(data + inputOffset);
+
+            int16_t *outputSamples =
+                (int16_t *)outputBuffer;
+
+
+            size_t outSampleIndex =
+                0;
+
+
+            for (
+                size_t i = 0;
+                i < samples;
+                i++
+            ) {
+
+                int16_t sample =
+                    applyGain(
+                        inputSamples[i]
+                    );
+
+
+                // 22050 → 44100
+                //
+                // duplicate temporal sample
+                //
+
+                // frame 1
+                outputSamples[outSampleIndex++] =
+                    sample;
+
+                outputSamples[outSampleIndex++] =
+                    sample;
+
+
+                // frame 2
+                outputSamples[outSampleIndex++] =
+                    sample;
+
+                outputSamples[outSampleIndex++] =
+                    sample;
+            }
+
+
+            size_t written =
+                pcmRing.write(
+                    outputBuffer,
+                    requiredOutput
+                );
+
+
+            if (written != requiredOutput) {
+
+                Serial.printf(
+                    "PCM ERROR: wrote %u/%u\n",
+                    (unsigned)written,
+                    (unsigned)requiredOutput
+                );
+
+                return 0;
+            }
+
+
+            inputOffset +=
+                samples * 2;
         }
 
 
-        return 0;
+        return inputOffset;
     }
 };
 
 
 PCMOutputStream pcmOutput;
+
+
+// ============================================================
+// MP3 HELIX
+// ============================================================
 
 MP3DecoderHelix mp3Decoder;
 
@@ -890,7 +692,577 @@ EncodedAudioStream mp3Stream(
 
 
 // ============================================================
-// BLUETOOTH DATA CALLBACK
+// WIFI
+// ============================================================
+
+bool connectWiFi(
+    bool requireTime = false
+) {
+
+    if (WiFi.status() == WL_CONNECTED) {
+
+        if (
+            requireTime &&
+            !ntpSynced
+        ) {
+            // continue below
+        } else {
+            return true;
+        }
+    }
+
+
+    Serial.println(
+        "TARS: WiFi ON"
+    );
+
+
+    WiFi.mode(WIFI_STA);
+
+    WiFi.begin(
+        WIFI_SSID,
+        WIFI_PASSWORD
+    );
+
+
+    uint32_t start =
+        millis();
+
+
+    while (
+        WiFi.status() != WL_CONNECTED &&
+        millis() - start < WIFI_TIMEOUT_MS
+    ) {
+
+        delay(250);
+
+        Serial.print(".");
+    }
+
+
+    Serial.println();
+
+
+    if (WiFi.status() != WL_CONNECTED) {
+
+        Serial.println(
+            "TARS: WiFi FAILED"
+        );
+
+        return false;
+    }
+
+
+    Serial.print(
+        "TARS: IP = "
+    );
+
+    Serial.println(
+        WiFi.localIP()
+    );
+
+
+    return true;
+}
+
+
+void disconnectWiFi() {
+
+    Serial.println(
+        "TARS: WiFi OFF"
+    );
+
+    WiFi.disconnect(true);
+
+    WiFi.mode(WIFI_OFF);
+
+    delay(300);
+}
+
+
+// ============================================================
+// NTP
+// ============================================================
+
+bool isTimeValid() {
+
+    time_t now =
+        time(nullptr);
+
+    return (
+        now > 1577836800
+    );
+}
+
+
+bool syncNTP() {
+
+    Serial.println(
+        "TARS: TIME INVALID - NTP REQUIRED"
+    );
+
+    Serial.println(
+        "TARS: NTP START"
+    );
+
+
+    configTime(
+        GMT_OFFSET_SEC,
+        DAYLIGHT_OFFSET_SEC,
+        NTP_SERVER_1,
+        NTP_SERVER_2
+    );
+
+
+    uint32_t start =
+        millis();
+
+    int attempt = 0;
+
+
+    while (
+        !isTimeValid() &&
+        millis() - start < NTP_TIMEOUT_MS
+    ) {
+
+        attempt++;
+
+        Serial.printf(
+            "TARS: NTP attempt %d\n",
+            attempt
+        );
+
+        delay(1000);
+    }
+
+
+    if (!isTimeValid()) {
+
+        Serial.println(
+            "TARS: NTP FAILED"
+        );
+
+        ntpSynced = false;
+
+        return false;
+    }
+
+
+    time_t now =
+        time(nullptr);
+
+    struct tm timeInfo;
+
+    localtime_r(
+        &now,
+        &timeInfo
+    );
+
+
+    Serial.printf(
+        "TARS: NTP OK %04d-%02d-%02d %02d:%02d:%02d\n",
+        timeInfo.tm_year + 1900,
+        timeInfo.tm_mon + 1,
+        timeInfo.tm_mday,
+        timeInfo.tm_hour,
+        timeInfo.tm_min,
+        timeInfo.tm_sec
+    );
+
+
+    ntpSynced = true;
+
+    return true;
+}
+
+
+bool ensureTimeValid() {
+
+    if (
+        ntpSynced &&
+        isTimeValid()
+    ) {
+        return true;
+    }
+
+
+    if (isTimeValid()) {
+
+        ntpSynced = true;
+
+        return true;
+    }
+
+
+    return syncNTP();
+}
+
+
+// ============================================================
+// ASK AI
+// ============================================================
+
+String askAI(
+    const String &question
+) {
+
+    if (!connectWiFi(true)) {
+        return "";
+    }
+
+
+    if (!ensureTimeValid()) {
+        return "";
+    }
+
+
+    Serial.println(
+        "TARS: POST /ask"
+    );
+
+
+    WiFiClientSecure client;
+
+    client.setInsecure();
+
+
+    HTTPClient http;
+
+
+    if (
+        !http.begin(
+            client,
+            ASK_URL
+        )
+    ) {
+
+        Serial.println(
+            "ASK HTTP: begin FAILED"
+        );
+
+        return "";
+    }
+
+
+    http.addHeader(
+        "Content-Type",
+        "application/json"
+    );
+
+
+    JsonDocument request;
+
+    request["text"] =
+        question;
+
+
+    String body;
+
+    serializeJson(
+        request,
+        body
+    );
+
+
+    int httpCode =
+        http.POST(body);
+
+
+    Serial.printf(
+        "ASK HTTP: %d\n",
+        httpCode
+    );
+
+
+    if (
+        httpCode < 200 ||
+        httpCode >= 300
+    ) {
+
+        http.end();
+
+        return "";
+    }
+
+
+    String response =
+        http.getString();
+
+
+    http.end();
+
+
+    JsonDocument json;
+
+    DeserializationError error =
+        deserializeJson(
+            json,
+            response
+        );
+
+
+    if (error) {
+
+        Serial.println(
+            "TARS: JSON ERROR"
+        );
+
+        return "";
+    }
+
+
+    String answer =
+        json["response"] |
+        "";
+
+
+    Serial.println(
+        "TARS RESPONSE:"
+    );
+
+    Serial.println(
+        answer
+    );
+
+
+    return answer;
+}
+
+
+// ============================================================
+// DOWNLOAD TTS
+// ============================================================
+
+bool downloadTTS(
+    const String &text
+) {
+
+    if (!connectWiFi(true)) {
+        return false;
+    }
+
+
+    if (!ensureTimeValid()) {
+        return false;
+    }
+
+
+    Serial.printf(
+        "TARS: TTS chars = %u\n",
+        (unsigned)text.length()
+    );
+
+
+    Serial.println(
+        "TARS: POST /tts"
+    );
+
+
+    WiFiClientSecure client;
+
+    client.setInsecure();
+
+
+    HTTPClient http;
+
+
+    if (
+        !http.begin(
+            client,
+            TTS_URL
+        )
+    ) {
+
+        Serial.println(
+            "TTS HTTP: begin FAILED"
+        );
+
+        return false;
+    }
+
+
+    http.addHeader(
+        "Content-Type",
+        "application/json"
+    );
+
+
+    JsonDocument request;
+
+    request["text"] =
+        text;
+
+
+    String body;
+
+    serializeJson(
+        request,
+        body
+    );
+
+
+    int httpCode =
+        http.POST(body);
+
+
+    Serial.printf(
+        "TTS HTTP: %d\n",
+        httpCode
+    );
+
+
+    if (
+        httpCode < 200 ||
+        httpCode >= 300
+    ) {
+
+        http.end();
+
+        return false;
+    }
+
+
+    int contentLength =
+        http.getSize();
+
+
+    if (
+        LittleFS.exists(
+            MP3_PATH
+        )
+    ) {
+
+        LittleFS.remove(
+            MP3_PATH
+        );
+    }
+
+
+    File file =
+        LittleFS.open(
+            MP3_PATH,
+            FILE_WRITE
+        );
+
+
+    if (!file) {
+
+        Serial.println(
+            "TARS: MP3 OPEN FAILED"
+        );
+
+        http.end();
+
+        return false;
+    }
+
+
+    WiFiClient *stream =
+        http.getStreamPtr();
+
+
+    uint8_t buffer[
+        1024
+    ];
+
+
+    size_t total =
+        0;
+
+
+    uint32_t lastData =
+        millis();
+
+
+    while (
+        http.connected() &&
+        (
+            contentLength > 0 ||
+            contentLength == -1
+        )
+    ) {
+
+        size_t available =
+            stream->available();
+
+
+        if (available > 0) {
+
+            size_t readSize =
+                available;
+
+            if (
+                readSize >
+                sizeof(buffer)
+            ) {
+                readSize =
+                    sizeof(buffer);
+            }
+
+
+            int read =
+                stream->readBytes(
+                    buffer,
+                    readSize
+                );
+
+
+            if (read > 0) {
+
+                file.write(
+                    buffer,
+                    read
+                );
+
+                total +=
+                    read;
+
+                lastData =
+                    millis();
+
+
+                if (
+                    contentLength > 0
+                ) {
+                    contentLength -=
+                        read;
+                }
+            }
+        }
+        else {
+
+            if (
+                millis() -
+                lastData >
+                5000
+            ) {
+                break;
+            }
+
+            delay(1);
+        }
+    }
+
+
+    file.flush();
+
+    file.close();
+
+    http.end();
+
+
+    Serial.printf(
+        "TARS: MP3 bytes = %u\n",
+        (unsigned)total
+    );
+
+
+    return total > 0;
+}
+
+
+// ============================================================
+// A2DP CALLBACK
 // ============================================================
 
 int32_t getAudioData(
@@ -898,8 +1270,12 @@ int32_t getAudioData(
     int32_t len
 ) {
 
-    if (!data || len <= 0)
+    if (
+        !data ||
+        len <= 0
+    ) {
         return 0;
+    }
 
 
     btCallbackCalls++;
@@ -913,7 +1289,8 @@ int32_t getAudioData(
 
 
     if (
-        got < (size_t)len
+        got <
+        (size_t)len
     ) {
 
         memset(
@@ -929,61 +1306,58 @@ int32_t getAudioData(
 
 
 // ============================================================
-// BLUETOOTH CONNECTION CALLBACK
+// BLUETOOTH CALLBACKS
 // ============================================================
 
-void onBluetoothConnection(
+void onBTConnectionState(
     esp_a2d_connection_state_t state,
     void *
 ) {
 
-    switch (state) {
+    Serial.print(
+        "TARS: A2DP STATE = "
+    );
 
-        case ESP_A2D_CONNECTION_STATE_CONNECTING:
-
-            Serial.println(
-                "TARS: A2DP STATE = Connecting"
-            );
-
-            break;
-
-
-        case ESP_A2D_CONNECTION_STATE_CONNECTED:
-
-            btConnected = true;
-
-            Serial.println(
-                "TARS: A2DP STATE = Connected"
-            );
-
-            break;
+    Serial.println(
+        a2dpSource.to_str(
+            state
+        )
+    );
 
 
-        case ESP_A2D_CONNECTION_STATE_DISCONNECTED:
+    if (
+        state ==
+        ESP_A2D_CONNECTION_STATE_CONNECTED
+    ) {
 
-            btConnected = false;
+        btConnected = true;
 
-            Serial.println(
-                "TARS: A2DP STATE = Disconnected"
-            );
+        Serial.println(
+            "TARS: A2DP CONNECTED"
+        );
+    }
+    else {
 
-            break;
-
-
-        default:
-            break;
+        btConnected = false;
     }
 }
 
 
-// ============================================================
-// BLUETOOTH AUDIO STATE CALLBACK
-// ============================================================
-
-void onBluetoothAudioState(
+void onBTAudioState(
     esp_a2d_audio_state_t state,
     void *
 ) {
+
+    Serial.print(
+        "TARS: A2DP AUDIO = "
+    );
+
+    Serial.println(
+        a2dpSource.to_str(
+            state
+        )
+    );
+
 
     if (
         state ==
@@ -993,703 +1367,30 @@ void onBluetoothAudioState(
         btAudioStarted = true;
 
         Serial.println(
-            "TARS: A2DP AUDIO = Started"
+            "TARS: A2DP AUDIO STARTED"
         );
-
-    } else {
+    }
+    else {
 
         btAudioStarted = false;
-
-        Serial.println(
-            "TARS: A2DP AUDIO = Stopped"
-        );
     }
 }
 
 
 // ============================================================
-// CHECK SYSTEM TIME
-//
-// Tidak melakukan NTP otomatis setiap WiFi reconnect.
-// Hanya mengecek apakah waktu sudah valid.
-// ============================================================
-
-bool isTimeValid() {
-
-    time_t now =
-        time(nullptr);
-
-
-    // 2020-01-01
-    return now > 1577836800;
-}
-
-
-// ============================================================
-// NTP SYNC
-//
-// Bisa dipanggil jika waktu belum valid.
-// ============================================================
-
-bool syncNTP() {
-
-    Serial.println(
-        "TARS: NTP START"
-    );
-
-
-    configTime(
-        7 * 3600,
-        0,
-        "pool.ntp.org",
-        "time.nist.gov",
-        "time.google.com"
-    );
-
-
-    uint32_t start =
-        millis();
-
-
-    int attempt = 0;
-
-
-    while (
-        millis() - start <
-        NTP_TIMEOUT_MS
-    ) {
-
-        attempt++;
-
-
-        Serial.printf(
-            "TARS: NTP attempt %d\n",
-            attempt
-        );
-
-
-        struct tm timeinfo;
-
-
-        if (
-            getLocalTime(
-                &timeinfo,
-                2500
-            )
-        ) {
-
-            if (
-                timeinfo.tm_year >
-                120
-            ) {
-
-                ntpSynced = true;
-
-
-                char timeBuffer[32];
-
-
-                strftime(
-                    timeBuffer,
-                    sizeof(timeBuffer),
-                    "%Y-%m-%d %H:%M:%S",
-                    &timeinfo
-                );
-
-
-                Serial.print(
-                    "TARS: NTP OK "
-                );
-
-
-                Serial.println(
-                    timeBuffer
-                );
-
-
-                return true;
-            }
-        }
-
-
-        delay(100);
-    }
-
-
-    Serial.println(
-        "TARS: NTP FAILED"
-    );
-
-
-    ntpSynced = false;
-
-
-    return false;
-}
-
-
-// ============================================================
-// ENSURE TIME
-//
-// HTTPS hanya boleh dijalankan kalau waktu valid.
-//
-// Kalau waktu masih valid setelah WiFi OFF/ON,
-// TIDAK melakukan NTP lagi.
-//
-// Kalau waktu tidak valid, baru NTP.
-// ============================================================
-
-bool ensureTimeValid() {
-
-    if (
-        ntpSynced &&
-        isTimeValid()
-    ) {
-
-        return true;
-    }
-
-
-    if (
-        isTimeValid()
-    ) {
-
-        ntpSynced = true;
-
-        return true;
-    }
-
-
-    Serial.println(
-        "TARS: TIME INVALID - NTP REQUIRED"
-    );
-
-
-    return syncNTP();
-}
-
-
-// ============================================================
-// WIFI CONNECT
-//
-// requireTime = true:
-//   pastikan waktu valid sebelum HTTPS.
-//
-// requireTime = false:
-//   hanya konek WiFi.
-// ============================================================
-
-bool connectWiFi(
-    bool requireTime = false
-) {
-
-    if (
-        WiFi.status() ==
-        WL_CONNECTED
-    ) {
-
-        if (
-            requireTime
-        ) {
-
-            return ensureTimeValid();
-        }
-
-
-        return true;
-    }
-
-
-    Serial.println(
-        "TARS: WiFi ON"
-    );
-
-
-    WiFi.mode(
-        WIFI_STA
-    );
-
-
-    WiFi.begin(
-        WIFI_SSID,
-        WIFI_PASSWORD
-    );
-
-
-    uint32_t start =
-        millis();
-
-
-    while (
-        WiFi.status() !=
-        WL_CONNECTED &&
-        millis() - start <
-        WIFI_TIMEOUT_MS
-    ) {
-
-        delay(100);
-    }
-
-
-    if (
-        WiFi.status() !=
-        WL_CONNECTED
-    ) {
-
-        Serial.println(
-            "TARS: WiFi FAILED"
-        );
-
-        return false;
-    }
-
-
-    Serial.print(
-        "TARS: IP = "
-    );
-
-
-    Serial.println(
-        WiFi.localIP()
-    );
-
-
-    // --------------------------------------------------------
-    // Hanya pastikan NTP kalau pemanggil memang membutuhkan
-    // waktu valid untuk HTTPS.
-    // --------------------------------------------------------
-
-    if (
-        requireTime
-    ) {
-
-        if (
-            !ensureTimeValid()
-        ) {
-
-            Serial.println(
-                "TARS: TIME SYNC FAILED"
-            );
-
-            return false;
-        }
-    }
-
-
-    return true;
-}
-
-
-// ============================================================
-// WIFI OFF
-// ============================================================
-
-void disconnectWiFi() {
-
-    Serial.println(
-        "TARS: WiFi OFF"
-    );
-
-
-    WiFi.disconnect(
-        true
-    );
-
-
-    WiFi.mode(
-        WIFI_OFF
-    );
-
-
-    delay(200);
-}
-
-
-// ============================================================
-// ASK AI
-// ============================================================
-
-bool askAI(
-    const String &question,
-    String &answer
-) {
-
-    if (
-        !connectWiFi(true)
-    )
-        return false;
-
-
-    WiFiClientSecure client;
-
-    client.setInsecure();
-
-
-    HTTPClient http;
-
-
-    String url =
-        String(WORKER_URL) +
-        "/ask";
-
-
-    Serial.println(
-        "TARS: POST /ask"
-    );
-
-
-    if (
-        !http.begin(
-            client,
-            url
-        )
-    ) {
-
-        Serial.println(
-            "ASK HTTP BEGIN FAILED"
-        );
-
-        return false;
-    }
-
-
-    http.addHeader(
-        "Content-Type",
-        "application/json"
-    );
-
-
-    JsonDocument doc;
-
-
-    doc["text"] =
-        question;
-
-
-    String body;
-
-
-    serializeJson(
-        doc,
-        body
-    );
-
-
-    int code =
-        http.POST(
-            body
-        );
-
-
-    Serial.print(
-        "ASK HTTP: "
-    );
-
-
-    Serial.println(
-        code
-    );
-
-
-    if (
-        code != 200
-    ) {
-
-        http.end();
-
-        return false;
-    }
-
-
-    String response =
-        http.getString();
-
-
-    http.end();
-
-
-    JsonDocument result;
-
-
-    DeserializationError err =
-        deserializeJson(
-            result,
-            response
-        );
-
-
-    if (err) {
-
-        Serial.println(
-            "ASK JSON ERROR"
-        );
-
-        return false;
-    }
-
-
-    answer =
-        result["response"] |
-        "";
-
-
-    Serial.println(
-        "TARS RESPONSE:"
-    );
-
-
-    Serial.println(
-        answer
-    );
-
-
-    return answer.length() > 0;
-}
-
-
-// ============================================================
-// DOWNLOAD TTS
-// ============================================================
-
-bool downloadTTS(
-    const String &answer
-) {
-
-    // --------------------------------------------------------
-    // TTS membutuhkan HTTPS.
-    // Pastikan WiFi DAN waktu valid.
-    // --------------------------------------------------------
-
-    if (
-        !connectWiFi(true)
-    )
-        return false;
-
-
-    Serial.print(
-        "TARS: TTS chars = "
-    );
-
-
-    Serial.println(
-        answer.length()
-    );
-
-
-    WiFiClientSecure client;
-
-    client.setInsecure();
-
-
-    HTTPClient http;
-
-
-    String url =
-        String(WORKER_URL) +
-        "/tts";
-
-
-    Serial.println(
-        "TARS: POST /tts"
-    );
-
-
-    if (
-        !http.begin(
-            client,
-            url
-        )
-    ) {
-
-        Serial.println(
-            "TTS HTTP BEGIN FAILED"
-        );
-
-        return false;
-    }
-
-
-    http.addHeader(
-        "Content-Type",
-        "application/json"
-    );
-
-
-    JsonDocument doc;
-
-
-    doc["text"] =
-        answer;
-
-
-    String body;
-
-
-    serializeJson(
-        doc,
-        body
-    );
-
-
-    int code =
-        http.POST(
-            body
-        );
-
-
-    Serial.print(
-        "TTS HTTP: "
-    );
-
-
-    Serial.println(
-        code
-    );
-
-
-    if (
-        code != 200
-    ) {
-
-        http.end();
-
-        return false;
-    }
-
-
-    File file =
-        LittleFS.open(
-            MP3_PATH,
-            "w"
-        );
-
-
-    if (!file) {
-
-        Serial.println(
-            "TARS: MP3 FILE OPEN FAILED"
-        );
-
-
-        http.end();
-
-        return false;
-    }
-
-
-    WiFiClient *stream =
-        http.getStreamPtr();
-
-
-    uint8_t buffer[
-        MP3_COPY_BUFFER
-    ];
-
-
-    size_t total = 0;
-
-
-    uint32_t lastData =
-        millis();
-
-
-    while (
-        http.connected() ||
-        stream->available()
-    ) {
-
-        size_t available =
-            stream->available();
-
-
-        if (
-            available > 0
-        ) {
-
-            size_t readSize =
-                min(
-                    available,
-                    sizeof(buffer)
-                );
-
-
-            int count =
-                stream->readBytes(
-                    buffer,
-                    readSize
-                );
-
-
-            if (
-                count > 0
-            ) {
-
-                file.write(
-                    buffer,
-                    count
-                );
-
-
-                total += count;
-
-
-                lastData =
-                    millis();
-            }
-
-        } else {
-
-            if (
-                millis() -
-                lastData >
-                5000
-            ) {
-
-                break;
-            }
-
-
-            delay(1);
-        }
-    }
-
-
-    file.close();
-
-
-    http.end();
-
-
-    Serial.print(
-        "TARS: MP3 bytes = "
-    );
-
-
-    Serial.println(
-        total
-    );
-
-
-    return total > 100;
-}
-
-
-// ============================================================
-// BLUETOOTH START
+// START BLUETOOTH
 // ============================================================
 
 bool startBluetooth() {
 
-    btConnected = false;
-
-    btAudioStarted = false;
-
-    btCallbackCalls = 0;
-
-
     Serial.println(
         "TARS: Bluetooth START"
     );
+
+
+    btConnected = false;
+    btAudioStarted = false;
+    btCallbackCalls = 0;
 
 
     a2dpSource.set_auto_reconnect(
@@ -1703,17 +1404,17 @@ bool startBluetooth() {
 
 
     a2dpSource.set_on_connection_state_changed(
-        onBluetoothConnection
+        onBTConnectionState
     );
 
 
     a2dpSource.set_on_audio_state_changed(
-        onBluetoothAudioState
+        onBTAudioState
     );
 
 
     a2dpSource.start(
-        BT_HEADSET_NAME
+        BT_DEVICE_NAME
     );
 
 
@@ -1727,28 +1428,18 @@ bool startBluetooth() {
         BT_TIMEOUT_MS
     ) {
 
-        delay(10);
-
-        yield();
+        delay(100);
     }
 
 
-    if (
-        !btConnected
-    ) {
+    if (!btConnected) {
 
         Serial.println(
-            "TARS: Bluetooth TIMEOUT"
+            "TARS: Bluetooth CONNECT FAILED"
         );
-
 
         return false;
     }
-
-
-    Serial.println(
-        "TARS: A2DP CONNECTED"
-    );
 
 
     Serial.println(
@@ -1756,12 +1447,17 @@ bool startBluetooth() {
     );
 
 
+    // Give A2DP stack a little time to
+    // create/start its audio path.
+    delay(300);
+
+
     return true;
 }
 
 
 // ============================================================
-// BLUETOOTH STOP
+// STOP BLUETOOTH
 // ============================================================
 
 void stopBluetooth() {
@@ -1771,16 +1467,9 @@ void stopBluetooth() {
     );
 
 
-    playbackRunning =
-        false;
+    btAudioStarted = false;
 
-
-    btAudioStarted =
-        false;
-
-
-    btConnected =
-        false;
+    delay(100);
 
 
     a2dpSource.end(
@@ -1788,7 +1477,16 @@ void stopBluetooth() {
     );
 
 
-    delay(300);
+    btConnected = false;
+
+
+    delay(500);
+
+
+    Serial.printf(
+        "TARS: A2DP callbacks = %u\n",
+        (unsigned)btCallbackCalls
+    );
 }
 
 
@@ -1798,22 +1496,15 @@ void stopBluetooth() {
 
 bool playMP3() {
 
-    Serial.println(
-        "TARS: PLAY START"
-    );
-
-
-    pcmRing.clear();
-
-
     if (
-        !startBluetooth()
+        !LittleFS.exists(
+            MP3_PATH
+        )
     ) {
 
         Serial.println(
-            "TARS: PLAY ABORT - BT"
+            "TARS: MP3 NOT FOUND"
         );
-
 
         return false;
     }
@@ -1822,7 +1513,7 @@ bool playMP3() {
     File mp3File =
         LittleFS.open(
             MP3_PATH,
-            "r"
+            FILE_READ
         );
 
 
@@ -1832,44 +1523,85 @@ bool playMP3() {
             "TARS: MP3 OPEN FAILED"
         );
 
+        return false;
+    }
 
-        stopBluetooth();
 
+    size_t mp3Size =
+        mp3File.size();
+
+
+    Serial.printf(
+        "TARS: MP3 SIZE = %u\n",
+        (unsigned)mp3Size
+    );
+
+
+    if (mp3Size == 0) {
+
+        mp3File.close();
 
         return false;
     }
 
 
-    Serial.print(
-        "TARS: MP3 SIZE = "
-    );
-
-
     Serial.println(
-        mp3File.size()
+        "TARS: PLAY START"
+    );
+
+
+    playbackRunning = true;
+
+
+    // --------------------------------------------------------
+    // Clear old PCM data.
+    // --------------------------------------------------------
+
+    pcmRing.clear();
+
+
+    // --------------------------------------------------------
+    // Start Bluetooth FIRST.
+    // --------------------------------------------------------
+
+    if (!startBluetooth()) {
+
+        mp3File.close();
+
+        playbackRunning = false;
+
+        return false;
+    }
+
+
+    // --------------------------------------------------------
+    // Configure Helix memory.
+    // --------------------------------------------------------
+
+    mp3Decoder.setMaxPCMSize(
+        4608
+    );
+
+    mp3Decoder.setMaxFrameSize(
+        4608
     );
 
 
     // --------------------------------------------------------
-    // Decoder reset
+    // Start decoder.
     // --------------------------------------------------------
 
-    mp3Decoder.end();
-
-
-    if (
-        !mp3Stream.begin()
-    ) {
+    if (!mp3Stream.begin()) {
 
         Serial.println(
-            "TARS: MP3 DECODER BEGIN FAILED"
+            "TARS: MP3 DECODER START FAILED"
         );
-
 
         mp3File.close();
 
         stopBluetooth();
 
+        playbackRunning = false;
 
         return false;
     }
@@ -1882,6 +1614,11 @@ bool playMP3() {
 
     // --------------------------------------------------------
     // StreamCopy
+    //
+    // We DO NOT let StreamCopy immediately return zero
+    // because the output ring is temporarily full.
+    //
+    // PCMOutputStream::write() itself waits for space.
     // --------------------------------------------------------
 
     StreamCopy mp3Copier(
@@ -1891,180 +1628,151 @@ bool playMP3() {
     );
 
 
+    // We still enable availability checking so StreamCopy
+    // doesn't blindly push unlimited input into the decoder.
     mp3Copier.setCheckAvailableForWrite(
         true
     );
-
 
     mp3Copier.setCheckAvailable(
         true
     );
 
 
-    playbackRunning =
-        true;
-
-
-    uint32_t startTime =
+    uint32_t playStart =
         millis();
 
 
-    uint32_t lastCallbackCheck =
+    uint32_t lastProgress =
         millis();
 
 
-    uint32_t lastCallbackCount =
-        btCallbackCalls;
+    size_t lastPosition =
+        0;
 
 
-    bool callbackReported =
+    bool decoderFinished =
         false;
 
 
-    bool eof =
-        false;
-
-
-    // ========================================================
-    // PLAY LOOP
-    // ========================================================
+    // --------------------------------------------------------
+    // Decode loop
+    // --------------------------------------------------------
 
     while (
-        playbackRunning &&
-        millis() - startTime <
+        millis() - playStart <
         PLAY_TIMEOUT_MS
     ) {
 
+        size_t position =
+            mp3File.position();
 
+
+        size_t availablePCM =
+            pcmRing.available();
+
+
+        size_t freePCM =
+            pcmRing.freeSpace();
+
+
+        // Debug progress every ~1 second.
         if (
-            !btConnected
+            millis() -
+            lastProgress >
+            1000
         ) {
 
-            Serial.println(
-                "TARS: BT LOST"
+            Serial.printf(
+                "AUDIO: MP3=%u/%u PCM=%u/%u BT=%d AUDIO=%d CB=%u\n",
+                (unsigned)position,
+                (unsigned)mp3Size,
+                (unsigned)availablePCM,
+                (unsigned)PCM_RING_SIZE,
+                btConnected,
+                btAudioStarted,
+                (unsigned)btCallbackCalls
             );
 
+
+            lastProgress =
+                millis();
+
+
+            if (
+                position != lastPosition
+            ) {
+                lastPosition =
+                    position;
+            }
+        }
+
+
+        // ----------------------------------------------------
+        // MP3 EOF
+        // ----------------------------------------------------
+
+        if (
+            position >= mp3Size
+        ) {
+
+            decoderFinished = true;
+
+            Serial.println(
+                "TARS: MP3 EOF"
+            );
 
             break;
         }
 
 
         // ----------------------------------------------------
-        // Monitor callback A2DP
+        // If output buffer is nearly full,
+        // allow A2DP to consume it.
         // ----------------------------------------------------
 
         if (
-            !callbackReported &&
-            millis() -
-            lastCallbackCheck >=
-            1000
-        ) {
-
-            uint32_t calls =
-                btCallbackCalls;
-
-
-            if (
-                calls >
-                lastCallbackCount
-            ) {
-
-                Serial.print(
-                    "TARS: A2DP DATA ACTIVE = "
-                );
-
-
-                Serial.println(
-                    calls
-                );
-
-
-                callbackReported =
-                    true;
-
-            } else {
-
-                Serial.println(
-                    "TARS: A2DP DATA CALLBACK NOT ACTIVE"
-                );
-            }
-
-
-            lastCallbackCount =
-                calls;
-
-
-            lastCallbackCheck =
-                millis();
-        }
-
-
-        // ----------------------------------------------------
-        // Back-pressure
-        // ----------------------------------------------------
-
-        size_t freePCM =
-            pcmRing.freeSpace();
-
-
-        if (
-            freePCM < 8192
+            freePCM < 4096
         ) {
 
             delay(2);
 
-            yield();
-
             continue;
         }
 
-
-        // ----------------------------------------------------
-        // MP3 -> decoder -> PCM
-        // ----------------------------------------------------
 
         size_t copied =
             mp3Copier.copy();
 
 
-        if (
-            copied == 0
-        ) {
+        if (copied == 0) {
 
-            if (
-                mp3File.position() >=
-                mp3File.size()
-            ) {
-
-                eof =
-                    true;
-
-
-                Serial.println(
-                    "TARS: MP3 EOF"
-                );
-
-
-                break;
-            }
-
-
-            delay(1);
+            delay(2);
+        }
+        else {
 
             yield();
-
-
-            continue;
         }
-
-
-        yield();
     }
 
 
-    // ========================================================
-    // PCM DRAIN
-    // ========================================================
+    // --------------------------------------------------------
+    // Decoder finished reading MP3.
+    // --------------------------------------------------------
+
+    mp3Stream.end();
+
+
+    mp3File.close();
+
+
+    // --------------------------------------------------------
+    // IMPORTANT:
+    //
+    // Don't stop Bluetooth immediately.
+    //
+    // Let A2DP consume the remaining PCM.
+    // --------------------------------------------------------
 
     Serial.println(
         "TARS: PCM DRAIN"
@@ -2077,71 +1785,58 @@ bool playMP3() {
 
     while (
         pcmRing.available() > 0 &&
-        millis() -
-        drainStart < 7000
+        millis() - drainStart < 10000
     ) {
 
-        delay(5);
-
-        yield();
+        delay(10);
     }
 
 
-    size_t remaining =
-        pcmRing.available();
-
-
-    Serial.print(
-        "TARS: PCM REMAIN = "
-    );
-
-
-    Serial.println(
-        remaining
-    );
-
-
-    // Beri waktu frame terakhir keluar
-    delay(250);
-
-
-    mp3File.close();
-
-
-    mp3Stream.end();
-
-    mp3Decoder.end();
-
-
-    // ========================================================
-    // BLUETOOTH OFF
-    // ========================================================
-
-    stopBluetooth();
-
-
-    // ========================================================
-    // DELETE MP3
-    // ========================================================
-
     if (
-        LittleFS.exists(
-            MP3_PATH
-        )
+        pcmRing.available() > 0
     ) {
 
-        LittleFS.remove(
-            MP3_PATH
+        Serial.printf(
+            "TARS: PCM DRAIN TIMEOUT, remaining=%u\n",
+            (unsigned)pcmRing.available()
+        );
+    }
+    else {
+
+        Serial.println(
+            "TARS: PCM EMPTY"
         );
     }
 
 
-    Serial.println(
-        "TARS: PLAY END"
+    Serial.printf(
+        "TARS: A2DP callbacks final = %u\n",
+        (unsigned)btCallbackCalls
     );
 
 
-    return eof;
+    stopBluetooth();
+
+
+    playbackRunning = false;
+
+
+    if (!decoderFinished) {
+
+        Serial.println(
+            "TARS: PLAYBACK TIMEOUT"
+        );
+
+        return false;
+    }
+
+
+    Serial.println(
+        "TARS: PLAY DONE"
+    );
+
+
+    return true;
 }
 
 
@@ -2153,56 +1848,58 @@ void handleQuestion(
     const String &question
 ) {
 
+    if (
+        question.length() == 0
+    ) {
+        return;
+    }
+
+
+    Serial.println();
     Serial.println(
         "TARS: COMMAND RECEIVED"
     );
 
-
     Serial.println(
         "QUESTION:"
     );
-
 
     Serial.println(
         question
     );
 
 
-    String answer;
-
-
     // --------------------------------------------------------
-    // WiFi + waktu valid
+    // WiFi ON
     // --------------------------------------------------------
 
-    if (
-        !connectWiFi(true)
-    ) {
+    if (!connectWiFi(true)) {
 
         Serial.println(
-            "TARS: WIFI/TIME ERROR"
+            "TARS: WIFI ERROR"
         );
-
 
         return;
     }
 
 
     // --------------------------------------------------------
-    // ASK
+    // AI
     // --------------------------------------------------------
 
+    String answer =
+        askAI(
+            question
+        );
+
+
     if (
-        !askAI(
-            question,
-            answer
-        )
+        answer.length() == 0
     ) {
 
         Serial.println(
-            "TARS: ASK FAILED"
+            "TARS: AI EMPTY"
         );
-
 
         return;
     }
@@ -2222,13 +1919,12 @@ void handleQuestion(
             "TARS: TTS FAILED"
         );
 
-
         return;
     }
 
 
     // --------------------------------------------------------
-    // WiFi OFF sebelum Bluetooth
+    // Bluetooth playback needs WiFi OFF.
     // --------------------------------------------------------
 
     disconnectWiFi();
@@ -2242,18 +1938,72 @@ void handleQuestion(
 
 
     // --------------------------------------------------------
-    // WiFi ON lagi
+    // WiFi ON again.
     //
-    // TIDAK NTP LAGI.
-    // Waktu sistem tetap berjalan.
+    // IMPORTANT:
+    // No NTP here unless time became invalid.
     // --------------------------------------------------------
 
-    connectWiFi(false);
+    if (connectWiFi(false)) {
 
+        if (
+            !isTimeValid()
+        ) {
+
+            Serial.println(
+                "TARS: TIME LOST - NTP REQUIRED"
+            );
+
+            syncNTP();
+        }
+    }
+
+
+    Serial.println();
+    Serial.println(
+        "================================"
+    );
 
     Serial.println(
-        "TARS: READY"
+        "TARS: READY FOR QUESTION"
     );
+
+    Serial.println(
+        "================================"
+    );
+}
+
+
+// ============================================================
+// OLED BASIC
+// ============================================================
+
+void oledReady() {
+
+    oled.clearDisplay();
+
+    oled.setTextColor(
+        SSD1306_WHITE
+    );
+
+    oled.setTextSize(1);
+
+    oled.setCursor(
+        0,
+        0
+    );
+
+    oled.println(
+        "TARS ONLINE"
+    );
+
+    oled.println();
+
+    oled.println(
+        "Menunggu pertanyaan..."
+    );
+
+    oled.display();
 }
 
 
@@ -2268,11 +2018,10 @@ void setup() {
     );
 
 
-    delay(500);
+    delay(1000);
 
 
     Serial.println();
-
     Serial.println(
         "================================"
     );
@@ -2299,56 +2048,27 @@ void setup() {
     if (
         oled.begin(
             SSD1306_SWITCHCAPVCC,
-            0x3C
+            OLED_ADDR
         )
     ) {
 
-        oled.clearDisplay();
-
-
-        oled.setTextSize(
-            1
-        );
-
-
-        oled.setTextColor(
-            SSD1306_WHITE
-        );
-
-
-        oled.setCursor(
-            0,
-            0
-        );
-
-
-        oled.println(
-            "TARS ONLINE"
-        );
-
-
-        oled.display();
+        oledReady();
     }
 
 
     // --------------------------------------------------------
-    // LITTLEFS
+    // LittleFS
     // --------------------------------------------------------
 
     if (
-        !LittleFS.begin(
-            true
-        )
+        !LittleFS.begin(true)
     ) {
 
         Serial.println(
             "LittleFS FAILED"
         );
 
-
-        while (true) {
-            delay(1000);
-        }
+        return;
     }
 
 
@@ -2358,23 +2078,20 @@ void setup() {
 
 
     // --------------------------------------------------------
-    // PCM
+    // PCM ring
     // --------------------------------------------------------
 
     if (
         !pcmRing.begin(
-            PCM_BUFFER_SIZE
+            PCM_RING_SIZE
         )
     ) {
 
         Serial.println(
-            "PCM BUFFER FAILED"
+            "PCM RING ALLOC FAILED"
         );
 
-
-        while (true) {
-            delay(1000);
-        }
+        return;
     }
 
 
@@ -2382,11 +2099,9 @@ void setup() {
         "PCM  : 32KB SAFE BUFFER"
     );
 
-
     Serial.println(
         "PRIME: DISABLED"
     );
-
 
     Serial.println(
         "A2DP : BT BEFORE DECODER"
@@ -2394,7 +2109,7 @@ void setup() {
 
 
     // --------------------------------------------------------
-    // WIFI + NTP BOOT
+    // WiFi + NTP
     // --------------------------------------------------------
 
     if (
@@ -2402,8 +2117,17 @@ void setup() {
     ) {
 
         Serial.println(
-            "TARS: INITIAL WIFI/TIME FAILED"
+            "TARS: INITIAL WIFI FAILED"
         );
+    }
+
+
+    if (
+        WiFi.status() == WL_CONNECTED &&
+        !ntpSynced
+    ) {
+
+        ensureTimeValid();
     }
 
 
@@ -2411,11 +2135,9 @@ void setup() {
         "================================"
     );
 
-
     Serial.println(
         "TARS: READY FOR QUESTION"
     );
-
 
     Serial.println(
         "================================"
