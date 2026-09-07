@@ -18,8 +18,12 @@
 
 // ============================================================
 // TARS ESP32
-// WiFi -> AI -> TTS MP3 -> WiFi OFF -> Bluetooth A2DP
-// -> MP3 Decode -> PCM -> A2DP -> Bluetooth OFF -> WiFi ON
+// WiFi -> AI -> TTS MP3 -> WiFi OFF
+// -> Bluetooth A2DP -> MP3 Decode -> PCM -> A2DP
+// -> Bluetooth OFF -> WiFi ON
+//
+// AudioTools target:
+// 1.2.6
 // ============================================================
 
 // ============================================================
@@ -50,8 +54,7 @@ static const uint32_t PLAY_TIMEOUT_MS = 120000;
 
 static const size_t PCM_BUFFER_SIZE = 32768;
 
-// MP3 input copy buffer.
-// This is only the StreamCopy buffer size.
+// AudioTools 1.2.6 StreamCopy buffer
 static const size_t MP3_COPY_BUFFER = 1024;
 
 static const float PCM_GAIN = 2.0f;
@@ -285,7 +288,12 @@ PCMRingBuffer pcmRing(
 
 // ============================================================
 // PCM OUTPUT STREAM
-// MP3 decoder output -> 44.1kHz stereo 16-bit
+//
+// MP3 decoder:
+//   22050 Hz mono 16-bit
+//
+// Converted to:
+//   44100 Hz stereo 16-bit
 // ============================================================
 
 class PCMOutputStream :
@@ -357,6 +365,13 @@ public:
     ) override
     {
         if (!data || len == 0)
+        {
+            return 0;
+        }
+
+        if (
+            currentInfo.bits_per_sample != 16
+        )
         {
             return 0;
         }
@@ -477,63 +492,20 @@ public:
             }
 
             // ------------------------------------------------
-            // 22050 MONO/STEREO -> 44100
+            // 22050 Hz -> 44100 Hz
+            // Duplicate each sample.
             // ------------------------------------------------
 
-            if (sampleRate == 22050)
-            {
-                for (
-                    int repeat = 0;
-                    repeat < 2;
-                    repeat++
-                )
-                {
-                    if (
-                        outputBytes + 4 >
-                        sizeof(outputBuffer)
-                    )
-                    {
-                        if (
-                            ring.freeSpace() <
-                            outputBytes
-                        )
-                        {
-                            return 0;
-                        }
+            int repeatCount =
+                (sampleRate == 22050)
+                ? 2
+                : 1;
 
-                        ring.write(
-                            outputBuffer,
-                            outputBytes
-                        );
-
-                        outputBytes = 0;
-                    }
-
-                    memcpy(
-                        outputBuffer +
-                        outputBytes,
-                        &left,
-                        2
-                    );
-
-                    outputBytes += 2;
-
-                    memcpy(
-                        outputBuffer +
-                        outputBytes,
-                        &right,
-                        2
-                    );
-
-                    outputBytes += 2;
-                }
-            }
-
-            // ------------------------------------------------
-            // ALREADY 44100
-            // ------------------------------------------------
-
-            else
+            for (
+                int repeat = 0;
+                repeat < repeatCount;
+                repeat++
+            )
             {
                 if (
                     outputBytes + 4 >
@@ -548,10 +520,19 @@ public:
                         return 0;
                     }
 
-                    ring.write(
-                        outputBuffer,
+                    size_t written =
+                        ring.write(
+                            outputBuffer,
+                            outputBytes
+                        );
+
+                    if (
+                        written !=
                         outputBytes
-                    );
+                    )
+                    {
+                        return 0;
+                    }
 
                     outputBytes = 0;
                 }
@@ -586,10 +567,19 @@ public:
                 return 0;
             }
 
-            ring.write(
-                outputBuffer,
+            size_t written =
+                ring.write(
+                    outputBuffer,
+                    outputBytes
+                );
+
+            if (
+                written !=
                 outputBytes
-            );
+            )
+            {
+                return 0;
+            }
         }
 
         return len;
@@ -1152,8 +1142,9 @@ int32_t getAudioData(
             len
         );
 
-    // If decoder has not produced enough PCM yet,
-    // send silence instead of blocking A2DP.
+    // Never block the A2DP callback.
+    // If PCM is temporarily empty,
+    // send silence.
 
     if (
         got <
@@ -1341,12 +1332,26 @@ void stopBluetooth()
 //
 // IMPORTANT:
 //
-// Bluetooth is started BEFORE MP3 decoding.
+// Bluetooth starts BEFORE decoder.
 //
-// No PCM priming.
-// No filling 32KB before A2DP starts.
+// There is NO PCM pre-fill.
 //
-// A2DP consumes PCM while Helix produces PCM.
+// Decoder and A2DP work concurrently:
+//
+// MP3 file
+//    ↓
+// StreamCopy
+//    ↓
+// Helix
+//    ↓
+// PCMOutputStream
+//    ↓
+// 32KB ring buffer
+//    ↓
+// A2DP callback
+//
+// AudioTools 1.2.6:
+// StreamCopy(Print &to, Stream &from, int buffer_size)
 // ============================================================
 
 bool playMP3()
@@ -1361,7 +1366,7 @@ bool playMP3()
     pcmRing.clear();
 
     // --------------------------------------------------------
-    // 1. START BLUETOOTH FIRST
+    // 1. BLUETOOTH FIRST
     // --------------------------------------------------------
 
     if (!startBluetooth())
@@ -1398,12 +1403,20 @@ bool playMP3()
         return false;
     }
 
+    Serial.print(
+        "TARS: MP3 SIZE = "
+    );
+
+    Serial.println(
+        mp3File.size()
+    );
+
     Serial.println(
         "TARS: MP3 DECODER READY"
     );
 
     // --------------------------------------------------------
-    // 3. START MP3 STREAM
+    // 3. START DECODER
     // --------------------------------------------------------
 
     if (!mp3Stream.begin())
@@ -1423,20 +1436,51 @@ bool playMP3()
     }
 
     // --------------------------------------------------------
-    // 4. DECODE WHILE BLUETOOTH IS RUNNING
+    // 4. AUDIO TOOLS 1.2.6
+    //
+    // Correct constructor:
+    //
+    // StreamCopy(
+    //     Print &to,
+    //     Stream &from,
+    //     int buffer_size
+    // );
+    //
+    // mp3Stream = destination
+    // mp3File   = source
+    // --------------------------------------------------------
+
+    StreamCopy mp3Copier(
+        mp3Stream,
+        mp3File,
+        MP3_COPY_BUFFER
+    );
+
+    // --------------------------------------------------------
+    // 5. DECODE WHILE BT IS RUNNING
     // --------------------------------------------------------
 
     uint32_t start =
         millis();
 
     size_t previousPosition =
-        0;
+        mp3File.position();
+
+    uint32_t lastProgress =
+        millis();
+
+    bool eofReached =
+        false;
 
     while (
         millis() - start <
         PLAY_TIMEOUT_MS
     )
     {
+        // ----------------------------------------------------
+        // Bluetooth lost
+        // ----------------------------------------------------
+
         if (!btConnected)
         {
             Serial.println(
@@ -1447,13 +1491,14 @@ bool playMP3()
         }
 
         // ----------------------------------------------------
-        // Let A2DP consume PCM continuously.
+        // Decode MP3
         // ----------------------------------------------------
 
-        mp3Copier.copy();
+        size_t copied =
+            mp3Copier.copy();
 
         // ----------------------------------------------------
-        // EOF
+        // Current file position
         // ----------------------------------------------------
 
         size_t position =
@@ -1462,52 +1507,105 @@ bool playMP3()
         size_t fileSize =
             mp3File.size();
 
+        // ----------------------------------------------------
+        // Progress tracking
+        // ----------------------------------------------------
+
         if (
-            position >= fileSize
+            position !=
+            previousPosition
         )
         {
-            // Wait for remaining PCM
-            // to leave the ring buffer.
+            previousPosition =
+                position;
 
-            uint32_t drainStart =
+            lastProgress =
                 millis();
+        }
 
-            while (
-                pcmRing.available() >
-                0 &&
-                millis() -
-                drainStart <
-                5000
-            )
-            {
-                delay(10);
+        // ----------------------------------------------------
+        // EOF
+        // ----------------------------------------------------
 
-                yield();
-            }
+        if (
+            position >=
+            fileSize
+        )
+        {
+            eofReached =
+                true;
+
+            Serial.println(
+                "TARS: MP3 EOF"
+            );
 
             break;
         }
 
         // ----------------------------------------------------
-        // If no progress, yield.
+        // No data available yet
         // ----------------------------------------------------
 
         if (
-            position ==
-            previousPosition
+            copied == 0
         )
         {
             delay(2);
+
+            yield();
         }
 
-        previousPosition =
-            position;
+        // ----------------------------------------------------
+        // Safety against decoder/file stall
+        // ----------------------------------------------------
+
+        if (
+            millis() -
+            lastProgress >
+            5000
+        )
+        {
+            Serial.println(
+                "TARS: MP3 COPY STALLED"
+            );
+
+            break;
+        }
 
         yield();
     }
 
     // --------------------------------------------------------
-    // 5. STOP DECODER
+    // 6. DRAIN PCM
+    // --------------------------------------------------------
+
+    if (
+        eofReached
+    )
+    {
+        Serial.println(
+            "TARS: PCM DRAIN"
+        );
+
+        uint32_t drainStart =
+            millis();
+
+        while (
+            pcmRing.available() >
+            0 &&
+            millis() -
+            drainStart <
+            5000
+        )
+        {
+            delay(10);
+
+            yield();
+        }
+    }
+
+    // --------------------------------------------------------
+    // 7. DECODER STOP
     // --------------------------------------------------------
 
     Serial.println(
@@ -1519,30 +1617,32 @@ bool playMP3()
     playbackRunning =
         false;
 
-    // Allow last A2DP frames
-    // to leave the stack.
+    // Give A2DP a short chance
+    // to finish its last frames.
 
     delay(300);
 
     // --------------------------------------------------------
-    // 6. BLUETOOTH OFF
+    // 8. BLUETOOTH OFF FULL
     // --------------------------------------------------------
 
     stopBluetooth();
 
     // --------------------------------------------------------
-    // 7. DELETE MP3
+    // 9. DELETE MP3
     // --------------------------------------------------------
 
     LittleFS.remove(
         MP3_PATH
     );
 
+    pcmRing.clear();
+
     Serial.println(
         "TARS: PLAY FINISHED"
     );
 
-    return true;
+    return eofReached;
 }
 
 // ============================================================
@@ -1640,8 +1740,9 @@ void handleQuestion(
     // --------------------------------------------------------
     // WIFI ON AGAIN
     //
+    // IMPORTANT:
     // NO NTP HERE.
-    // NTP WAS ALREADY SYNCED ONCE.
+    // NTP ONLY HAPPENS ONCE IN SETUP.
     // --------------------------------------------------------
 
     if (
@@ -1808,7 +1909,17 @@ void setup()
     // NTP ONCE
     // --------------------------------------------------------
 
-    syncNTPOnce();
+    if (
+        !syncNTPOnce()
+    )
+    {
+        Serial.println(
+            "TARS: NTP FAILED"
+        );
+
+        // WiFi tetap ON.
+        // Kita tidak mengulang NTP terus-menerus.
+    }
 
     // --------------------------------------------------------
     // READY
