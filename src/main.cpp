@@ -46,14 +46,11 @@ static const size_t TTS_MAX_CHARS = 450;
 // AUDIO VOLUME
 // ============================================================
 
-// 2x digital gain.
-// Limiter mencegah sample melewati batas int16.
 static const int32_t PCM_GAIN = 2;
 
 static inline int16_t boostPCM(int16_t sample)
 {
-    int32_t value =
-        (int32_t)sample * PCM_GAIN;
+    int32_t value = (int32_t)sample * PCM_GAIN;
 
     if (value > 32767)
         value = 32767;
@@ -128,6 +125,7 @@ static bool syncNTPOnce()
     }
 
     Serial.println("TARS: NTP FAILED");
+
     return false;
 }
 
@@ -135,8 +133,13 @@ static bool syncNTPOnce()
 // PCM BUFFER
 // ============================================================
 
+// 16 KB circular PCM buffer
 static const size_t PCM_BUFFER_SIZE = 16384;
-static const size_t PCM_PRIME_BYTES = 4096;
+
+// Penting:
+// PCM harus sudah berisi data SEBELUM Bluetooth START.
+// 8192 byte memberi headroom lebih besar terhadap A2DP callback.
+static const size_t PCM_PRIME_BYTES = 8192;
 
 static uint8_t pcmBuffer[PCM_BUFFER_SIZE];
 
@@ -240,6 +243,9 @@ public:
 
     void setAudioInfo(AudioInfo info) override
     {
+        // Penting: tetap update AudioStream base class.
+        AudioStream::setAudioInfo(info);
+
         sourceInfo = info;
 
         Serial.print("PCM format: ");
@@ -287,7 +293,7 @@ public:
             sourceInfo.channels;
 
         // ----------------------------------------------------
-        // 44100 stereo -> boost 2x -> stereo
+        // 44100 stereo -> 2x gain
         // ----------------------------------------------------
 
         if (rate == 44100 && channels == 2)
@@ -316,7 +322,7 @@ public:
         }
 
         // ----------------------------------------------------
-        // 44100 mono -> stereo + boost
+        // 44100 mono -> stereo + 2x gain
         // ----------------------------------------------------
 
         if (rate == 44100 && channels == 1)
@@ -345,7 +351,7 @@ public:
         }
 
         // ----------------------------------------------------
-        // 22050 mono -> 44100 stereo + boost
+        // 22050 mono -> 44100 stereo + 2x gain
         // ----------------------------------------------------
 
         if (rate == 22050 && channels == 1)
@@ -363,11 +369,11 @@ public:
 
                 uint8_t out[8];
 
-                // sample waktu pertama
+                // sample pertama
                 memcpy(out, &s, 2);
                 memcpy(out + 2, &s, 2);
 
-                // sample waktu kedua
+                // duplicate sample
                 memcpy(out + 4, &s, 2);
                 memcpy(out + 6, &s, 2);
 
@@ -555,11 +561,6 @@ StreamCopy mp3Copier(
 
 static void drawPanelFrame()
 {
-    oled.drawRect(
-        0, 0, 128, 64,
-        SSD1306_WHITE
-    );
-
     oled.drawLine(
         0, 11, 127, 11,
         SSD1306_WHITE
@@ -1369,6 +1370,9 @@ int32_t getAudioData(
             wanted
         );
 
+    // Callback A2DP harus selalu mendapatkan
+    // jumlah byte yang diminta.
+    // Jika buffer sementara kosong, isi silence.
     if (got < wanted)
     {
         memset(
@@ -1614,24 +1618,50 @@ bool primePCM()
 
 bool playMP3()
 {
+    // --------------------------------------------------------
+    // 1. Decoder START
+    // --------------------------------------------------------
+
     if (!startDecoder())
         return false;
 
-    if (!startBluetooth())
-    {
-        stopDecoder();
-        stopBluetooth();
-
-        return false;
-    }
+    // --------------------------------------------------------
+    // 2. PRIME PCM SEBELUM BLUETOOTH
+    //
+    // Ini perubahan paling penting.
+    // A2DP tidak boleh mulai meminta PCM ketika buffer kosong.
+    // --------------------------------------------------------
 
     if (!primePCM())
     {
+        Serial.println(
+            "TARS: PCM PRIME FAILED"
+        );
+
+        stopDecoder();
+
+        return false;
+    }
+
+    // --------------------------------------------------------
+    // 3. Baru START Bluetooth/A2DP
+    // --------------------------------------------------------
+
+    if (!startBluetooth())
+    {
+        Serial.println(
+            "TARS: Bluetooth START FAILED"
+        );
+
         stopDecoder();
         stopBluetooth();
 
         return false;
     }
+
+    // --------------------------------------------------------
+    // 4. PLAY
+    // --------------------------------------------------------
 
     playbackRunning = true;
 
@@ -1655,6 +1685,7 @@ bool playMP3()
         playbackRunning
     )
     {
+        // Isi PCM buffer secara terus-menerus.
         if (!mp3InputFinished)
         {
             size_t copied =
@@ -1671,6 +1702,7 @@ bool playMP3()
             }
         }
 
+        // Cek koneksi A2DP.
         if (
             a2dpSource.get_connection_state() !=
             ESP_A2D_CONNECTION_STATE_CONNECTED
@@ -1686,6 +1718,7 @@ bool playMP3()
             break;
         }
 
+        // MP3 sudah habis dan PCM buffer benar-benar kosong.
         if (
             mp3InputFinished &&
             pcmOutput.availablePCM() == 0
@@ -1702,6 +1735,7 @@ bool playMP3()
             }
         }
 
+        // Pengaman jika decoder/playback macet.
         if (
             millis() - start >
             PLAY_TIMEOUT_MS
@@ -1718,14 +1752,24 @@ bool playMP3()
         delay(1);
     }
 
+    // Beri A2DP sedikit waktu menghabiskan data terakhir.
     delay(100);
 
     Serial.println(
         "TARS: PLAY FINISHED"
     );
 
+    // --------------------------------------------------------
+    // 5. STOP DECODER
+    // 6. STOP BLUETOOTH
+    // --------------------------------------------------------
+
     stopDecoder();
     stopBluetooth();
+
+    // Pastikan buffer PCM benar-benar bersih
+    // untuk playback berikutnya.
+    pcmOutput.clearBuffer();
 
     Serial.println(
         "TARS: PLAY END"
@@ -1825,6 +1869,10 @@ void processQuestion(
         return;
     }
 
+    // --------------------------------------------------------
+    // WiFi OFF sebelum Bluetooth.
+    // --------------------------------------------------------
+
     wifiOff();
 
     bool played =
@@ -1842,6 +1890,7 @@ void processQuestion(
         delay(1500);
     }
 
+    // Hapus MP3 setelah playback.
     if (
         LittleFS.exists(
             MP3_FILE
@@ -1852,6 +1901,11 @@ void processQuestion(
             MP3_FILE
         );
     }
+
+    // --------------------------------------------------------
+    // WiFi ON kembali.
+    // Tidak melakukan NTP lagi.
+    // --------------------------------------------------------
 
     if (
         !connectWiFi()
@@ -2064,7 +2118,10 @@ void setup()
         "================================"
     );
 
+    // --------------------------------------------------------
     // OLED
+    // --------------------------------------------------------
+
     Wire.begin(
         OLED_SDA,
         OLED_SCL
@@ -2113,7 +2170,10 @@ void setup()
         delay(500);
     }
 
+    // --------------------------------------------------------
     // LittleFS
+    // --------------------------------------------------------
+
     if (
         !LittleFS.begin(true)
     )
@@ -2136,10 +2196,16 @@ void setup()
         "LittleFS OK"
     );
 
+    // --------------------------------------------------------
     // PCM
+    // --------------------------------------------------------
+
     pcmOutput.begin();
 
+    // --------------------------------------------------------
     // Queue
+    // --------------------------------------------------------
+
     questionQueue =
         xQueueCreate(
             1,
@@ -2162,7 +2228,10 @@ void setup()
         }
     }
 
+    // --------------------------------------------------------
     // WiFi
+    // --------------------------------------------------------
+
     tarsState =
         TARS_THINKING;
 
@@ -2188,7 +2257,10 @@ void setup()
         }
     }
 
-    // NTP hanya SEKALI saat boot
+    // --------------------------------------------------------
+    // NTP HANYA SEKALI SAAT BOOT
+    // --------------------------------------------------------
+
     while (
         !syncNTPOnce()
     )
@@ -2200,7 +2272,10 @@ void setup()
         delay(1000);
     }
 
+    // --------------------------------------------------------
     // Worker
+    // --------------------------------------------------------
+
     xTaskCreatePinnedToCore(
         tarsWorkerTask,
         "TARS_WORKER",
@@ -2211,7 +2286,10 @@ void setup()
         0
     );
 
-    // Ready
+    // --------------------------------------------------------
+    // READY
+    // --------------------------------------------------------
+
     tarsState =
         TARS_WAITING;
 
@@ -2246,6 +2324,14 @@ void setup()
 
     Serial.println(
         "VOLUME: 2X + LIMITER"
+    );
+
+    Serial.println(
+        "PCM  : PRIME 8192 BYTES"
+    );
+
+    Serial.println(
+        "A2DP : PRIME BEFORE START"
     );
 
     Serial.println(
