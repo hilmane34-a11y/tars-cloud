@@ -7,13 +7,13 @@
 #include <time.h>
 #include <ArduinoJson.h>
 
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+
 #include <BluetoothA2DPSource.h>
 
 #include "AudioTools.h"
-#include "AudioCodecs/CodecMP3Helix.h"
-
-#include <Adafruit_GFX.h>
-#include <Adafruit_SSD1306.h>
+#include "AudioTools/AudioCodecs/CodecMP3Helix.h"
 
 #include "config.h"
 
