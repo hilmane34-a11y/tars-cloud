@@ -40,8 +40,18 @@ jobs:
             -name "boot_app0.bin" \
             | head -n 1)
 
+          ESPTOOL=$(find "$HOME/.platformio/packages/tool-esptoolpy" \
+            -type f \
+            \( -name "esptool.py" -o -name "esptool" \) \
+            | head -n 1)
+
           if [ -z "$BOOT_APP0" ]; then
             echo "ERROR: boot_app0.bin tidak ditemukan"
+            exit 1
+          fi
+
+          if [ -z "$ESPTOOL" ]; then
+            echo "ERROR: esptool tidak ditemukan"
             exit 1
           fi
 
@@ -50,8 +60,9 @@ jobs:
           echo "Boot App0  : $BOOT_APP0"
           echo "Firmware   : $BUILD/firmware.bin"
           echo "LittleFS   : $BUILD/littlefs.bin"
+          echo "Esptool    : $ESPTOOL"
 
-          python -m esptool \
+          python "$ESPTOOL" \
             --chip esp32 merge_bin \
             -o TARS-ESP32.bin \
             --flash_mode dio \
