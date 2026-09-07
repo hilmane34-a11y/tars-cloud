@@ -652,9 +652,9 @@ void oledUpdateReadyAnimation() {
     }
 
 
-    if (playbackRunning) {
-        return;
-    }
+    // Tidak memakai playbackRunning di sini.
+    // Variabel tersebut dideklarasikan setelah bagian OLED,
+    // sehingga tidak diperlukan untuk animasi OLED.
 
 
     uint32_t now =
