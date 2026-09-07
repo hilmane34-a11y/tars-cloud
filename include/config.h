@@ -1,13 +1,46 @@
 #pragma once
 
+// ============================================================
+// WIFI
+// ============================================================
+
 #define WIFI_SSID       "HomeManz"
 #define WIFI_PASSWORD   "rumahanak4"
 
+// ============================================================
+// TARS CLOUD
+// ============================================================
+
+#define TARS_CLOUD_URL  "https://tars-cloud-v1.hilmane34.workers.dev"
+
+// ============================================================
+// BLUETOOTH HEADSET
+// ============================================================
+
 #define BT_HEADSET_NAME "I7-TWS"
 
-#define OLED_SDA 21
-#define OLED_SCL 22
+// ============================================================
+// OLED SSD1306
+// ============================================================
 
-#define OLED_WIDTH 128
-#define OLED_HEIGHT 64
-#define OLED_ADDR 0x3C
+#define OLED_SDA        21
+#define OLED_SCL        22
+#define OLED_ADDR       0x3C
+
+#define OLED_WIDTH      128
+#define OLED_HEIGHT     64
+
+// ============================================================
+// MP3
+// ============================================================
+
+#define MP3_FILE        "/tars.mp3"
+
+// Maximum time waiting for Bluetooth connection
+#define BT_CONNECT_TIMEOUT 20000
+
+// ============================================================
+// TARS
+// ============================================================
+
+#define SERIAL_BAUD     115200
