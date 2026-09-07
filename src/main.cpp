@@ -43,8 +43,8 @@
 // ============================================================
 
 #define OLED_WIDTH   128
-#define OLED_HEIGHT   64
-#define OLED_ADDR   0x3C
+#define OLED_HEIGHT  64
+#define OLED_ADDR    0x3C
 
 Adafruit_SSD1306 oled(
     OLED_WIDTH,
@@ -52,6 +52,532 @@ Adafruit_SSD1306 oled(
     &Wire,
     -1
 );
+
+bool oledReadyFlag = false;
+
+
+// ============================================================
+// OLED TYPING
+// ============================================================
+
+static String oledAnswer = "";
+static size_t oledTypedChars = 0;
+
+static uint32_t oledLastType =
+    0;
+
+// Sekitar 80% lebih cepat dibanding
+// kecepatan ketik lama 55 ms.
+//
+// 55 ms × 0.8 = 44 ms
+//
+static const uint32_t OLED_TYPE_INTERVAL =
+    44;
+
+static bool oledTyping =
+    false;
+
+
+// ============================================================
+// OLED FACE
+// ============================================================
+//
+// TARS dibuat minimalis:
+// - tidak memenuhi semua sudut dengan kotak
+// - dua mata mekanis
+// - indikator tengah
+// - teks status
+//
+// ============================================================
+
+void oledClear() {
+
+    if (!oledReadyFlag) {
+        return;
+    }
+
+    oled.clearDisplay();
+}
+
+
+void oledDrawEyes(
+    bool blink,
+    bool speaking
+) {
+
+    if (!oledReadyFlag) {
+        return;
+    }
+
+    // --------------------------------------------------------
+    // Mata kiri
+    // --------------------------------------------------------
+
+    if (blink) {
+
+        oled.drawLine(
+            25,
+            22,
+            45,
+            22,
+            SSD1306_WHITE
+        );
+
+        oled.drawLine(
+            25,
+            23,
+            45,
+            23,
+            SSD1306_WHITE
+        );
+
+    }
+    else {
+
+        oled.fillRoundRect(
+            23,
+            16,
+            24,
+            15,
+            4,
+            SSD1306_WHITE
+        );
+
+        oled.fillCircle(
+            35,
+            23,
+            4,
+            SSD1306_BLACK
+        );
+    }
+
+
+    // --------------------------------------------------------
+    // Mata kanan
+    // --------------------------------------------------------
+
+    if (blink) {
+
+        oled.drawLine(
+            83,
+            22,
+            103,
+            22,
+            SSD1306_WHITE
+        );
+
+        oled.drawLine(
+            83,
+            23,
+            103,
+            23,
+            SSD1306_WHITE
+        );
+
+    }
+    else {
+
+        oled.fillRoundRect(
+            81,
+            16,
+            24,
+            15,
+            4,
+            SSD1306_WHITE
+        );
+
+        oled.fillCircle(
+            93,
+            23,
+            4,
+            SSD1306_BLACK
+        );
+    }
+
+
+    // --------------------------------------------------------
+    // Indikator tengah
+    // --------------------------------------------------------
+
+    if (speaking) {
+
+        oled.drawLine(
+            58,
+            38,
+            70,
+            38,
+            SSD1306_WHITE
+        );
+
+        oled.drawLine(
+            56,
+            40,
+            72,
+            40,
+            SSD1306_WHITE
+        );
+
+        oled.drawLine(
+            59,
+            42,
+            69,
+            42,
+            SSD1306_WHITE
+        );
+
+    }
+    else {
+
+        oled.drawLine(
+            59,
+            40,
+            69,
+            40,
+            SSD1306_WHITE
+        );
+    }
+}
+
+
+void oledDrawStatus(
+    const char *status
+) {
+
+    if (!oledReadyFlag) {
+        return;
+    }
+
+    oled.setTextColor(
+        SSD1306_WHITE
+    );
+
+    oled.setTextSize(
+        1
+    );
+
+    int16_t x1;
+    int16_t y1;
+    uint16_t w;
+    uint16_t h;
+
+    oled.getTextBounds(
+        status,
+        0,
+        0,
+        &x1,
+        &y1,
+        &w,
+        &h
+    );
+
+    int x =
+        (OLED_WIDTH - w) / 2;
+
+    if (x < 0) {
+        x = 0;
+    }
+
+    oled.setCursor(
+        x,
+        53
+    );
+
+    oled.print(
+        status
+    );
+}
+
+
+void oledShowFace(
+    const char *status,
+    bool speaking = false,
+    bool blink = false
+) {
+
+    if (!oledReadyFlag) {
+        return;
+    }
+
+    oled.clearDisplay();
+
+    oledDrawEyes(
+        blink,
+        speaking
+    );
+
+    oledDrawStatus(
+        status
+    );
+
+    oled.display();
+}
+
+
+// ============================================================
+// OLED READY
+// ============================================================
+
+void oledShowReady() {
+
+    oledShowFace(
+        "READY",
+        false,
+        false
+    );
+}
+
+
+// ============================================================
+// OLED LISTENING
+// ============================================================
+
+void oledShowListening() {
+
+    oledShowFace(
+        "LISTENING",
+        false,
+        false
+    );
+}
+
+
+// ============================================================
+// OLED PROCESSING
+// ============================================================
+
+void oledShowProcessing() {
+
+    oledShowFace(
+        "PROCESSING",
+        false,
+        false
+    );
+}
+
+
+// ============================================================
+// OLED TYPING START
+// ============================================================
+
+void oledStartTyping(
+    const String &text
+) {
+
+    if (!oledReadyFlag) {
+        return;
+    }
+
+    oledAnswer =
+        text;
+
+    oledTypedChars =
+        0;
+
+    oledLastType =
+        millis();
+
+    oledTyping =
+        true;
+}
+
+
+// ============================================================
+// OLED WRAP TEXT
+// ============================================================
+//
+// OLED 128x64.
+// Area jawaban menggunakan 6 baris × 21 karakter.
+//
+// ============================================================
+
+void oledDrawTypedText(
+    bool speaking
+) {
+
+    if (!oledReadyFlag) {
+        return;
+    }
+
+    oled.clearDisplay();
+
+
+    // --------------------------------------------------------
+    // Mata TARS
+    // --------------------------------------------------------
+
+    oledDrawEyes(
+        false,
+        speaking
+    );
+
+
+    // --------------------------------------------------------
+    // Jawaban
+    // --------------------------------------------------------
+
+    oled.setTextColor(
+        SSD1306_WHITE
+    );
+
+    oled.setTextSize(
+        1
+    );
+
+
+    String visible =
+        oledAnswer.substring(
+            0,
+            oledTypedChars
+        );
+
+
+    const int startX =
+        3;
+
+    const int startY =
+        45;
+
+    const int maxChars =
+        21;
+
+
+    int line =
+        0;
+
+    int column =
+        0;
+
+
+    for (
+        size_t i = 0;
+        i < visible.length();
+        i++
+    ) {
+
+        char c =
+            visible[i];
+
+
+        if (
+            c == '\n'
+        ) {
+
+            line++;
+            column =
+                0;
+
+            if (
+                line >= 2
+            ) {
+                break;
+            }
+
+            continue;
+        }
+
+
+        if (
+            column >= maxChars
+        ) {
+
+            line++;
+            column =
+                0;
+
+            if (
+                line >= 2
+            ) {
+                break;
+            }
+        }
+
+
+        oled.setCursor(
+            startX +
+            column * 6,
+
+            startY +
+            line * 9
+        );
+
+        oled.write(
+            c
+        );
+
+        column++;
+    }
+
+
+    oled.display();
+}
+
+
+// ============================================================
+// OLED TYPING UPDATE
+// ============================================================
+//
+// Dipanggil dari loop audio sehingga typing berjalan
+// bersamaan dengan suara TARS.
+//
+// ============================================================
+
+void oledUpdateTyping(
+    bool speaking
+) {
+
+    if (!oledReadyFlag) {
+        return;
+    }
+
+
+    if (!oledTyping) {
+        return;
+    }
+
+
+    uint32_t now =
+        millis();
+
+
+    if (
+        now -
+        oledLastType <
+        OLED_TYPE_INTERVAL
+    ) {
+        return;
+    }
+
+
+    oledLastType =
+        now;
+
+
+    // --------------------------------------------------------
+    // Satu karakter per interval.
+    // --------------------------------------------------------
+
+    if (
+        oledTypedChars <
+        oledAnswer.length()
+    ) {
+
+        oledTypedChars++;
+
+        oledDrawTypedText(
+            speaking
+        );
+
+    }
+    else {
+
+        oledTyping =
+            false;
+
+        oledDrawTypedText(
+            speaking
+        );
+    }
+}
 
 
 // ============================================================
@@ -116,45 +642,37 @@ static const uint8_t BITS_PER_SAMPLE =
 
 
 // ============================================================
-// MEMORY OPTIMIZATION
+// MEMORY
 // ============================================================
-//
-// ESP32 WROOM-32 tanpa PSRAM.
-//
-// 44100 Hz × 2 channel × 2 byte
-// = 176400 byte / detik
-//
-// 16384 byte ≈ 92 ms audio.
-//
-// Kita sengaja turunkan dari 32 KB menjadi 16 KB
-// untuk membebaskan sekitar 16 KB heap.
-//
 
 static const size_t PCM_RING_SIZE =
     16384;
 
-
-// MP3 copy buffer.
-//
-// Jangan diperbesar karena decoder + Bluetooth
-// membutuhkan heap juga.
 static const size_t MP3_COPY_BUFFER =
     1024;
 
-
-// Output processing buffer.
-//
-// 1024 byte / 8 byte per input sample
-// = 128 input samples per chunk.
-//
-// Chunk kecil membantu menekan penggunaan stack/heap.
 static const size_t PCM_OUTPUT_CHUNK =
     1024;
 
-
-// Gain.
 static const float PCM_GAIN =
     2.0f;
+
+
+// ============================================================
+// A2DP TAIL
+// ============================================================
+//
+// PCM EMPTY tidak berarti Bluetooth sudah selesai
+// mengirim audio.
+//
+// I7-TWS/A2DP masih bisa memiliki data audio internal.
+//
+// Beri waktu tambahan sebelum disconnect.
+//
+// ============================================================
+
+static const uint32_t A2DP_TAIL_MS =
+    1000;
 
 
 // ============================================================
@@ -188,7 +706,7 @@ bool ntpSynced =
 
 
 // ============================================================
-// HEAP DEBUG
+// HEAP
 // ============================================================
 
 void printHeap(
@@ -250,7 +768,9 @@ public:
 
 
         buffer =
-            (uint8_t *)malloc(size);
+            (uint8_t *)malloc(
+                size
+            );
 
 
         if (!buffer) {
@@ -567,26 +1087,6 @@ PCMRingBuffer pcmRing;
 
 // ============================================================
 // PCM OUTPUT STREAM
-//
-// INPUT
-//   22050 Hz
-//   mono
-//   16 bit
-//
-// OUTPUT
-//   44100 Hz
-//   stereo
-//   16 bit
-//
-// Setiap sample mono:
-//
-// sample
-//   ↓
-// frame L/R
-//   ↓
-// frame L/R
-//
-// sehingga 22050 → 44100.
 // ============================================================
 
 class PCMOutputStream : public AudioStream {
@@ -665,18 +1165,6 @@ public:
             pcmRing.freeSpace();
 
 
-        // ----------------------------------------------------
-        // 22050 mono 16-bit
-        //
-        // 1 input byte
-        // -> 4 output bytes
-        //
-        // 2x sample rate
-        // 2x channel count
-        //
-        // total = 4x
-        // ----------------------------------------------------
-
         if (
             currentInfo.sample_rate ==
                 INPUT_SAMPLE_RATE &&
@@ -727,14 +1215,6 @@ public:
         }
 
 
-        // ----------------------------------------------------
-        // Hanya menerima:
-        //
-        // 22050 Hz
-        // mono
-        // 16 bit
-        // ----------------------------------------------------
-
         if (
             currentInfo.sample_rate !=
                 INPUT_SAMPLE_RATE ||
@@ -775,17 +1255,6 @@ public:
                 remaining / 2;
 
 
-            // 1 sample mono
-            // ->
-            // 2 stereo frames
-            //
-            // 2 frames
-            // × 2 channels
-            // × 2 bytes
-            //
-            // = 8 bytes
-            //
-
             size_t maxSamples =
                 sizeof(outputBuffer) / 8;
 
@@ -810,13 +1279,6 @@ public:
                 samples * 8;
 
 
-            // ------------------------------------------------
-            // Tunggu A2DP mengonsumsi PCM.
-            //
-            // Jangan return 0 hanya karena ring sementara
-            // penuh.
-            // ------------------------------------------------
-
             uint32_t waitStart =
                 millis();
 
@@ -825,6 +1287,16 @@ public:
                 pcmRing.freeSpace() <
                 requiredOutput
             ) {
+
+                // ------------------------------------------------
+                // Sambil menunggu ring kosong,
+                // OLED typing tetap berjalan.
+                // ------------------------------------------------
+
+                oledUpdateTyping(
+                    true
+                );
+
 
                 if (
                     millis() -
@@ -874,7 +1346,6 @@ public:
                     );
 
 
-                // frame 1
                 outputSamples[
                     outSampleIndex++
                 ] =
@@ -886,7 +1357,6 @@ public:
                     sample;
 
 
-                // frame 2
                 outputSamples[
                     outSampleIndex++
                 ] =
@@ -935,10 +1405,6 @@ public:
 PCMOutputStream pcmOutput;
 
 
-// ============================================================
-// MP3 HELIX
-// ============================================================
-
 MP3DecoderHelix mp3Decoder;
 
 
@@ -966,7 +1432,6 @@ bool connectWiFi(
             !ntpSynced
         ) {
 
-            // Continue.
         }
         else {
 
@@ -1228,6 +1693,9 @@ String askAI(
     ) {
         return "";
     }
+
+
+    oledShowProcessing();
 
 
     Serial.println(
@@ -1762,16 +2230,6 @@ bool startBluetooth() {
     );
 
 
-    // --------------------------------------------------------
-    // MEMORY OPTIMIZATION
-    //
-    // Default:
-    // event queue = 20
-    // event stack = 3072
-    //
-    // TARS hanya memakai satu headset.
-    // --------------------------------------------------------
-
     a2dpSource.set_event_queue_size(
         8
     );
@@ -1986,10 +2444,6 @@ bool playMP3() {
     pcmRing.clear();
 
 
-    // --------------------------------------------------------
-    // Bluetooth FIRST.
-    // --------------------------------------------------------
-
     if (
         !startBluetooth()
     ) {
@@ -2005,26 +2459,10 @@ bool playMP3() {
     }
 
 
-    // --------------------------------------------------------
-    // Heap after Bluetooth.
-    // --------------------------------------------------------
-
     printHeap(
         "AFTER_BT_BEFORE_HELIX"
     );
 
-
-    // --------------------------------------------------------
-    // HELIX MEMORY
-    //
-    // DO NOT use 4608 / 4608.
-    //
-    // 4096 PCM gives sufficient room for
-    // 22050 mono decoded blocks.
-    //
-    // 2048 frame is enough for normal MP3
-    // frame sizes and saves heap.
-    // --------------------------------------------------------
 
     mp3Decoder.setMaxPCMSize(
         4096
@@ -2050,10 +2488,6 @@ bool playMP3() {
         "BEFORE_HELIX_BEGIN"
     );
 
-
-    // --------------------------------------------------------
-    // Decoder start.
-    // --------------------------------------------------------
 
     if (
         !mp3Stream.begin()
@@ -2088,34 +2522,12 @@ bool playMP3() {
     );
 
 
-    // --------------------------------------------------------
-    // StreamCopy
-    //
-    // IMPORTANT:
-    //
-    // Source benar-benar mp3File.
-    //
-    // Jangan gunakan:
-    //
-    // StreamCopy mp3Copier(mp3Stream, 1024);
-    //
-    // karena itu tidak memasang source file.
-    // --------------------------------------------------------
-
     StreamCopy mp3Copier(
         mp3Stream,
         mp3File,
         MP3_COPY_BUFFER
     );
 
-
-    // --------------------------------------------------------
-    // Jangan biarkan StreamCopy membatasi write
-    // berdasarkan availableForWrite() dari encoded stream.
-    //
-    // PCMOutputStream sendiri sudah mempunyai mekanisme
-    // back-pressure dan menunggu ring mempunyai ruang.
-    // --------------------------------------------------------
 
     mp3Copier.setCheckAvailableForWrite(
         false
@@ -2144,6 +2556,16 @@ bool playMP3() {
 
 
     // --------------------------------------------------------
+    // Audio mulai.
+    // OLED typing dimulai bersamaan dengan playback.
+    // --------------------------------------------------------
+
+    oledDrawTypedText(
+        true
+    );
+
+
+    // --------------------------------------------------------
     // Decode loop
     // --------------------------------------------------------
 
@@ -2152,6 +2574,15 @@ bool playMP3() {
         playStart <
         PLAY_TIMEOUT_MS
     ) {
+
+        // ----------------------------------------------------
+        // OLED typing berjalan bersamaan dengan audio.
+        // ----------------------------------------------------
+
+        oledUpdateTyping(
+            true
+        );
+
 
         size_t position =
             mp3File.position();
@@ -2207,10 +2638,6 @@ bool playMP3() {
         }
 
 
-        // ----------------------------------------------------
-        // Bluetooth harus tetap hidup.
-        // ----------------------------------------------------
-
         if (
             !btConnected
         ) {
@@ -2223,10 +2650,6 @@ bool playMP3() {
             break;
         }
 
-
-        // ----------------------------------------------------
-        // EOF.
-        // ----------------------------------------------------
 
         if (
             position >=
@@ -2245,12 +2668,6 @@ bool playMP3() {
             break;
         }
 
-
-        // ----------------------------------------------------
-        // Ring hampir penuh.
-        //
-        // Beri waktu A2DP untuk mengambil data.
-        // ----------------------------------------------------
 
         if (
             freePCM <
@@ -2283,7 +2700,7 @@ bool playMP3() {
 
 
     // --------------------------------------------------------
-    // Stop decoder stream.
+    // Stop decoder.
     // --------------------------------------------------------
 
     mp3Stream.end();
@@ -2294,8 +2711,6 @@ bool playMP3() {
 
     // --------------------------------------------------------
     // PCM DRAIN
-    //
-    // Jangan langsung matikan Bluetooth.
     // --------------------------------------------------------
 
     Serial.println(
@@ -2314,6 +2729,11 @@ bool playMP3() {
         drainStart <
         10000
     ) {
+
+        oledUpdateTyping(
+            true
+        );
+
 
         delay(10);
     }
@@ -2336,11 +2756,82 @@ bool playMP3() {
     }
 
 
+    // --------------------------------------------------------
+    // A2DP FINAL TAIL
+    //
+    // INI YANG MEMPERBAIKI SUARA TERPOTONG.
+    //
+    // Jangan disconnect tepat saat PCM ring kosong.
+    //
+    // Tunggu A2DP menghabiskan data internalnya.
+    // --------------------------------------------------------
+
+    Serial.printf(
+        "TARS: A2DP TAIL %ums\n",
+        (unsigned)A2DP_TAIL_MS
+    );
+
+
+    uint32_t tailStart =
+        millis();
+
+
+    uint32_t lastCallback =
+        btCallbackCalls;
+
+
+    while (
+        millis() -
+        tailStart <
+        A2DP_TAIL_MS
+    ) {
+
+        oledUpdateTyping(
+            true
+        );
+
+
+        delay(10);
+
+
+        // ----------------------------------------------------
+        // Pastikan Bluetooth masih hidup.
+        // ----------------------------------------------------
+
+        if (
+            !btConnected
+        ) {
+            break;
+        }
+
+
+        // ----------------------------------------------------
+        // Reset timer jika callback masih aktif.
+        //
+        // Ini mencegah kita memutus terlalu cepat ketika
+        // callback A2DP masih benar-benar berjalan.
+        // ----------------------------------------------------
+
+        if (
+            btCallbackCalls !=
+            lastCallback
+        ) {
+
+            lastCallback =
+                btCallbackCalls;
+        }
+    }
+
+
     Serial.printf(
         "TARS: A2DP callbacks final = %u\n",
         (unsigned)btCallbackCalls
     );
 
+
+    // --------------------------------------------------------
+    // Baru sekarang Bluetooth dimatikan.
+    // --------------------------------------------------------
 
     stopBluetooth();
 
@@ -2358,8 +2849,30 @@ bool playMP3() {
         );
 
 
+        oledShowReady();
+
+
         return false;
     }
+
+
+    // --------------------------------------------------------
+    // Pastikan seluruh teks sudah selesai.
+    // --------------------------------------------------------
+
+    while (
+        oledTyping
+    ) {
+
+        oledUpdateTyping(
+            false
+        );
+
+        delay(5);
+    }
+
+
+    oledShowReady();
 
 
     Serial.println(
@@ -2404,7 +2917,14 @@ void handleQuestion(
 
 
     // --------------------------------------------------------
-    // WiFi ON
+    // OLED LISTENING
+    // --------------------------------------------------------
+
+    oledShowListening();
+
+
+    // --------------------------------------------------------
+    // WiFi
     // --------------------------------------------------------
 
     if (
@@ -2414,6 +2934,9 @@ void handleQuestion(
         Serial.println(
             "TARS: WIFI ERROR"
         );
+
+
+        oledShowReady();
 
 
         return;
@@ -2439,8 +2962,23 @@ void handleQuestion(
         );
 
 
+        oledShowReady();
+
+
         return;
     }
+
+
+    // --------------------------------------------------------
+    // Siapkan teks untuk typing.
+    //
+    // Belum ditampilkan penuh.
+    // Akan berjalan ketika audio dimulai.
+    // --------------------------------------------------------
+
+    oledStartTyping(
+        answer
+    );
 
 
     // --------------------------------------------------------
@@ -2456,6 +2994,9 @@ void handleQuestion(
         Serial.println(
             "TARS: TTS FAILED"
         );
+
+
+        oledShowReady();
 
 
         return;
@@ -2478,8 +3019,6 @@ void handleQuestion(
 
     // --------------------------------------------------------
     // WiFi ON kembali.
-    //
-    // NTP hanya dilakukan jika waktu benar-benar hilang.
     // --------------------------------------------------------
 
     if (
@@ -2500,6 +3039,9 @@ void handleQuestion(
     }
 
 
+    oledShowReady();
+
+
     Serial.println();
 
     Serial.println(
@@ -2513,48 +3055,6 @@ void handleQuestion(
     Serial.println(
         "================================"
     );
-}
-
-
-// ============================================================
-// OLED BASIC
-// ============================================================
-
-void oledReady() {
-
-    oled.clearDisplay();
-
-
-    oled.setTextColor(
-        SSD1306_WHITE
-    );
-
-
-    oled.setTextSize(
-        1
-    );
-
-
-    oled.setCursor(
-        0,
-        0
-    );
-
-
-    oled.println(
-        "TARS ONLINE"
-    );
-
-
-    oled.println();
-
-
-    oled.println(
-        "Menunggu pertanyaan..."
-    );
-
-
-    oled.display();
 }
 
 
@@ -2609,7 +3109,15 @@ void setup() {
         )
     ) {
 
-        oledReady();
+        oledReadyFlag =
+            true;
+
+
+        oledShowFace(
+            "ONLINE",
+            false,
+            false
+        );
     }
 
 
@@ -2717,6 +3225,9 @@ void setup() {
     printHeap(
         "READY"
     );
+
+
+    oledShowReady();
 
 
     Serial.println(
