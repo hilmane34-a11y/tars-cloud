@@ -24,8 +24,6 @@ static const char *TARS_ASK_URL =
 static const char *TARS_TTS_URL =
     "https://tars-cloud-v1.hilmane34.workers.dev/tts";
 
-// MP3_FILE sengaja TIDAK didefinisikan di sini.
-// Kalau config.h nanti memiliki MP3_FILE, tidak akan bentrok.
 #ifndef MP3_FILE
 #define MP3_FILE "/tars.mp3"
 #endif
@@ -38,12 +36,11 @@ static const uint32_t WIFI_TIMEOUT_MS = 15000;
 static const uint32_t BT_TIMEOUT_MS   = 20000;
 static const uint32_t PLAY_TIMEOUT_MS = 120000;
 
+static const uint32_t OLED_REFRESH_MS = 80;
+static const uint32_t TEXT_SPEED_MS   = 35;
+
 // ============================================================
 // PCM BUFFER
-//
-// 16384 bytes ~= 93 ms PCM @ 44.1 kHz stereo 16-bit.
-// Dibuat cukup besar untuk mencegah A2DP underrun,
-// tetapi tidak terlalu besar agar RAM ESP32 tetap aman.
 // ============================================================
 
 static const size_t PCM_BUFFER_SIZE = 16384;
@@ -56,14 +53,6 @@ static volatile size_t pcmUsed     = 0;
 
 static portMUX_TYPE pcmMux =
     portMUX_INITIALIZER_UNLOCKED;
-
-// ============================================================
-// STATE
-// ============================================================
-
-static bool audioDecoderReady = false;
-static bool mp3InputFinished  = false;
-static bool playbackRunning   = false;
 
 // ============================================================
 // OBJECTS
@@ -83,10 +72,56 @@ File mp3File;
 MP3DecoderHelix mp3Decoder;
 
 // ============================================================
-// CUSTOM AUDIO OUTPUT
-//
-// MP3DecoderHelix -> EncodedAudioStream -> PCMOutputStream
-// -> PCM ring buffer -> A2DP callback
+// SYSTEM STATE
+// ============================================================
+
+enum TarsState
+{
+    TARS_BOOT,
+    TARS_WAITING,
+    TARS_THINKING,
+    TARS_PREPARING_AUDIO,
+    TARS_SPEAKING,
+    TARS_ERROR
+};
+
+static volatile TarsState tarsState =
+    TARS_BOOT;
+
+static volatile bool wifiIsOn = false;
+static volatile bool btIsOn   = false;
+static volatile bool workerBusy = false;
+
+// ============================================================
+// SPEAKING TEXT
+// Hanya worker yang menulis.
+// loop() hanya membaca untuk OLED.
+// ============================================================
+
+static String speechText;
+
+static volatile size_t speechVisibleChars = 0;
+static volatile uint32_t speechLastUpdate = 0;
+
+static uint32_t oledLastRefresh = 0;
+static uint32_t panelAnimation = 0;
+
+// ============================================================
+// SERIAL INPUT
+// ============================================================
+
+static String serialInput;
+
+// ============================================================
+// AUDIO STATE
+// ============================================================
+
+static bool audioDecoderReady = false;
+static bool mp3InputFinished  = false;
+static bool playbackRunning   = false;
+
+// ============================================================
+// PCM OUTPUT STREAM
 // ============================================================
 
 class PCMOutputStream : public AudioStream
@@ -145,11 +180,6 @@ public:
             {
                 portEXIT_CRITICAL(&pcmMux);
 
-                /*
-                 * Jangan blocking terlalu lama.
-                 * A2DP callback harus tetap bisa
-                 * mengosongkan buffer.
-                 */
                 delay(1);
                 continue;
             }
@@ -267,40 +297,424 @@ StreamCopy mp3Copier(
 );
 
 // ============================================================
-// OLED
+// OLED LOW LEVEL
 // ============================================================
 
-void oledText(
-    const String &text
+static void drawPanelFrame()
+{
+    oled.drawRect(
+        0,
+        0,
+        128,
+        64,
+        SSD1306_WHITE
+    );
+
+    oled.drawLine(
+        0,
+        11,
+        127,
+        11,
+        SSD1306_WHITE
+    );
+
+    oled.drawLine(
+        0,
+        53,
+        127,
+        53,
+        SSD1306_WHITE
+    );
+}
+
+// ============================================================
+// OLED STATUS HEADER
+// ============================================================
+
+static void drawHeader(
+    const char *status
 )
 {
-    oled.clearDisplay();
-
     oled.setTextSize(1);
     oled.setTextColor(SSD1306_WHITE);
-    oled.setCursor(0, 0);
 
-    int lineLength = 0;
+    oled.setCursor(4, 2);
+    oled.print("TARS");
 
-    for (size_t i = 0; i < text.length(); i++)
+    oled.setCursor(76, 2);
+    oled.print(status);
+}
+
+// ============================================================
+// OLED CONNECTION STATUS
+// ============================================================
+
+static void drawConnectionStatus()
+{
+    oled.setTextSize(1);
+    oled.setTextColor(SSD1306_WHITE);
+
+    oled.setCursor(4, 56);
+
+    oled.print("W:");
+
+    oled.print(
+        wifiIsOn ? "ON" : "OFF"
+    );
+
+    oled.setCursor(68, 56);
+
+    oled.print("BT:");
+
+    oled.print(
+        btIsOn ? "ON" : "OFF"
+    );
+}
+
+// ============================================================
+// OLED WAITING PANEL
+// ============================================================
+
+static void drawWaitingPanel()
+{
+    drawPanelFrame();
+
+    drawHeader("READY");
+
+    oled.setTextSize(1);
+
+    oled.setCursor(6, 18);
+    oled.print("SYSTEM READY");
+
+    oled.setCursor(6, 29);
+    oled.print("AWAITING COMMAND");
+
+    // indikator mekanis
+    int offset =
+        (panelAnimation / 2) % 10;
+
+    oled.drawRect(
+        6,
+        41,
+        116,
+        6,
+        SSD1306_WHITE
+    );
+
+    for (int i = 0; i < 10; i++)
     {
-        char c = text[i];
-
-        if (c == '\n')
-        {
-            oled.println();
-            lineLength = 0;
+        if (i == offset)
             continue;
-        }
 
-        oled.print(c);
+        oled.fillRect(
+            9 + i * 11,
+            43,
+            7,
+            2,
+            SSD1306_WHITE
+        );
+    }
 
-        lineLength++;
+    drawConnectionStatus();
+}
 
-        if (lineLength >= 21)
+// ============================================================
+// OLED THINKING PANEL
+// ============================================================
+
+static void drawThinkingPanel()
+{
+    drawPanelFrame();
+
+    drawHeader("THINK");
+
+    oled.setTextSize(1);
+
+    oled.setCursor(6, 18);
+    oled.print("PROCESSING");
+
+    oled.setCursor(6, 29);
+    oled.print("ANALYZING INPUT");
+
+    int active =
+        (panelAnimation / 3) % 12;
+
+    for (int i = 0; i < 12; i++)
+    {
+        int x =
+            6 + i * 10;
+
+        if (i <= active)
         {
-            oled.println();
-            lineLength = 0;
+            oled.fillRect(
+                x,
+                42,
+                7,
+                5,
+                SSD1306_WHITE
+            );
+        }
+        else
+        {
+            oled.drawRect(
+                x,
+                42,
+                7,
+                5,
+                SSD1306_WHITE
+            );
+        }
+    }
+
+    drawConnectionStatus();
+}
+
+// ============================================================
+// OLED PREPARING AUDIO
+// ============================================================
+
+static void drawPreparingPanel()
+{
+    drawPanelFrame();
+
+    drawHeader("AUDIO");
+
+    oled.setTextSize(1);
+
+    oled.setCursor(6, 18);
+    oled.print("PREPARING VOICE");
+
+    oled.setCursor(6, 29);
+    oled.print("LOADING MP3");
+
+    int active =
+        (panelAnimation / 2) % 12;
+
+    for (int i = 0; i < 12; i++)
+    {
+        int x =
+            6 + i * 10;
+
+        if (i == active)
+        {
+            oled.fillRect(
+                x,
+                42,
+                7,
+                5,
+                SSD1306_WHITE
+            );
+        }
+        else
+        {
+            oled.drawRect(
+                x,
+                42,
+                7,
+                5,
+                SSD1306_WHITE
+            );
+        }
+    }
+
+    drawConnectionStatus();
+}
+
+// ============================================================
+// OLED SPEAKING TEXT
+// ============================================================
+
+static void drawSpeakingPanel()
+{
+    drawPanelFrame();
+
+    drawHeader("SPEAK");
+
+    oled.setTextSize(1);
+
+    const size_t visible =
+        speechVisibleChars;
+
+    const size_t length =
+        speechText.length();
+
+    size_t charsPerLine = 20;
+    size_t maxLines = 4;
+
+    size_t startIndex = 0;
+
+    /*
+     * Tampilkan bagian teks terbaru
+     * agar layar tidak berhenti pada
+     * awal jawaban ketika jawabannya panjang.
+     */
+    if (visible > charsPerLine * maxLines)
+    {
+        startIndex =
+            visible -
+            charsPerLine * maxLines;
+    }
+
+    size_t pos =
+        startIndex;
+
+    for (
+        size_t line = 0;
+        line < maxLines;
+        line++
+    )
+    {
+        oled.setCursor(
+            4,
+            15 + line * 9
+        );
+
+        size_t count = 0;
+
+        while (
+            pos < visible &&
+            pos < length &&
+            count < charsPerLine
+        )
+        {
+            char c =
+                speechText[pos];
+
+            if (c == '\n')
+            {
+                pos++;
+                break;
+            }
+
+            oled.print(c);
+
+            pos++;
+            count++;
+        }
+    }
+
+    // Audio indicator
+    int wave =
+        (panelAnimation / 2) % 10;
+
+    for (int i = 0; i < 10; i++)
+    {
+        int h =
+            2 + ((i + wave) % 5);
+
+        oled.fillRect(
+            6 + i * 11,
+            50 - h,
+            7,
+            h,
+            SSD1306_WHITE
+        );
+    }
+
+    drawConnectionStatus();
+}
+
+// ============================================================
+// OLED ERROR
+// ============================================================
+
+static void drawErrorPanel()
+{
+    drawPanelFrame();
+
+    drawHeader("ERROR");
+
+    oled.setTextSize(1);
+
+    oled.setCursor(6, 20);
+    oled.print("SYSTEM ERROR");
+
+    oled.setCursor(6, 32);
+    oled.print("CHECK CONNECTION");
+
+    oled.drawRect(
+        6,
+        43,
+        116,
+        5,
+        SSD1306_WHITE
+    );
+
+    drawConnectionStatus();
+}
+
+// ============================================================
+// OLED RENDER
+//
+// Hanya dipanggil dari loop utama.
+// Jadi worker task tidak menyentuh OLED.
+// ============================================================
+
+static void updateOLED()
+{
+    uint32_t now =
+        millis();
+
+    if (
+        now - oledLastRefresh <
+        OLED_REFRESH_MS
+    )
+    {
+        return;
+    }
+
+    oledLastRefresh =
+        now;
+
+    panelAnimation++;
+
+    oled.clearDisplay();
+
+    switch (tarsState)
+    {
+        case TARS_WAITING:
+            drawWaitingPanel();
+            break;
+
+        case TARS_THINKING:
+            drawThinkingPanel();
+            break;
+
+        case TARS_PREPARING_AUDIO:
+            drawPreparingPanel();
+            break;
+
+        case TARS_SPEAKING:
+            drawSpeakingPanel();
+            break;
+
+        case TARS_ERROR:
+            drawErrorPanel();
+            break;
+
+        default:
+            drawWaitingPanel();
+            break;
+    }
+
+    /*
+     * Typing non-blocking.
+     */
+    if (
+        tarsState == TARS_SPEAKING &&
+        speechVisibleChars <
+        speechText.length()
+    )
+    {
+        if (
+            now - speechLastUpdate >=
+            TEXT_SPEED_MS
+        )
+        {
+            speechLastUpdate =
+                now;
+
+            speechVisibleChars++;
         }
     }
 
@@ -308,63 +722,22 @@ void oledText(
 }
 
 // ============================================================
-// OLED TYPING
-// ============================================================
-
-void oledTyping(
-    const String &text
-)
-{
-    oled.clearDisplay();
-
-    oled.setTextSize(1);
-    oled.setTextColor(SSD1306_WHITE);
-    oled.setCursor(0, 0);
-
-    int lineLength = 0;
-
-    for (size_t i = 0; i < text.length(); i++)
-    {
-        char c = text[i];
-
-        if (c == '\n')
-        {
-            oled.println();
-            lineLength = 0;
-        }
-        else
-        {
-            oled.print(c);
-            lineLength++;
-
-            if (lineLength >= 21)
-            {
-                oled.println();
-                lineLength = 0;
-            }
-        }
-
-        oled.display();
-
-        delay(25);
-    }
-}
-
-// ============================================================
 // WIFI CONNECT
+//
+// Worker task boleh blocking di sini.
+// loop utama tetap jalan.
 // ============================================================
 
 bool connectWiFi()
 {
     if (WiFi.status() == WL_CONNECTED)
+    {
+        wifiIsOn = true;
         return true;
+    }
 
     Serial.println();
     Serial.println("TARS: WiFi ON");
-
-    oledText(
-        "TARS\nWiFi connecting..."
-    );
 
     WiFi.mode(WIFI_STA);
 
@@ -387,17 +760,17 @@ bool connectWiFi()
             WIFI_TIMEOUT_MS
         )
         {
+            wifiIsOn = false;
+
             Serial.println(
                 "TARS: WiFi timeout"
-            );
-
-            oledText(
-                "TARS\nWiFi gagal"
             );
 
             return false;
         }
     }
+
+    wifiIsOn = true;
 
     Serial.print(
         "TARS: IP = "
@@ -420,13 +793,11 @@ void wifiOff()
         "TARS: WiFi OFF"
     );
 
-    WiFi.disconnect(
-        true
-    );
+    WiFi.disconnect(true);
 
-    WiFi.mode(
-        WIFI_OFF
-    );
+    WiFi.mode(WIFI_OFF);
+
+    wifiIsOn = false;
 
     delay(100);
 }
@@ -445,13 +816,6 @@ bool askTars(
 
     WiFiClientSecure client;
 
-    /*
-     * Cloudflare certificate verification
-     * pada MicroPython sebelumnya bermasalah.
-     *
-     * Untuk ESP32 Arduino kita bypass verifikasi
-     * certificate sehingga HTTPS tetap dapat digunakan.
-     */
     client.setInsecure();
 
     HTTPClient http;
@@ -617,7 +981,6 @@ bool downloadTTS(
     )
     {
         output.close();
-
         return false;
     }
 
@@ -762,9 +1125,7 @@ bool downloadTTS(
         "TARS: MP3 bytes = "
     );
 
-    Serial.println(
-        total
-    );
+    Serial.println(total);
 
     if (total < 512)
     {
@@ -783,11 +1144,15 @@ bool downloadTTS(
 }
 
 // ============================================================
-// A2DP PCM CALLBACK
+// A2DP CALLBACK
 //
-// Callback ini dipanggil oleh BluetoothA2DPSource.
-// Jangan melakukan decoding MP3 atau WiFi di sini.
-// Hanya ambil PCM dari ring buffer.
+// TIDAK melakukan:
+// - WiFi
+// - HTTP
+// - MP3 decode
+// - Serial print
+//
+// Hanya mengambil PCM.
 // ============================================================
 
 int32_t getAudioData(
@@ -795,12 +1160,8 @@ int32_t getAudioData(
     int32_t len
 )
 {
-    if (
-        len <= 0
-    )
-    {
+    if (len <= 0)
         return 0;
-    }
 
     size_t wanted =
         (size_t)len;
@@ -835,10 +1196,6 @@ bool startBluetooth()
         "TARS: Bluetooth START"
     );
 
-    oledText(
-        "TARS\nBluetooth ON\nMencari I7-TWS..."
-    );
-
     a2dpSource.set_auto_reconnect(
         false
     );
@@ -870,16 +1227,16 @@ bool startBluetooth()
                 "TARS: Bluetooth timeout"
             );
 
+            btIsOn = false;
+
             return false;
         }
     }
 
+    btIsOn = true;
+
     Serial.println(
         "TARS: I7-TWS CONNECTED"
-    );
-
-    oledText(
-        "TARS\nI7-TWS CONNECTED"
     );
 
     return true;
@@ -895,11 +1252,11 @@ void stopBluetooth()
         "TARS: Bluetooth STOP"
     );
 
-    a2dpSource.end(
-        true
-    );
+    a2dpSource.end(true);
 
     delay(300);
+
+    btIsOn = false;
 
     Serial.println(
         "TARS: Bluetooth OFF"
@@ -907,7 +1264,7 @@ void stopBluetooth()
 }
 
 // ============================================================
-// START MP3 DECODER
+// START DECODER
 // ============================================================
 
 bool startDecoder()
@@ -938,10 +1295,6 @@ bool startDecoder()
     audioDecoderReady =
         false;
 
-    /*
-     * Decoder akan meneruskan hasil PCM
-     * ke PCMOutputStream.
-     */
     if (
         !decoder.begin()
     )
@@ -1010,9 +1363,14 @@ bool playMP3()
     mp3InputFinished =
         false;
 
-    oledText(
-        "TARS\nBerbicara..."
-    );
+    tarsState =
+        TARS_SPEAKING;
+
+    speechVisibleChars =
+        0;
+
+    speechLastUpdate =
+        millis();
 
     Serial.println(
         "TARS: PLAY START"
@@ -1021,18 +1379,10 @@ bool playMP3()
     uint32_t start =
         millis();
 
-    /*
-     * Decoder berjalan di loop utama.
-     * A2DP callback mengambil PCM dari ring buffer
-     * secara paralel.
-     */
     while (
         playbackRunning
     )
     {
-        /*
-         * Beri decoder data MP3.
-         */
         if (!mp3InputFinished)
         {
             size_t copied =
@@ -1049,21 +1399,11 @@ bool playMP3()
             }
         }
 
-        /*
-         * Setelah input MP3 habis,
-         * tunggu PCM terakhir benar-benar
-         * keluar dari ring buffer.
-         */
         if (
             mp3InputFinished &&
             pcmOutput.availablePCM() == 0
         )
         {
-            /*
-             * Beri waktu kecil supaya
-             * paket PCM terakhir masuk
-             * ke A2DP stack.
-             */
             delay(250);
 
             if (
@@ -1075,9 +1415,6 @@ bool playMP3()
             }
         }
 
-        /*
-         * Bluetooth terputus.
-         */
         if (
             a2dpSource.get_connection_state() !=
             ESP_A2D_CONNECTION_STATE_CONNECTED
@@ -1091,9 +1428,6 @@ bool playMP3()
                 false;
         }
 
-        /*
-         * Safety timeout.
-         */
         if (
             millis() - start >
             PLAY_TIMEOUT_MS
@@ -1107,12 +1441,15 @@ bool playMP3()
                 false;
         }
 
+        /*
+         * Sangat penting:
+         * worker task tidak menguasai CPU terus.
+         * loop utama tetap berjalan untuk OLED
+         * dan Serial.
+         */
         delay(1);
     }
 
-    /*
-     * Pastikan buffer PCM kosong.
-     */
     delay(100);
 
     stopDecoder();
@@ -1128,6 +1465,9 @@ bool playMP3()
 
 // ============================================================
 // PROCESS QUESTION
+//
+// Berjalan di FreeRTOS worker task,
+// bukan di loop utama.
 // ============================================================
 
 void processQuestion(
@@ -1153,9 +1493,8 @@ void processQuestion(
         "================================"
     );
 
-    oledText(
-        "TARS\nBerpikir..."
-    );
+    tarsState =
+        TARS_THINKING;
 
     // --------------------------------------------------------
     // ASK AI
@@ -1170,30 +1509,39 @@ void processQuestion(
         )
     )
     {
-        oledText(
-            "TARS\nCloud gagal"
+        Serial.println(
+            "TARS: ASK FAILED"
         );
 
+        tarsState =
+            TARS_ERROR;
+
         connectWiFi();
+
+        delay(1500);
+
+        tarsState =
+            TARS_WAITING;
 
         return;
     }
 
     // --------------------------------------------------------
-    // SHOW ANSWER
+    // SIMPAN TEXT UNTUK OLED
     // --------------------------------------------------------
 
-    oledTyping(
-        answer
-    );
+    speechText =
+        answer;
+
+    speechVisibleChars =
+        0;
 
     // --------------------------------------------------------
     // TTS
     // --------------------------------------------------------
 
-    oledText(
-        "TARS\nMenyiapkan suara..."
-    );
+    tarsState =
+        TARS_PREPARING_AUDIO;
 
     if (
         !downloadTTS(
@@ -1205,9 +1553,15 @@ void processQuestion(
             "TARS: TTS FAILED"
         );
 
-        oledText(
-            "TARS\nTTS gagal"
-        );
+        tarsState =
+            TARS_ERROR;
+
+        delay(1500);
+
+        connectWiFi();
+
+        tarsState =
+            TARS_WAITING;
 
         return;
     }
@@ -1219,10 +1573,20 @@ void processQuestion(
     wifiOff();
 
     // --------------------------------------------------------
-    // MP3 -> PCM -> A2DP
+    // PLAY MP3
     // --------------------------------------------------------
 
-    playMP3();
+    if (!playMP3())
+    {
+        Serial.println(
+            "TARS: PLAY FAILED"
+        );
+
+        tarsState =
+            TARS_ERROR;
+
+        delay(1500);
+    }
 
     // --------------------------------------------------------
     // DELETE MP3
@@ -1245,9 +1609,11 @@ void processQuestion(
 
     connectWiFi();
 
-    oledText(
-        "TARS\nSiap menunggu..."
-    );
+    speechVisibleChars =
+        speechText.length();
+
+    tarsState =
+        TARS_WAITING;
 
     Serial.println();
     Serial.println(
@@ -1259,10 +1625,72 @@ void processQuestion(
 }
 
 // ============================================================
-// SERIAL
+// FREE RTOS WORKER
 // ============================================================
 
-String serialInput;
+static void tarsWorkerTask(
+    void *parameter
+)
+{
+    String question;
+
+    while (true)
+    {
+        /*
+         * Worker hanya aktif ketika
+         * ada pertanyaan baru.
+         */
+        if (
+            workerBusy
+        )
+        {
+            vTaskDelay(
+                pdMS_TO_TICKS(20)
+            );
+
+            continue;
+        }
+
+        /*
+         * Ambil pertanyaan dari
+         * serial queue sederhana.
+         */
+        if (
+            serialInput.length() > 0
+        )
+        {
+            question =
+                serialInput;
+
+            serialInput =
+                "";
+
+            workerBusy =
+                true;
+
+            processQuestion(
+                question
+            );
+
+            workerBusy =
+                false;
+
+            question =
+                "";
+        }
+
+        vTaskDelay(
+            pdMS_TO_TICKS(10)
+        );
+    }
+}
+
+// ============================================================
+// SERIAL
+//
+// loop utama hanya membaca karakter.
+// Tidak pernah menjalankan HTTP/TTS/A2DP.
+// ============================================================
 
 void handleSerial()
 {
@@ -1279,19 +1707,34 @@ void handleSerial()
         if (c == '\n')
         {
             if (
-                serialInput.length() > 0
+                serialInput.length() == 0
             )
             {
-                String question =
-                    serialInput;
-
-                serialInput = "";
-
-                processQuestion(
-                    question
-                );
+                continue;
             }
 
+            if (workerBusy)
+            {
+                Serial.println();
+                Serial.println(
+                    "TARS: masih memproses."
+                );
+                Serial.println(
+                    "Tunggu sampai TARS READY."
+                );
+
+                serialInput =
+                    "";
+
+                continue;
+            }
+
+            /*
+             * serialInput sudah berisi
+             * pertanyaan.
+             *
+             * Worker task akan mengambilnya.
+             */
             continue;
         }
 
@@ -1349,9 +1792,48 @@ void setup()
     }
     else
     {
-        oledText(
-            "TARS\nBooting..."
+        oled.clearDisplay();
+        oled.display();
+
+        tarsState =
+            TARS_BOOT;
+
+        oled.clearDisplay();
+
+        oled.drawRect(
+            0,
+            0,
+            128,
+            64,
+            SSD1306_WHITE
         );
+
+        oled.setTextSize(1);
+        oled.setTextColor(
+            SSD1306_WHITE
+        );
+
+        oled.setCursor(
+            32,
+            22
+        );
+
+        oled.print(
+            "T A R S"
+        );
+
+        oled.setCursor(
+            43,
+            34
+        );
+
+        oled.print(
+            "BOOT"
+        );
+
+        oled.display();
+
+        delay(500);
     }
 
     // --------------------------------------------------------
@@ -1359,22 +1841,21 @@ void setup()
     // --------------------------------------------------------
 
     if (
-        !LittleFS.begin(
-            true
-        )
+        !LittleFS.begin(true)
     )
     {
         Serial.println(
             "LittleFS ERROR"
         );
 
-        oledText(
-            "TARS\nLittleFS ERROR"
-        );
+        tarsState =
+            TARS_ERROR;
 
         while (true)
         {
-            delay(1000);
+            updateOLED();
+
+            delay(100);
         }
     }
 
@@ -1383,7 +1864,7 @@ void setup()
     );
 
     // --------------------------------------------------------
-    // PCM OUTPUT
+    // PCM
     // --------------------------------------------------------
 
     pcmOutput.begin();
@@ -1402,12 +1883,25 @@ void setup()
     }
 
     // --------------------------------------------------------
+    // START WORKER TASK
+    // --------------------------------------------------------
+
+    xTaskCreatePinnedToCore(
+        tarsWorkerTask,
+        "TARS_Worker",
+        8192,
+        nullptr,
+        1,
+        nullptr,
+        0
+    );
+
+    // --------------------------------------------------------
     // READY
     // --------------------------------------------------------
 
-    oledText(
-        "TARS\nSiap menunggu..."
-    );
+    tarsState =
+        TARS_WAITING;
 
     Serial.println();
     Serial.println(
@@ -1426,11 +1920,24 @@ void setup()
 
 // ============================================================
 // LOOP
+//
+// LOOP SEKARANG RINGAN.
+//
+// Tidak ada:
+// - HTTP
+// - WiFi connect blocking
+// - TTS
+// - MP3 decoding
+// - A2DP start
+//
+// Jadi OLED dan Serial tetap responsif.
 // ============================================================
 
 void loop()
 {
     handleSerial();
 
-    delay(5);
+    updateOLED();
+
+    delay(2);
 }
