@@ -43,7 +43,7 @@ static const uint32_t TEXT_SPEED_MS = 35;
 static const size_t TTS_MAX_CHARS = 450;
 
 // ============================================================
-// AUDIO
+// AUDIO VOLUME
 // ============================================================
 
 static const int32_t PCM_GAIN = 2;
@@ -66,12 +66,14 @@ static inline int16_t boostPCM(int16_t sample)
 // ============================================================
 
 static bool ntpSynced = false;
+
 static const time_t VALID_EPOCH = 1704067200;
 
 static bool isTimeValid()
 {
     time_t now;
     time(&now);
+
     return now >= VALID_EPOCH;
 }
 
@@ -93,10 +95,9 @@ static bool syncNTPOnce()
 
     for (int attempt = 1; attempt <= 4; attempt++)
     {
-        Serial.printf(
-            "TARS: NTP attempt %d/4\n",
-            attempt
-        );
+        Serial.print("TARS: NTP attempt ");
+        Serial.print(attempt);
+        Serial.println("/4");
 
         delay(1000);
 
@@ -112,7 +113,7 @@ static bool syncNTPOnce()
                 "TARS: NTP OK %04d-%02d-%02d %02d:%02d:%02d\n",
                 info.tm_year + 1900,
                 info.tm_mon + 1,
-                info.tm_mday + 0,
+                info.tm_mday,
                 info.tm_hour,
                 info.tm_min,
                 info.tm_sec
@@ -124,6 +125,7 @@ static bool syncNTPOnce()
     }
 
     Serial.println("TARS: NTP FAILED");
+
     return false;
 }
 
@@ -131,13 +133,12 @@ static bool syncNTPOnce()
 // PCM BUFFER
 // ============================================================
 
-// Output akhir selalu:
-// 44100 Hz
-// stereo
-// 16-bit
+// 32 KB circular PCM buffer.
+// Lebih aman untuk output 22050 mono -> 44100 stereo.
+static const size_t PCM_BUFFER_SIZE = 32768;
 
-static const size_t PCM_BUFFER_SIZE = 16384;
-static const size_t PCM_PRIME_BYTES = 8192;
+// Prime cukup besar tetapi tidak memenuhi seluruh buffer.
+static const size_t PCM_PRIME_BYTES = 16384;
 
 static uint8_t pcmBuffer[PCM_BUFFER_SIZE];
 
@@ -207,8 +208,8 @@ static size_t serialLineLength = 0;
 static String speechText;
 
 static volatile size_t speechVisibleChars = 0;
-
 static uint32_t speechLastUpdate = 0;
+
 static uint32_t oledLastRefresh = 0;
 static uint32_t panelAnimation = 0;
 
@@ -221,7 +222,7 @@ static bool mp3InputFinished = false;
 static bool playbackRunning = false;
 
 // ============================================================
-// PCM OUTPUT STREAM
+// PCM OUTPUT
 // ============================================================
 
 class PCMOutputStream : public AudioStream
@@ -245,13 +246,21 @@ public:
 
         sourceInfo = info;
 
-        Serial.printf(
-            "PCM format: %lu Hz, %d ch, %d bit\n",
-            (unsigned long)info.sample_rate,
-            info.channels,
-            info.bits_per_sample
-        );
+        Serial.print("PCM format: ");
+        Serial.print(info.sample_rate);
+        Serial.print(" Hz, ");
+        Serial.print(info.channels);
+        Serial.print(" ch, ");
+        Serial.print(info.bits_per_sample);
+        Serial.println(" bit");
     }
+
+    // --------------------------------------------------------
+    // PENTING:
+    // availableForWrite() harus menghitung ukuran OUTPUT.
+    //
+    // 22050 mono -> 44100 stereo = 4x output.
+    // --------------------------------------------------------
 
     int availableForWrite() override
     {
@@ -262,8 +271,43 @@ public:
 
         portEXIT_CRITICAL(&pcmMux);
 
-        return (int)freeBytes;
+        if (sourceInfo.bits_per_sample != 16)
+            return 0;
+
+        if (
+            sourceInfo.sample_rate == 22050 &&
+            sourceInfo.channels == 1
+        )
+        {
+            return (int)(freeBytes / 4);
+        }
+
+        if (
+            sourceInfo.sample_rate == 44100 &&
+            sourceInfo.channels == 1
+        )
+        {
+            return (int)(freeBytes / 2);
+        }
+
+        if (
+            sourceInfo.sample_rate == 44100 &&
+            sourceInfo.channels == 2
+        )
+        {
+            return (int)freeBytes;
+        }
+
+        return 0;
     }
+
+    // --------------------------------------------------------
+    // WRITE
+    //
+    // Tidak pernah melakukan partial write.
+    // Kalau seluruh output tidak muat, return 0.
+    // Ini mencegah Helix menerima hasil setengah frame.
+    // --------------------------------------------------------
 
     size_t write(
         const uint8_t *data,
@@ -282,57 +326,68 @@ public:
         uint8_t channels =
             sourceInfo.channels;
 
-        const int16_t *samples =
-            (const int16_t *)data;
+        // ----------------------------------------------------
+        // 44100 stereo
+        // input 2 byte -> output 2 byte
+        // ----------------------------------------------------
 
-        size_t sampleCount =
-            size / sizeof(int16_t);
-
-        size_t consumedSamples = 0;
-
-        // ====================================================
-        // 44100 STEREO
-        // ====================================================
-
-        if (rate == 44100 && channels == 2)
+        if (
+            rate == 44100 &&
+            channels == 2
+        )
         {
-            for (
-                size_t i = 0;
-                i + 1 < sampleCount;
-                i += 2
-            )
+            size_t outputBytes = size;
+
+            if (!canWrite(outputBytes))
+                return 0;
+
+            const int16_t *samples =
+                (const int16_t *)data;
+
+            size_t sampleCount =
+                size / 2;
+
+            for (size_t i = 0;
+                 i < sampleCount;
+                 i++)
             {
-                int16_t left =
+                int16_t s =
                     boostPCM(samples[i]);
 
-                int16_t right =
-                    boostPCM(samples[i + 1]);
-
-                uint8_t out[4];
-
-                memcpy(out, &left, 2);
-                memcpy(out + 2, &right, 2);
-
-                if (writeRaw(out, 4) != 4)
-                    break;
-
-                consumedSamples += 2;
+                writeRawDirect(
+                    (const uint8_t *)&s,
+                    2
+                );
             }
 
-            return consumedSamples * 2;
+            return sampleCount * 2;
         }
 
-        // ====================================================
-        // 44100 MONO -> STEREO
-        // ====================================================
+        // ----------------------------------------------------
+        // 44100 mono -> stereo
+        // 2 byte input -> 4 byte output
+        // ----------------------------------------------------
 
-        if (rate == 44100 && channels == 1)
+        if (
+            rate == 44100 &&
+            channels == 1
+        )
         {
-            for (
-                size_t i = 0;
-                i < sampleCount;
-                i++
-            )
+            size_t outputBytes =
+                (size / 2) * 4;
+
+            if (!canWrite(outputBytes))
+                return 0;
+
+            const int16_t *samples =
+                (const int16_t *)data;
+
+            size_t sampleCount =
+                size / 2;
+
+            for (size_t i = 0;
+                 i < sampleCount;
+                 i++)
             {
                 int16_t s =
                     boostPCM(samples[i]);
@@ -342,54 +397,67 @@ public:
                 memcpy(out, &s, 2);
                 memcpy(out + 2, &s, 2);
 
-                if (writeRaw(out, 4) != 4)
-                    break;
-
-                consumedSamples++;
+                writeRawDirect(
+                    out,
+                    4
+                );
             }
 
-            return consumedSamples * 2;
+            return sampleCount * 2;
         }
 
-        // ====================================================
-        // 22050 MONO -> 44100 STEREO
-        // ====================================================
+        // ----------------------------------------------------
+        // 22050 mono -> 44100 stereo
+        //
+        // 2 byte input
+        // ->
+        // 8 byte output
+        //
+        // Duplicate sample 2x untuk 44100 Hz.
+        // ----------------------------------------------------
 
-        if (rate == 22050 && channels == 1)
+        if (
+            rate == 22050 &&
+            channels == 1
+        )
         {
-            for (
-                size_t i = 0;
-                i < sampleCount;
-                i++
-            )
+            size_t sampleCount =
+                size / 2;
+
+            size_t outputBytes =
+                sampleCount * 8;
+
+            if (!canWrite(outputBytes))
+                return 0;
+
+            const int16_t *samples =
+                (const int16_t *)data;
+
+            for (size_t i = 0;
+                 i < sampleCount;
+                 i++)
             {
                 int16_t s =
                     boostPCM(samples[i]);
 
                 uint8_t out[8];
 
-                // Frame 1 stereo
+                // sample pertama
                 memcpy(out, &s, 2);
                 memcpy(out + 2, &s, 2);
 
-                // Frame 2 duplicate
+                // sample kedua
                 memcpy(out + 4, &s, 2);
                 memcpy(out + 6, &s, 2);
 
-                if (writeRaw(out, 8) != 8)
-                    break;
-
-                consumedSamples++;
+                writeRawDirect(
+                    out,
+                    8
+                );
             }
 
-            return consumedSamples * 2;
+            return sampleCount * 2;
         }
-
-        Serial.printf(
-            "TARS: UNSUPPORTED PCM %lu Hz / %d ch\n",
-            (unsigned long)rate,
-            channels
-        );
 
         return 0;
     }
@@ -399,28 +467,28 @@ public:
         size_t size
     )
     {
-        if (!data || size == 0)
+        if (data == nullptr || size == 0)
             return 0;
 
         portENTER_CRITICAL(&pcmMux);
 
-        size_t amount =
-            size;
+        size_t available =
+            pcmUsed;
 
-        if (amount > pcmUsed)
-            amount = pcmUsed;
+        if (size > available)
+            size = available;
 
-        if (amount > 0)
+        if (size > 0)
         {
             size_t first =
                 PCM_BUFFER_SIZE - pcmReadPos;
 
-            if (amount <= first)
+            if (size <= first)
             {
                 memcpy(
                     data,
                     &pcmBuffer[pcmReadPos],
-                    amount
+                    size
                 );
             }
             else
@@ -434,31 +502,32 @@ public:
                 memcpy(
                     data + first,
                     pcmBuffer,
-                    amount - first
+                    size - first
                 );
             }
 
             pcmReadPos =
-                (pcmReadPos + amount) %
+                (pcmReadPos + size) %
                 PCM_BUFFER_SIZE;
 
-            pcmUsed -= amount;
+            pcmUsed -= size;
         }
 
         portEXIT_CRITICAL(&pcmMux);
 
-        return amount;
+        return size;
     }
 
     size_t availablePCM()
     {
         portENTER_CRITICAL(&pcmMux);
 
-        size_t result = pcmUsed;
+        size_t value =
+            pcmUsed;
 
         portEXIT_CRITICAL(&pcmMux);
 
-        return result;
+        return value;
     }
 
     void clearBuffer()
@@ -474,48 +543,37 @@ public:
 
 private:
 
-    // ========================================================
-    // NON-BLOCKING WRITE
-    //
-    // INI FIX UTAMA.
-    //
-    // Tidak boleh menunggu selamanya jika PCM buffer penuh.
-    // ========================================================
-
-    size_t writeRaw(
-        const uint8_t *data,
-        size_t size
+    bool canWrite(
+        size_t outputBytes
     )
     {
-        if (!data || size == 0)
-            return 0;
-
         portENTER_CRITICAL(&pcmMux);
 
         size_t freeBytes =
             PCM_BUFFER_SIZE - pcmUsed;
 
-        if (freeBytes == 0)
-        {
-            portEXIT_CRITICAL(&pcmMux);
-            return 0;
-        }
+        bool result =
+            freeBytes >= outputBytes;
 
-        size_t amount =
-            size;
+        portEXIT_CRITICAL(&pcmMux);
 
-        if (amount > freeBytes)
-            amount = freeBytes;
+        return result;
+    }
 
+    void writeRawDirect(
+        const uint8_t *data,
+        size_t size
+    )
+    {
         size_t first =
             PCM_BUFFER_SIZE - pcmWritePos;
 
-        if (amount <= first)
+        if (size <= first)
         {
             memcpy(
                 &pcmBuffer[pcmWritePos],
                 data,
-                amount
+                size
             );
         }
         else
@@ -529,19 +587,15 @@ private:
             memcpy(
                 pcmBuffer,
                 data + first,
-                amount - first
+                size - first
             );
         }
 
         pcmWritePos =
-            (pcmWritePos + amount) %
+            (pcmWritePos + size) %
             PCM_BUFFER_SIZE;
 
-        pcmUsed += amount;
-
-        portEXIT_CRITICAL(&pcmMux);
-
-        return amount;
+        pcmUsed += size;
     }
 };
 
@@ -563,8 +617,15 @@ StreamCopy mp3Copier(
 
 static void drawPanelFrame()
 {
-    oled.drawLine(0, 11, 127, 11, SSD1306_WHITE);
-    oled.drawLine(0, 53, 127, 53, SSD1306_WHITE);
+    oled.drawLine(
+        0, 11, 127, 11,
+        SSD1306_WHITE
+    );
+
+    oled.drawLine(
+        0, 53, 127, 53,
+        SSD1306_WHITE
+    );
 }
 
 static void drawHeader(
@@ -583,13 +644,20 @@ static void drawHeader(
 
 static void drawConnectionStatus()
 {
+    oled.setTextSize(1);
+    oled.setTextColor(SSD1306_WHITE);
+
     oled.setCursor(4, 56);
     oled.print("W:");
-    oled.print(wifiIsOn ? "ON" : "OFF");
+    oled.print(
+        wifiIsOn ? "ON" : "OFF"
+    );
 
     oled.setCursor(68, 56);
     oled.print("BT:");
-    oled.print(btIsOn ? "ON" : "OFF");
+    oled.print(
+        btIsOn ? "ON" : "OFF"
+    );
 }
 
 static void drawWaitingPanel()
@@ -613,16 +681,16 @@ static void drawWaitingPanel()
 
     for (int i = 0; i < 10; i++)
     {
-        if (i != offset)
-        {
-            oled.fillRect(
-                9 + i * 11,
-                43,
-                7,
-                2,
-                SSD1306_WHITE
-            );
-        }
+        if (i == offset)
+            continue;
+
+        oled.fillRect(
+            9 + i * 11,
+            43,
+            7,
+            2,
+            SSD1306_WHITE
+        );
     }
 
     drawConnectionStatus();
@@ -647,9 +715,19 @@ static void drawThinkingPanel()
         int x = 6 + i * 10;
 
         if (i <= active)
-            oled.fillRect(x, 42, 7, 5, SSD1306_WHITE);
+        {
+            oled.fillRect(
+                x, 42, 7, 5,
+                SSD1306_WHITE
+            );
+        }
         else
-            oled.drawRect(x, 42, 7, 5, SSD1306_WHITE);
+        {
+            oled.drawRect(
+                x, 42, 7, 5,
+                SSD1306_WHITE
+            );
+        }
     }
 
     drawConnectionStatus();
@@ -674,9 +752,19 @@ static void drawPreparingPanel()
         int x = 6 + i * 10;
 
         if (i == active)
-            oled.fillRect(x, 42, 7, 5, SSD1306_WHITE);
+        {
+            oled.fillRect(
+                x, 42, 7, 5,
+                SSD1306_WHITE
+            );
+        }
         else
-            oled.drawRect(x, 42, 7, 5, SSD1306_WHITE);
+        {
+            oled.drawRect(
+                x, 42, 7, 5,
+                SSD1306_WHITE
+            );
+        }
     }
 
     drawConnectionStatus();
@@ -687,10 +775,10 @@ static void drawSpeakingPanel()
     drawPanelFrame();
     drawHeader("SPEAK");
 
-    size_t visible =
+    const size_t visible =
         speechVisibleChars;
 
-    size_t length =
+    const size_t length =
         speechText.length();
 
     const size_t charsPerLine = 20;
@@ -699,16 +787,18 @@ static void drawSpeakingPanel()
     size_t startIndex = 0;
 
     if (visible > charsPerLine * maxLines)
+    {
         startIndex =
-            visible - charsPerLine * maxLines;
+            visible -
+            charsPerLine * maxLines;
+    }
 
-    size_t pos = startIndex;
+    size_t pos =
+        startIndex;
 
-    for (
-        size_t line = 0;
-        line < maxLines;
-        line++
-    )
+    for (size_t line = 0;
+         line < maxLines;
+         line++)
     {
         oled.setCursor(
             4,
@@ -724,14 +814,36 @@ static void drawSpeakingPanel()
         )
         {
             char c =
-                speechText[pos++];
+                speechText[pos];
 
             if (c == '\n')
+            {
+                pos++;
                 break;
+            }
 
             oled.print(c);
+
+            pos++;
             count++;
         }
+    }
+
+    int wave =
+        (panelAnimation / 2) % 10;
+
+    for (int i = 0; i < 10; i++)
+    {
+        int h =
+            2 + ((i + wave) % 5);
+
+        oled.fillRect(
+            6 + i * 11,
+            50 - h,
+            7,
+            h,
+            SSD1306_WHITE
+        );
     }
 
     drawConnectionStatus();
@@ -748,20 +860,29 @@ static void drawErrorPanel()
     oled.setCursor(6, 32);
     oled.print("CHECK CONNECTION");
 
+    oled.drawRect(
+        6, 43, 116, 5,
+        SSD1306_WHITE
+    );
+
     drawConnectionStatus();
 }
 
 static void updateOLED()
 {
-    uint32_t now = millis();
+    uint32_t now =
+        millis();
 
     if (
         now - oledLastRefresh <
         OLED_REFRESH_MS
     )
+    {
         return;
+    }
 
-    oledLastRefresh = now;
+    oledLastRefresh =
+        now;
 
     panelAnimation++;
 
@@ -797,13 +918,19 @@ static void updateOLED()
     if (
         tarsState == TARS_SPEAKING &&
         speechVisibleChars <
-        speechText.length() &&
-        now - speechLastUpdate >=
-        TEXT_SPEED_MS
+        speechText.length()
     )
     {
-        speechLastUpdate = now;
-        speechVisibleChars++;
+        if (
+            now - speechLastUpdate >=
+            TEXT_SPEED_MS
+        )
+        {
+            speechLastUpdate =
+                now;
+
+            speechVisibleChars++;
+        }
     }
 
     oled.display();
@@ -824,6 +951,7 @@ bool connectWiFi()
         return true;
     }
 
+    Serial.println();
     Serial.println("TARS: WiFi ON");
 
     WiFi.mode(WIFI_STA);
@@ -833,7 +961,8 @@ bool connectWiFi()
         WIFI_PASSWORD
     );
 
-    uint32_t start = millis();
+    uint32_t start =
+        millis();
 
     while (
         WiFi.status() !=
@@ -867,14 +996,16 @@ bool connectWiFi()
 
 void wifiOff()
 {
-    Serial.println("TARS: WiFi OFF");
+    Serial.println(
+        "TARS: WiFi OFF"
+    );
 
     WiFi.disconnect(true);
     WiFi.mode(WIFI_OFF);
 
     wifiIsOn = false;
 
-    delay(150);
+    delay(100);
 }
 
 // ============================================================
@@ -894,8 +1025,19 @@ bool askTars(
 
     HTTPClient http;
 
-    if (!http.begin(client, TARS_ASK_URL))
+    if (
+        !http.begin(
+            client,
+            TARS_ASK_URL
+        )
+    )
+    {
+        Serial.println(
+            "TARS: HTTP begin gagal"
+        );
+
         return false;
+    }
 
     http.addHeader(
         "Content-Type",
@@ -904,7 +1046,8 @@ bool askTars(
 
     JsonDocument request;
 
-    request["text"] = question;
+    request["text"] =
+        question;
 
     String body;
 
@@ -913,19 +1056,26 @@ bool askTars(
         body
     );
 
-    Serial.println("TARS: POST /ask");
+    Serial.println(
+        "TARS: POST /ask"
+    );
 
     int code =
         http.POST(body);
 
-    Serial.printf(
-        "ASK HTTP: %d\n",
-        code
-    );
+    Serial.print("ASK HTTP: ");
+    Serial.println(code);
 
-    if (code != HTTP_CODE_OK)
+    if (
+        code != HTTP_CODE_OK
+    )
     {
+        Serial.println(
+            http.getString()
+        );
+
         http.end();
+
         return false;
     }
 
@@ -936,23 +1086,48 @@ bool askTars(
 
     JsonDocument json;
 
-    if (
+    DeserializationError error =
         deserializeJson(
             json,
             response
-        )
-    )
+        );
+
+    if (error)
+    {
+        Serial.print(
+            "JSON error: "
+        );
+
+        Serial.println(
+            error.c_str()
+        );
+
         return false;
+    }
 
     const char *result =
         json["response"] | "";
 
-    if (!result || result[0] == '\0')
+    if (
+        result == nullptr ||
+        result[0] == '\0'
+    )
+    {
+        Serial.println(
+            "TARS: response kosong"
+        );
+
         return false;
+    }
 
-    answer = String(result);
+    answer =
+        String(result);
 
-    Serial.println("TARS RESPONSE:");
+    Serial.println();
+    Serial.println(
+        "TARS RESPONSE:"
+    );
+
     Serial.println(answer);
 
     return true;
@@ -970,7 +1145,9 @@ String makeTTSText(
         text.length() <=
         TTS_MAX_CHARS
     )
+    {
         return text;
+    }
 
     String result =
         text.substring(
@@ -982,15 +1159,19 @@ String makeTTSText(
         result.lastIndexOf('.');
 
     if (cut < 100)
+    {
         cut =
             result.lastIndexOf(' ');
+    }
 
     if (cut > 100)
+    {
         result =
             result.substring(
                 0,
                 cut + 1
             );
+    }
 
     result.trim();
 
@@ -1011,13 +1192,24 @@ bool downloadTTS(
     String ttsText =
         makeTTSText(text);
 
-    Serial.printf(
-        "TARS: TTS chars = %d\n",
+    Serial.print(
+        "TARS: TTS chars = "
+    );
+
+    Serial.println(
         ttsText.length()
     );
 
-    if (LittleFS.exists(MP3_FILE))
-        LittleFS.remove(MP3_FILE);
+    if (
+        LittleFS.exists(
+            MP3_FILE
+        )
+    )
+    {
+        LittleFS.remove(
+            MP3_FILE
+        );
+    }
 
     File output =
         LittleFS.open(
@@ -1026,14 +1218,25 @@ bool downloadTTS(
         );
 
     if (!output)
+    {
+        Serial.println(
+            "TARS: MP3 file gagal dibuat"
+        );
+
         return false;
+    }
 
     WiFiClientSecure client;
     client.setInsecure();
 
     HTTPClient http;
 
-    if (!http.begin(client, TARS_TTS_URL))
+    if (
+        !http.begin(
+            client,
+            TARS_TTS_URL
+        )
+    )
     {
         output.close();
         return false;
@@ -1046,7 +1249,8 @@ bool downloadTTS(
 
     JsonDocument request;
 
-    request["text"] = ttsText;
+    request["text"] =
+        ttsText;
 
     String body;
 
@@ -1055,22 +1259,33 @@ bool downloadTTS(
         body
     );
 
-    Serial.println("TARS: POST /tts");
+    Serial.println(
+        "TARS: POST /tts"
+    );
 
     int code =
         http.POST(body);
 
-    Serial.printf(
-        "TTS HTTP: %d\n",
-        code
+    Serial.print(
+        "TTS HTTP: "
     );
 
-    if (code != HTTP_CODE_OK)
+    Serial.println(code);
+
+    if (
+        code != HTTP_CODE_OK
+    )
     {
+        Serial.println(
+            http.getString()
+        );
+
         http.end();
         output.close();
 
-        LittleFS.remove(MP3_FILE);
+        LittleFS.remove(
+            MP3_FILE
+        );
 
         return false;
     }
@@ -1080,15 +1295,17 @@ bool downloadTTS(
 
     uint8_t buffer[1024];
 
-    size_t total = 0;
-
     int contentLength =
         http.getSize();
+
+    size_t total = 0;
 
     uint32_t lastData =
         millis();
 
-    while (http.connected())
+    while (
+        http.connected()
+    )
     {
         size_t available =
             stream->available();
@@ -1096,10 +1313,16 @@ bool downloadTTS(
         if (available > 0)
         {
             size_t amount =
-                min(
-                    available,
-                    sizeof(buffer)
-                );
+                available;
+
+            if (
+                amount >
+                sizeof(buffer)
+            )
+            {
+                amount =
+                    sizeof(buffer);
+            }
 
             int read =
                 stream->readBytes(
@@ -1114,16 +1337,25 @@ bool downloadTTS(
                     read
                 );
 
-                total += read;
+                total +=
+                    read;
 
-                lastData = millis();
+                lastData =
+                    millis();
 
-                if (contentLength > 0)
+                if (
+                    contentLength > 0
+                )
                 {
-                    contentLength -= read;
+                    contentLength -=
+                        read;
 
-                    if (contentLength <= 0)
+                    if (
+                        contentLength <= 0
+                    )
+                    {
                         break;
+                    }
                 }
             }
         }
@@ -1135,7 +1367,9 @@ bool downloadTTS(
                 millis() - lastData >
                 5000
             )
+            {
                 break;
+            }
         }
     }
 
@@ -1144,14 +1378,22 @@ bool downloadTTS(
 
     http.end();
 
-    Serial.printf(
-        "TARS: MP3 bytes = %u\n",
-        (unsigned int)total
+    Serial.print(
+        "TARS: MP3 bytes = "
     );
+
+    Serial.println(total);
 
     if (total < 512)
     {
-        LittleFS.remove(MP3_FILE);
+        LittleFS.remove(
+            MP3_FILE
+        );
+
+        Serial.println(
+            "TARS: MP3 INVALID"
+        );
+
         return false;
     }
 
@@ -1167,8 +1409,13 @@ int32_t getAudioData(
     int32_t len
 )
 {
-    if (!data || len <= 0)
+    if (
+        data == nullptr ||
+        len <= 0
+    )
+    {
         return 0;
+    }
 
     size_t wanted =
         (size_t)len;
@@ -1179,6 +1426,7 @@ int32_t getAudioData(
             wanted
         );
 
+    // A2DP selalu mendapat jumlah byte yang diminta.
     if (got < wanted)
     {
         memset(
@@ -1192,13 +1440,23 @@ int32_t getAudioData(
 }
 
 // ============================================================
-// DECODER
+// START DECODER
 // ============================================================
 
 bool startDecoder()
 {
-    if (!LittleFS.exists(MP3_FILE))
+    if (
+        !LittleFS.exists(
+            MP3_FILE
+        )
+    )
+    {
+        Serial.println(
+            "TARS: MP3 tidak ada"
+        );
+
         return false;
+    }
 
     mp3File =
         LittleFS.open(
@@ -1207,16 +1465,29 @@ bool startDecoder()
         );
 
     if (!mp3File)
+    {
+        Serial.println(
+            "TARS: MP3 OPEN gagal"
+        );
+
         return false;
+    }
 
     pcmOutput.clearBuffer();
 
     mp3InputFinished = false;
     audioDecoderReady = false;
 
-    if (!decoder.begin())
+    if (
+        !decoder.begin()
+    )
     {
+        Serial.println(
+            "TARS: MP3 DECODER gagal"
+        );
+
         mp3File.close();
+
         return false;
     }
 
@@ -1229,12 +1500,20 @@ bool startDecoder()
     return true;
 }
 
+// ============================================================
+// STOP DECODER
+// ============================================================
+
 void stopDecoder()
 {
     audioDecoderReady = false;
 
+    delay(50);
+
     if (mp3File)
+    {
         mp3File.close();
+    }
 
     Serial.println(
         "TARS: MP3 DECODER STOP"
@@ -1242,16 +1521,19 @@ void stopDecoder()
 }
 
 // ============================================================
-// BLUETOOTH
+// START BLUETOOTH
 // ============================================================
 
 bool startBluetooth()
 {
+    Serial.println();
     Serial.println(
         "TARS: Bluetooth START"
     );
 
-    a2dpSource.set_auto_reconnect(false);
+    a2dpSource.set_auto_reconnect(
+        false
+    );
 
     a2dpSource.set_data_callback(
         getAudioData
@@ -1295,6 +1577,10 @@ bool startBluetooth()
     return true;
 }
 
+// ============================================================
+// STOP BLUETOOTH
+// ============================================================
+
 void stopBluetooth()
 {
     Serial.println(
@@ -1313,7 +1599,7 @@ void stopBluetooth()
 }
 
 // ============================================================
-// PCM PRIME
+// PRIME PCM
 // ============================================================
 
 bool primePCM()
@@ -1325,14 +1611,35 @@ bool primePCM()
     uint32_t start =
         millis();
 
-    size_t previous =
-        0;
-
     while (
         pcmOutput.availablePCM() <
         PCM_PRIME_BYTES
     )
     {
+        if (
+            !audioDecoderReady ||
+            !mp3File
+        )
+        {
+            return false;
+        }
+
+        if (!mp3InputFinished)
+        {
+            size_t copied =
+                mp3Copier.copy();
+
+            if (copied == 0)
+            {
+                mp3InputFinished =
+                    true;
+
+                Serial.println(
+                    "TARS: MP3 EOF DURING PRIME"
+                );
+            }
+        }
+
         if (
             millis() - start >
             10000
@@ -1345,51 +1652,22 @@ bool primePCM()
             return false;
         }
 
-        if (mp3InputFinished)
-            break;
-
-        size_t before =
-            pcmOutput.availablePCM();
-
-        size_t copied =
-            mp3Copier.copy();
-
-        size_t after =
-            pcmOutput.availablePCM();
-
-        if (copied == 0)
-        {
-            if (after == before)
-            {
-                mp3InputFinished = true;
-
-                Serial.println(
-                    "TARS: MP3 EOF DURING PRIME"
-                );
-
-                break;
-            }
-        }
-
-        previous = after;
-
         delay(1);
     }
-
-    size_t primed =
-        pcmOutput.availablePCM();
 
     Serial.print(
         "TARS: PCM PRIMED = "
     );
 
-    Serial.println(primed);
+    Serial.println(
+        pcmOutput.availablePCM()
+    );
 
-    return primed > 0;
+    return true;
 }
 
 // ============================================================
-// PLAY
+// PLAY MP3
 // ============================================================
 
 bool playMP3()
@@ -1397,16 +1675,34 @@ bool playMP3()
     if (!startDecoder())
         return false;
 
+    // --------------------------------------------------------
+    // Prime PCM SEBELUM Bluetooth.
+    // --------------------------------------------------------
+
     if (!primePCM())
     {
+        Serial.println(
+            "TARS: PCM PRIME FAILED"
+        );
+
         stopDecoder();
+
         return false;
     }
 
+    // --------------------------------------------------------
+    // Baru Bluetooth.
+    // --------------------------------------------------------
+
     if (!startBluetooth())
     {
+        Serial.println(
+            "TARS: Bluetooth START FAILED"
+        );
+
         stopDecoder();
         stopBluetooth();
+
         return false;
     }
 
@@ -1420,6 +1716,7 @@ bool playMP3()
     speechLastUpdate =
         millis();
 
+    Serial.println();
     Serial.println(
         "TARS: PLAY START"
     );
@@ -1427,27 +1724,33 @@ bool playMP3()
     uint32_t start =
         millis();
 
-    while (playbackRunning)
+    while (
+        playbackRunning
+    )
     {
-        // Hanya decode lagi jika buffer
-        // masih punya ruang cukup.
-        if (
-            !mp3InputFinished &&
-            pcmOutput.availableForWrite() >= 1024
-        )
+        // ----------------------------------------------------
+        // Decoder terus mengisi buffer.
+        // ----------------------------------------------------
+
+        if (!mp3InputFinished)
         {
             size_t copied =
                 mp3Copier.copy();
 
             if (copied == 0)
             {
-                mp3InputFinished = true;
+                mp3InputFinished =
+                    true;
 
                 Serial.println(
                     "TARS: MP3 INPUT EOF"
                 );
             }
         }
+
+        // ----------------------------------------------------
+        // Cek Bluetooth.
+        // ----------------------------------------------------
 
         if (
             a2dpSource.get_connection_state() !=
@@ -1458,25 +1761,35 @@ bool playMP3()
                 "TARS: A2DP DISCONNECTED"
             );
 
-            playbackRunning = false;
+            playbackRunning =
+                false;
 
             break;
         }
+
+        // ----------------------------------------------------
+        // MP3 habis + PCM habis.
+        // ----------------------------------------------------
 
         if (
             mp3InputFinished &&
             pcmOutput.availablePCM() == 0
         )
         {
-            delay(150);
+            delay(200);
 
             if (
                 pcmOutput.availablePCM() == 0
             )
             {
-                playbackRunning = false;
+                playbackRunning =
+                    false;
             }
         }
+
+        // ----------------------------------------------------
+        // Timeout.
+        // ----------------------------------------------------
 
         if (
             millis() - start >
@@ -1487,20 +1800,20 @@ bool playMP3()
                 "TARS: PLAYBACK TIMEOUT"
             );
 
-            playbackRunning = false;
+            playbackRunning =
+                false;
         }
 
         delay(1);
     }
 
-    delay(150);
+    delay(100);
 
     Serial.println(
         "TARS: PLAY FINISHED"
     );
 
     stopDecoder();
-
     stopBluetooth();
 
     pcmOutput.clearBuffer();
@@ -1520,15 +1833,22 @@ void processQuestion(
     const String &question
 )
 {
-    if (question.length() == 0)
+    if (
+        question.length() == 0
+    )
+    {
         return;
+    }
 
     Serial.println();
     Serial.println(
         "================================"
     );
 
-    Serial.println("QUESTION:");
+    Serial.println(
+        "QUESTION:"
+    );
+
     Serial.println(question);
 
     Serial.println(
@@ -1540,9 +1860,19 @@ void processQuestion(
 
     String answer;
 
-    if (!askTars(question, answer))
+    if (
+        !askTars(
+            question,
+            answer
+        )
+    )
     {
-        tarsState = TARS_ERROR;
+        Serial.println(
+            "TARS: ASK FAILED"
+        );
+
+        tarsState =
+            TARS_ERROR;
 
         delay(1500);
 
@@ -1554,15 +1884,27 @@ void processQuestion(
         return;
     }
 
-    speechText = answer;
-    speechVisibleChars = 0;
+    speechText =
+        answer;
+
+    speechVisibleChars =
+        0;
 
     tarsState =
         TARS_PREPARING_AUDIO;
 
-    if (!downloadTTS(answer))
+    if (
+        !downloadTTS(
+            answer
+        )
+    )
     {
-        tarsState = TARS_ERROR;
+        Serial.println(
+            "TARS: TTS FAILED"
+        );
+
+        tarsState =
+            TARS_ERROR;
 
         delay(1500);
 
@@ -1573,6 +1915,10 @@ void processQuestion(
 
         return;
     }
+
+    // --------------------------------------------------------
+    // WiFi OFF sebelum Bluetooth.
+    // --------------------------------------------------------
 
     wifiOff();
 
@@ -1591,10 +1937,25 @@ void processQuestion(
         delay(1500);
     }
 
-    if (LittleFS.exists(MP3_FILE))
-        LittleFS.remove(MP3_FILE);
+    if (
+        LittleFS.exists(
+            MP3_FILE
+        )
+    )
+    {
+        LittleFS.remove(
+            MP3_FILE
+        );
+    }
 
-    if (!connectWiFi())
+    // --------------------------------------------------------
+    // WiFi ON kembali.
+    // Tidak NTP lagi.
+    // --------------------------------------------------------
+
+    if (
+        !connectWiFi()
+    )
     {
         Serial.println(
             "TARS: WiFi recovery FAILED"
@@ -1642,11 +2003,17 @@ static void tarsWorkerTask(
             ) == pdTRUE
         )
         {
+            String question =
+                String(message.text);
+
             processQuestion(
-                String(message.text)
+                question
             );
 
-            workerBusy = false;
+            question = "";
+
+            workerBusy =
+                false;
         }
     }
 }
@@ -1657,7 +2024,9 @@ static void tarsWorkerTask(
 
 void handleSerial()
 {
-    while (Serial.available())
+    while (
+        Serial.available()
+    )
     {
         char c =
             (char)Serial.read();
@@ -1667,13 +2036,38 @@ void handleSerial()
 
         if (c == '\n')
         {
-            if (serialLineLength == 0)
+            if (
+                serialLineLength == 0
+            )
+            {
                 continue;
+            }
 
             if (workerBusy)
             {
+                Serial.println();
                 Serial.println(
                     "TARS: masih memproses."
+                );
+
+                Serial.println(
+                    "Tunggu TARS READY."
+                );
+
+                serialLineLength = 0;
+                serialLine[0] = '\0';
+
+                continue;
+            }
+
+            if (
+                uxQueueMessagesWaiting(
+                    questionQueue
+                ) > 0
+            )
+            {
+                Serial.println(
+                    "TARS: command masih menunggu."
                 );
 
                 serialLineLength = 0;
@@ -1708,10 +2102,18 @@ void handleSerial()
                 ) == pdTRUE
             )
             {
-                workerBusy = true;
+                workerBusy =
+                    true;
 
+                Serial.println();
                 Serial.println(
                     "TARS: COMMAND RECEIVED"
+                );
+            }
+            else
+            {
+                Serial.println(
+                    "TARS: COMMAND QUEUE FULL"
                 );
             }
 
@@ -1743,7 +2145,9 @@ void handleSerial()
 
 void setup()
 {
-    Serial.begin(SERIAL_BAUD);
+    Serial.begin(
+        SERIAL_BAUD
+    );
 
     delay(1000);
 
@@ -1751,52 +2155,102 @@ void setup()
     Serial.println(
         "================================"
     );
+
     Serial.println(
         "       TARS ESP32 START"
     );
+
     Serial.println(
         "================================"
     );
+
+    // --------------------------------------------------------
+    // OLED
+    // --------------------------------------------------------
 
     Wire.begin(
         OLED_SDA,
         OLED_SCL
     );
 
-    oled.begin(
-        SSD1306_SWITCHCAPVCC,
-        OLED_ADDR
-    );
+    if (
+        !oled.begin(
+            SSD1306_SWITCHCAPVCC,
+            OLED_ADDR
+        )
+    )
+    {
+        Serial.println(
+            "OLED ERROR"
+        );
+    }
+    else
+    {
+        oled.clearDisplay();
 
-    oled.clearDisplay();
-    oled.setTextSize(1);
-    oled.setTextColor(SSD1306_WHITE);
+        oled.setTextSize(1);
+        oled.setTextColor(
+            SSD1306_WHITE
+        );
 
-    oled.setCursor(32, 22);
-    oled.print("T A R S");
+        oled.setCursor(
+            32,
+            22
+        );
 
-    oled.setCursor(43, 34);
-    oled.print("BOOT");
+        oled.print(
+            "T A R S"
+        );
 
-    oled.display();
+        oled.setCursor(
+            43,
+            34
+        );
 
-    delay(500);
+        oled.print(
+            "BOOT"
+        );
 
-    if (!LittleFS.begin(true))
+        oled.display();
+
+        delay(500);
+    }
+
+    // --------------------------------------------------------
+    // LittleFS
+    // --------------------------------------------------------
+
+    if (
+        !LittleFS.begin(true)
+    )
     {
         Serial.println(
             "LittleFS ERROR"
         );
 
+        tarsState =
+            TARS_ERROR;
+
         while (true)
-            delay(1000);
+        {
+            updateOLED();
+            delay(100);
+        }
     }
 
     Serial.println(
         "LittleFS OK"
     );
 
+    // --------------------------------------------------------
+    // PCM
+    // --------------------------------------------------------
+
     pcmOutput.begin();
+
+    // --------------------------------------------------------
+    // Queue
+    // --------------------------------------------------------
 
     questionQueue =
         xQueueCreate(
@@ -1810,22 +2264,63 @@ void setup()
             "TARS: QUEUE ERROR"
         );
 
+        tarsState =
+            TARS_ERROR;
+
         while (true)
-            delay(1000);
+        {
+            updateOLED();
+            delay(100);
+        }
     }
+
+    // --------------------------------------------------------
+    // WiFi
+    // --------------------------------------------------------
 
     tarsState =
         TARS_THINKING;
 
-    while (!connectWiFi())
+    bool wifiOK =
+        connectWiFi();
+
+    if (!wifiOK)
     {
+        Serial.println(
+            "TARS: WiFi connection FAILED"
+        );
+
+        tarsState =
+            TARS_ERROR;
+
+        delay(1500);
+
+        while (
+            !connectWiFi()
+        )
+        {
+            delay(1000);
+        }
+    }
+
+    // --------------------------------------------------------
+    // NTP HANYA SEKALI
+    // --------------------------------------------------------
+
+    while (
+        !syncNTPOnce()
+    )
+    {
+        Serial.println(
+            "TARS: retry NTP..."
+        );
+
         delay(1000);
     }
 
-    while (!syncNTPOnce())
-    {
-        delay(1000);
-    }
+    // --------------------------------------------------------
+    // Worker
+    // --------------------------------------------------------
 
     xTaskCreatePinnedToCore(
         tarsWorkerTask,
@@ -1837,6 +2332,10 @@ void setup()
         0
     );
 
+    // --------------------------------------------------------
+    // READY
+    // --------------------------------------------------------
+
     tarsState =
         TARS_WAITING;
 
@@ -1844,15 +2343,21 @@ void setup()
     Serial.println(
         "================================"
     );
+
     Serial.println(
         "           TARS READY"
     );
+
     Serial.println(
         "================================"
     );
 
+    Serial.print(
+        "WiFi : "
+    );
+
     Serial.println(
-        "WiFi : ON"
+        wifiIsOn ? "ON" : "OFF"
     );
 
     Serial.println(
@@ -1868,7 +2373,7 @@ void setup()
     );
 
     Serial.println(
-        "PCM  : NON-BLOCKING BUFFER"
+        "PCM  : 32KB SAFE BUFFER"
     );
 
     Serial.println(
