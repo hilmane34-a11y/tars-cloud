@@ -63,31 +63,28 @@ bool oledReadyFlag = false;
 static String oledAnswer = "";
 static size_t oledTypedChars = 0;
 
-static uint32_t oledLastType =
-    0;
+static uint32_t oledLastType = 0;
 
-// Sekitar 80% lebih cepat dibanding
-// kecepatan ketik lama 55 ms.
-//
-// 55 ms × 0.8 = 44 ms
-//
-static const uint32_t OLED_TYPE_INTERVAL =
-    44;
+// 55 ms = kecepatan lama
+// 44 ms = sekitar 80% lebih cepat
+static const uint32_t OLED_TYPE_INTERVAL = 44;
 
-static bool oledTyping =
-    false;
+static bool oledTyping = false;
 
 
 // ============================================================
-// OLED FACE
+// OLED MECHANICAL ANIMATION
 // ============================================================
-//
-// TARS dibuat minimalis:
-// - tidak memenuhi semua sudut dengan kotak
-// - dua mata mekanis
-// - indikator tengah
-// - teks status
-//
+
+static uint32_t oledLastAnim = 0;
+static uint8_t oledMechanicalFrame = 0;
+
+// Kecepatan struktur mekanikal
+static const uint32_t OLED_ANIM_INTERVAL = 80;
+
+
+// ============================================================
+// OLED CLEAR
 // ============================================================
 
 void oledClear() {
@@ -100,152 +97,13 @@ void oledClear() {
 }
 
 
-void oledDrawEyes(
-    bool blink,
-    bool speaking
-) {
+// ============================================================
+// OLED HEADER
+// ============================================================
 
-    if (!oledReadyFlag) {
-        return;
-    }
-
-    // --------------------------------------------------------
-    // Mata kiri
-    // --------------------------------------------------------
-
-    if (blink) {
-
-        oled.drawLine(
-            25,
-            22,
-            45,
-            22,
-            SSD1306_WHITE
-        );
-
-        oled.drawLine(
-            25,
-            23,
-            45,
-            23,
-            SSD1306_WHITE
-        );
-
-    }
-    else {
-
-        oled.fillRoundRect(
-            23,
-            16,
-            24,
-            15,
-            4,
-            SSD1306_WHITE
-        );
-
-        oled.fillCircle(
-            35,
-            23,
-            4,
-            SSD1306_BLACK
-        );
-    }
-
-
-    // --------------------------------------------------------
-    // Mata kanan
-    // --------------------------------------------------------
-
-    if (blink) {
-
-        oled.drawLine(
-            83,
-            22,
-            103,
-            22,
-            SSD1306_WHITE
-        );
-
-        oled.drawLine(
-            83,
-            23,
-            103,
-            23,
-            SSD1306_WHITE
-        );
-
-    }
-    else {
-
-        oled.fillRoundRect(
-            81,
-            16,
-            24,
-            15,
-            4,
-            SSD1306_WHITE
-        );
-
-        oled.fillCircle(
-            93,
-            23,
-            4,
-            SSD1306_BLACK
-        );
-    }
-
-
-    // --------------------------------------------------------
-    // Indikator tengah
-    // --------------------------------------------------------
-
-    if (speaking) {
-
-        oled.drawLine(
-            58,
-            38,
-            70,
-            38,
-            SSD1306_WHITE
-        );
-
-        oled.drawLine(
-            56,
-            40,
-            72,
-            40,
-            SSD1306_WHITE
-        );
-
-        oled.drawLine(
-            59,
-            42,
-            69,
-            42,
-            SSD1306_WHITE
-        );
-
-    }
-    else {
-
-        oled.drawLine(
-            59,
-            40,
-            69,
-            40,
-            SSD1306_WHITE
-        );
-    }
-}
-
-
-void oledDrawStatus(
+void oledHeader(
     const char *status
 ) {
-
-    if (!oledReadyFlag) {
-        return;
-    }
 
     oled.setTextColor(
         SSD1306_WHITE
@@ -255,31 +113,69 @@ void oledDrawStatus(
         1
     );
 
-    int16_t x1;
-    int16_t y1;
-    uint16_t w;
-    uint16_t h;
 
-    oled.getTextBounds(
-        status,
-        0,
-        0,
-        &x1,
-        &y1,
-        &w,
-        &h
-    );
-
-    int x =
-        (OLED_WIDTH - w) / 2;
-
-    if (x < 0) {
-        x = 0;
-    }
+    // --------------------------------------------------------
+    // T A R S
+    // --------------------------------------------------------
 
     oled.setCursor(
-        x,
-        53
+        45,
+        0
+    );
+
+    oled.print(
+        "T A R S"
+    );
+
+
+    // --------------------------------------------------------
+    // Mechanical segmented divider
+    // --------------------------------------------------------
+
+    oled.drawLine(
+        0,
+        9,
+        27,
+        9,
+        SSD1306_WHITE
+    );
+
+    oled.drawLine(
+        34,
+        9,
+        61,
+        9,
+        SSD1306_WHITE
+    );
+
+    oled.drawLine(
+        67,
+        9,
+        94,
+        9,
+        SSD1306_WHITE
+    );
+
+    oled.drawLine(
+        101,
+        9,
+        127,
+        9,
+        SSD1306_WHITE
+    );
+
+
+    // --------------------------------------------------------
+    // Status
+    // --------------------------------------------------------
+
+    oled.setCursor(
+        3,
+        13
+    );
+
+    oled.print(
+        "> "
     );
 
     oled.print(
@@ -288,26 +184,315 @@ void oledDrawStatus(
 }
 
 
-void oledShowFace(
-    const char *status,
-    bool speaking = false,
-    bool blink = false
+// ============================================================
+// OLED MECHANICAL STRUCTURE
+// ============================================================
+//
+// Tidak menggunakan kotak di sudut OLED.
+//
+// MODE NORMAL:
+// Struktur seperti:
+//
+// --___--__---___--__--
+//
+// terus bergeser sehingga TARS terlihat hidup.
+//
+// MODE SPEAKING:
+// Struktur bergerak lebih aktif.
+// ============================================================
+
+void oledDrawMechanical(
+    bool speaking
 ) {
+
+    const int baseY = 62;
+
+
+    // --------------------------------------------------------
+    // Garis dasar mekanis
+    // --------------------------------------------------------
+
+    oled.drawLine(
+        2,
+        baseY,
+        125,
+        baseY,
+        SSD1306_WHITE
+    );
+
+
+    // ========================================================
+    // MODE NORMAL / STANDBY
+    // ========================================================
+
+    if (!speaking) {
+
+        // Pola tinggi segmen.
+        //
+        // Rendah = "--"
+        // Tinggi = "__"
+        //
+        // Pola akan bergeser terus berdasarkan frame.
+
+        static const uint8_t normalPattern[24] = {
+
+            2, 2, 5, 5, 5, 2,
+            2, 4, 4, 2, 2, 5,
+            5, 5, 2, 2, 4, 4,
+            2, 2, 5, 5, 2, 2
+        };
+
+
+        for (
+            int i = 0;
+            i < 24;
+            i++
+        ) {
+
+            int x =
+                3 + (i * 5);
+
+
+            if (
+                x > 123
+            ) {
+                break;
+            }
+
+
+            uint8_t index =
+                (
+                    i +
+                    oledMechanicalFrame
+                ) % 24;
+
+
+            int height =
+                normalPattern[index];
+
+
+            // ------------------------------------------------
+            // Segmen horizontal
+            // ------------------------------------------------
+
+            oled.drawLine(
+                x,
+                baseY - height,
+                x + 3,
+                baseY - height,
+                SSD1306_WHITE
+            );
+
+
+            // ------------------------------------------------
+            // Sambungan diagonal
+            // ------------------------------------------------
+
+            if (
+                i < 23
+            ) {
+
+                int nextX =
+                    x + 5;
+
+
+                if (
+                    nextX <= 125
+                ) {
+
+                    oled.drawLine(
+                        x + 3,
+                        baseY - height,
+                        nextX,
+                        baseY -
+                        normalPattern[
+                            (index + 1) % 24
+                        ],
+                        SSD1306_WHITE
+                    );
+                }
+            }
+        }
+
+
+        // ----------------------------------------------------
+        // Pulse kecil di tengah
+        // ----------------------------------------------------
+
+        int pulseX =
+            45 +
+            (
+                oledMechanicalFrame % 17
+            );
+
+
+        oled.drawLine(
+            pulseX,
+            57,
+            pulseX + 3,
+            57,
+            SSD1306_WHITE
+        );
+
+
+        return;
+    }
+
+
+    // ========================================================
+    // MODE SPEAKING
+    // ========================================================
+
+    for (
+        int i = 0;
+        i < 6;
+        i++
+    ) {
+
+        int x =
+            8 + (i * 22);
+
+
+        int height =
+            3;
+
+
+        if (
+            i ==
+            (oledMechanicalFrame % 6)
+        ) {
+
+            height =
+                8;
+        }
+
+        else if (
+            i ==
+            ((oledMechanicalFrame + 5) % 6) ||
+
+            i ==
+            ((oledMechanicalFrame + 1) % 6)
+        ) {
+
+            height =
+                5;
+        }
+
+
+        // ----------------------------------------------------
+        // Vertical actuator
+        // ----------------------------------------------------
+
+        oled.drawLine(
+            x,
+            baseY - height,
+            x,
+            baseY,
+            SSD1306_WHITE
+        );
+
+
+        // ----------------------------------------------------
+        // Arm kiri
+        // ----------------------------------------------------
+
+        oled.drawLine(
+            x - 3,
+            baseY - height,
+            x,
+            baseY,
+            SSD1306_WHITE
+        );
+
+
+        // ----------------------------------------------------
+        // Arm kanan
+        // ----------------------------------------------------
+
+        oled.drawLine(
+            x,
+            baseY,
+            x + 3,
+            baseY - height,
+            SSD1306_WHITE
+        );
+    }
+
+
+    // --------------------------------------------------------
+    // Center actuator
+    // --------------------------------------------------------
+
+    int x =
+        61 +
+        (
+            (oledMechanicalFrame % 3) - 1
+        ) * 3;
+
+
+    oled.drawLine(
+        x,
+        56,
+        x,
+        59,
+        SSD1306_WHITE
+    );
+}
+
+
+// ============================================================
+// OLED ONLINE
+// ============================================================
+
+void oledShowOnline() {
 
     if (!oledReadyFlag) {
         return;
     }
 
+
     oled.clearDisplay();
 
-    oledDrawEyes(
-        blink,
-        speaking
+
+    oledHeader(
+        "ONLINE"
     );
 
-    oledDrawStatus(
-        status
+
+    oled.setCursor(
+        3,
+        27
     );
+
+    oled.print(
+        "SYSTEM INITIALIZED"
+    );
+
+
+    oled.setCursor(
+        3,
+        36
+    );
+
+    oled.print(
+        "A2DP : STANDBY"
+    );
+
+
+    oled.setCursor(
+        3,
+        45
+    );
+
+    oled.print(
+        "VOICE: READY"
+    );
+
+
+    oledDrawMechanical(
+        false
+    );
+
 
     oled.display();
 }
@@ -319,11 +504,52 @@ void oledShowFace(
 
 void oledShowReady() {
 
-    oledShowFace(
-        "READY",
-        false,
+    if (!oledReadyFlag) {
+        return;
+    }
+
+
+    oled.clearDisplay();
+
+
+    oledHeader(
+        "READY"
+    );
+
+
+    oled.setCursor(
+        3,
+        27
+    );
+
+    oled.print(
+        "WAITING FOR"
+    );
+
+
+    oled.setCursor(
+        3,
+        36
+    );
+
+    oled.print(
+        "COMMAND..."
+    );
+
+
+    oledDrawMechanical(
         false
     );
+
+
+    oled.display();
+
+
+    // Reset timer animasi agar setelah kembali READY
+    // struktur langsung mempunyai siklus baru.
+
+    oledLastAnim =
+        millis();
 }
 
 
@@ -333,11 +559,45 @@ void oledShowReady() {
 
 void oledShowListening() {
 
-    oledShowFace(
-        "LISTENING",
-        false,
+    if (!oledReadyFlag) {
+        return;
+    }
+
+
+    oled.clearDisplay();
+
+
+    oledHeader(
+        "LISTENING"
+    );
+
+
+    oled.setCursor(
+        3,
+        27
+    );
+
+    oled.print(
+        "INPUT RECEIVED"
+    );
+
+
+    oled.setCursor(
+        3,
+        36
+    );
+
+    oled.print(
+        "AWAITING QUERY"
+    );
+
+
+    oledDrawMechanical(
         false
     );
+
+
+    oled.display();
 }
 
 
@@ -347,16 +607,146 @@ void oledShowListening() {
 
 void oledShowProcessing() {
 
-    oledShowFace(
-        "PROCESSING",
-        false,
+    if (!oledReadyFlag) {
+        return;
+    }
+
+
+    oled.clearDisplay();
+
+
+    oledHeader(
+        "PROCESSING"
+    );
+
+
+    oled.setCursor(
+        3,
+        27
+    );
+
+    oled.print(
+        "ANALYZING..."
+    );
+
+
+    oled.setCursor(
+        3,
+        36
+    );
+
+    oled.print(
+        "GENERATING RESPONSE"
+    );
+
+
+    oledDrawMechanical(
         false
     );
+
+
+    oled.display();
+}
+
+
+// ============================================================
+// OLED READY ANIMATION UPDATE
+// ============================================================
+//
+// Ini khusus untuk mode normal.
+//
+// Dipanggil terus dari loop() saat TARS tidak sedang
+// menjalankan proses audio.
+//
+// Jadi struktur:
+//
+// --___--__--__
+//
+// benar-benar terus bergerak walaupun tidak ada perintah.
+// ============================================================
+
+void oledUpdateReadyAnimation() {
+
+    if (!oledReadyFlag) {
+        return;
+    }
+
+
+    // Jangan mengganggu ketika TARS sedang berbicara.
+    if (playbackRunning) {
+        return;
+    }
+
+
+    uint32_t now =
+        millis();
+
+
+    if (
+        now -
+        oledLastAnim <
+        OLED_ANIM_INTERVAL
+    ) {
+        return;
+    }
+
+
+    oledLastAnim =
+        now;
+
+
+    oledMechanicalFrame++;
+
+
+    // --------------------------------------------------------
+    // Gambar ulang layar READY.
+    // --------------------------------------------------------
+
+    oled.clearDisplay();
+
+
+    oledHeader(
+        "READY"
+    );
+
+
+    oled.setCursor(
+        3,
+        27
+    );
+
+    oled.print(
+        "WAITING FOR"
+    );
+
+
+    oled.setCursor(
+        3,
+        36
+    );
+
+    oled.print(
+        "COMMAND..."
+    );
+
+
+    oledDrawMechanical(
+        false
+    );
+
+
+    oled.display();
 }
 
 
 // ============================================================
 // OLED TYPING START
+// ============================================================
+//
+// Jawaban disiapkan terlebih dahulu.
+//
+// Belum ditampilkan sebagai jawaban sampai playMP3()
+// masuk dan mulai menjalankan bagian audio.
 // ============================================================
 
 void oledStartTyping(
@@ -367,14 +757,26 @@ void oledStartTyping(
         return;
     }
 
+
     oledAnswer =
         text;
+
 
     oledTypedChars =
         0;
 
+
     oledLastType =
         millis();
+
+
+    oledLastAnim =
+        millis();
+
+
+    oledMechanicalFrame =
+        0;
+
 
     oledTyping =
         true;
@@ -382,12 +784,21 @@ void oledStartTyping(
 
 
 // ============================================================
-// OLED WRAP TEXT
+// OLED DRAW TYPED TEXT
 // ============================================================
 //
-// OLED 128x64.
-// Area jawaban menggunakan 6 baris × 21 karakter.
+// Tidak ada wajah.
+// Tidak ada kotak sudut.
 //
+// Layout:
+//
+// T A R S
+// ------------------------------
+// > SPEAKING
+//
+// > jawaban TARS...
+//
+// mechanical structure
 // ============================================================
 
 void oledDrawTypedText(
@@ -398,21 +809,23 @@ void oledDrawTypedText(
         return;
     }
 
+
     oled.clearDisplay();
 
 
     // --------------------------------------------------------
-    // Mata TARS
+    // Header
     // --------------------------------------------------------
 
-    oledDrawEyes(
-        false,
-        speaking
+    oledHeader(
+        speaking ?
+        "SPEAKING" :
+        "READY"
     );
 
 
     // --------------------------------------------------------
-    // Jawaban
+    // Text
     // --------------------------------------------------------
 
     oled.setTextColor(
@@ -435,10 +848,15 @@ void oledDrawTypedText(
         3;
 
     const int startY =
-        45;
+        23;
 
+    // 20 karakter agar area tetap rapi
     const int maxChars =
-        21;
+        20;
+
+    // Empat baris jawaban
+    const int maxLines =
+        4;
 
 
     int line =
@@ -447,6 +865,28 @@ void oledDrawTypedText(
     int column =
         0;
 
+
+    // --------------------------------------------------------
+    // Prompt
+    // --------------------------------------------------------
+
+    oled.setCursor(
+        startX,
+        startY
+    );
+
+    oled.print(
+        "> "
+    );
+
+
+    column =
+        2;
+
+
+    // --------------------------------------------------------
+    // Render karakter
+    // --------------------------------------------------------
 
     for (
         size_t i = 0;
@@ -459,53 +899,89 @@ void oledDrawTypedText(
 
 
         if (
+            c == '\r'
+        ) {
+            continue;
+        }
+
+
+        // ----------------------------------------------------
+        // New line
+        // ----------------------------------------------------
+
+        if (
             c == '\n'
         ) {
 
             line++;
+
             column =
                 0;
 
+
             if (
-                line >= 2
+                line >= maxLines
             ) {
                 break;
             }
 
+
+            oled.setCursor(
+                startX,
+                startY +
+                line * 9
+            );
+
+
             continue;
         }
 
+
+        // ----------------------------------------------------
+        // Wrap
+        // ----------------------------------------------------
 
         if (
             column >= maxChars
         ) {
 
             line++;
+
             column =
                 0;
 
+
             if (
-                line >= 2
+                line >= maxLines
             ) {
                 break;
             }
+
+
+            oled.setCursor(
+                startX,
+                startY +
+                line * 9
+            );
         }
 
-
-        oled.setCursor(
-            startX +
-            column * 6,
-
-            startY +
-            line * 9
-        );
 
         oled.write(
             c
         );
 
+
         column++;
     }
+
+
+    // --------------------------------------------------------
+    // Mechanical structure
+    // --------------------------------------------------------
+
+    oledDrawMechanical(
+        speaking
+    );
 
 
     oled.display();
@@ -516,8 +992,15 @@ void oledDrawTypedText(
 // OLED TYPING UPDATE
 // ============================================================
 //
-// Dipanggil dari loop audio sehingga typing berjalan
-// bersamaan dengan suara TARS.
+// Dipanggil dari loop audio.
+//
+// Typing:
+// 44 ms / karakter.
+//
+// Mechanical:
+// 80 ms / frame.
+//
+// Saat speaking = true, struktur aktif.
 //
 // ============================================================
 
@@ -530,48 +1013,81 @@ void oledUpdateTyping(
     }
 
 
-    if (!oledTyping) {
-        return;
-    }
-
-
     uint32_t now =
         millis();
 
 
+    bool redraw =
+        false;
+
+
+    // --------------------------------------------------------
+    // Typing
+    // --------------------------------------------------------
+
     if (
+        oledTyping &&
         now -
-        oledLastType <
+        oledLastType >=
         OLED_TYPE_INTERVAL
     ) {
-        return;
+
+        oledLastType =
+            now;
+
+
+        if (
+            oledTypedChars <
+            oledAnswer.length()
+        ) {
+
+            oledTypedChars++;
+
+            redraw =
+                true;
+        }
+
+        else {
+
+            oledTyping =
+                false;
+
+            redraw =
+                true;
+        }
     }
 
 
-    oledLastType =
-        now;
-
-
     // --------------------------------------------------------
-    // Satu karakter per interval.
+    // Mechanical animation
+    //
+    // Hanya saat speaking.
     // --------------------------------------------------------
 
     if (
-        oledTypedChars <
-        oledAnswer.length()
+        speaking &&
+        now -
+        oledLastAnim >=
+        OLED_ANIM_INTERVAL
     ) {
 
-        oledTypedChars++;
+        oledLastAnim =
+            now;
 
-        oledDrawTypedText(
-            speaking
-        );
 
+        oledMechanicalFrame++;
+
+
+        redraw =
+            true;
     }
-    else {
 
-        oledTyping =
-            false;
+
+    // --------------------------------------------------------
+    // Redraw
+    // --------------------------------------------------------
+
+    if (redraw) {
 
         oledDrawTypedText(
             speaking
@@ -660,15 +1176,6 @@ static const float PCM_GAIN =
 
 // ============================================================
 // A2DP TAIL
-// ============================================================
-//
-// PCM EMPTY tidak berarti Bluetooth sudah selesai
-// mengirim audio.
-//
-// I7-TWS/A2DP masih bisa memiliki data audio internal.
-//
-// Beri waktu tambahan sebelum disconnect.
-//
 // ============================================================
 
 static const uint32_t A2DP_TAIL_MS =
@@ -918,6 +1425,7 @@ public:
             len >
             freeBytes
         ) {
+
             len =
                 freeBytes;
         }
@@ -933,6 +1441,7 @@ public:
                 first >
                 len
             ) {
+
                 first =
                     len;
             }
@@ -1013,6 +1522,7 @@ public:
             len >
             used
         ) {
+
             len =
                 used;
         }
@@ -1028,6 +1538,7 @@ public:
                 first >
                 len
             ) {
+
                 first =
                     len;
             }
@@ -1115,6 +1626,7 @@ private:
             value >
             32767
         ) {
+
             value =
                 32767;
         }
@@ -1124,6 +1636,7 @@ private:
             value <
             -32768
         ) {
+
             value =
                 -32768;
         }
@@ -1131,7 +1644,7 @@ private:
 
         return (
             int16_t)value
-            ;
+        ;
     }
 
 
@@ -1184,6 +1697,7 @@ public:
                 inputCapacity >
                 512
             ) {
+
                 inputCapacity =
                     512;
             }
@@ -1211,6 +1725,7 @@ public:
             !data ||
             size == 0
         ) {
+
             return 0;
         }
 
@@ -1263,6 +1778,7 @@ public:
                 samples >
                 maxSamples
             ) {
+
                 samples =
                     maxSamples;
             }
@@ -1271,6 +1787,7 @@ public:
             if (
                 samples == 0
             ) {
+
                 break;
             }
 
@@ -1287,11 +1804,6 @@ public:
                 pcmRing.freeSpace() <
                 requiredOutput
             ) {
-
-                // ------------------------------------------------
-                // Sambil menunggu ring kosong,
-                // OLED typing tetap berjalan.
-                // ------------------------------------------------
 
                 oledUpdateTyping(
                     true
@@ -1355,7 +1867,6 @@ public:
                     outSampleIndex++
                 ] =
                     sample;
-
 
                 outputSamples[
                     outSampleIndex++
@@ -1433,6 +1944,7 @@ bool connectWiFi(
         ) {
 
         }
+
         else {
 
             return true;
@@ -1684,6 +2196,7 @@ String askAI(
     if (
         !connectWiFi(true)
     ) {
+
         return "";
     }
 
@@ -1691,6 +2204,7 @@ String askAI(
     if (
         !ensureTimeValid()
     ) {
+
         return "";
     }
 
@@ -1832,6 +2346,7 @@ bool downloadTTS(
     if (
         !connectWiFi(true)
     ) {
+
         return false;
     }
 
@@ -1839,6 +2354,7 @@ bool downloadTTS(
     if (
         !ensureTimeValid()
     ) {
+
         return false;
     }
 
@@ -2003,6 +2519,7 @@ bool downloadTTS(
                 readSize >
                 sizeof(buffer)
             ) {
+
                 readSize =
                     sizeof(buffer);
             }
@@ -2042,6 +2559,7 @@ bool downloadTTS(
                 }
             }
         }
+
         else {
 
             if (
@@ -2091,6 +2609,7 @@ int32_t getAudioData(
         !data ||
         len <= 0
     ) {
+
         return 0;
     }
 
@@ -2156,6 +2675,7 @@ void onBTConnectionState(
             "TARS: A2DP CONNECTED"
         );
     }
+
     else {
 
         btConnected =
@@ -2194,6 +2714,7 @@ void onBTAudioState(
             "TARS: A2DP AUDIO STARTED"
         );
     }
+
     else {
 
         btAudioStarted =
@@ -2557,7 +3078,7 @@ bool playMP3() {
 
     // --------------------------------------------------------
     // Audio mulai.
-    // OLED typing dimulai bersamaan dengan playback.
+    // OLED jawaban mulai ditampilkan saat playback.
     // --------------------------------------------------------
 
     oledDrawTypedText(
@@ -2574,10 +3095,6 @@ bool playMP3() {
         playStart <
         PLAY_TIMEOUT_MS
     ) {
-
-        // ----------------------------------------------------
-        // OLED typing berjalan bersamaan dengan audio.
-        // ----------------------------------------------------
 
         oledUpdateTyping(
             true
@@ -2692,6 +3209,7 @@ bool playMP3() {
 
             delay(2);
         }
+
         else {
 
             yield();
@@ -2748,6 +3266,7 @@ bool playMP3() {
             (unsigned)pcmRing.available()
         );
     }
+
     else {
 
         Serial.println(
@@ -2758,12 +3277,6 @@ bool playMP3() {
 
     // --------------------------------------------------------
     // A2DP FINAL TAIL
-    //
-    // INI YANG MEMPERBAIKI SUARA TERPOTONG.
-    //
-    // Jangan disconnect tepat saat PCM ring kosong.
-    //
-    // Tunggu A2DP menghabiskan data internalnya.
     // --------------------------------------------------------
 
     Serial.printf(
@@ -2794,23 +3307,13 @@ bool playMP3() {
         delay(10);
 
 
-        // ----------------------------------------------------
-        // Pastikan Bluetooth masih hidup.
-        // ----------------------------------------------------
-
         if (
             !btConnected
         ) {
+
             break;
         }
 
-
-        // ----------------------------------------------------
-        // Reset timer jika callback masih aktif.
-        //
-        // Ini mencegah kita memutus terlalu cepat ketika
-        // callback A2DP masih benar-benar berjalan.
-        // ----------------------------------------------------
 
         if (
             btCallbackCalls !=
@@ -2830,7 +3333,7 @@ bool playMP3() {
 
 
     // --------------------------------------------------------
-    // Baru sekarang Bluetooth dimatikan.
+    // Bluetooth OFF
     // --------------------------------------------------------
 
     stopBluetooth();
@@ -2857,7 +3360,7 @@ bool playMP3() {
 
 
     // --------------------------------------------------------
-    // Pastikan seluruh teks sudah selesai.
+    // Pastikan typing selesai.
     // --------------------------------------------------------
 
     while (
@@ -2867,6 +3370,7 @@ bool playMP3() {
         oledUpdateTyping(
             false
         );
+
 
         delay(5);
     }
@@ -2895,6 +3399,7 @@ void handleQuestion(
     if (
         question.length() == 0
     ) {
+
         return;
     }
 
@@ -2916,16 +3421,8 @@ void handleQuestion(
     );
 
 
-    // --------------------------------------------------------
-    // OLED LISTENING
-    // --------------------------------------------------------
-
     oledShowListening();
 
-
-    // --------------------------------------------------------
-    // WiFi
-    // --------------------------------------------------------
 
     if (
         !connectWiFi(true)
@@ -2942,10 +3439,6 @@ void handleQuestion(
         return;
     }
 
-
-    // --------------------------------------------------------
-    // AI
-    // --------------------------------------------------------
 
     String answer =
         askAI(
@@ -2969,21 +3462,10 @@ void handleQuestion(
     }
 
 
-    // --------------------------------------------------------
-    // Siapkan teks untuk typing.
-    //
-    // Belum ditampilkan penuh.
-    // Akan berjalan ketika audio dimulai.
-    // --------------------------------------------------------
-
     oledStartTyping(
         answer
     );
 
-
-    // --------------------------------------------------------
-    // TTS
-    // --------------------------------------------------------
 
     if (
         !downloadTTS(
@@ -3003,23 +3485,11 @@ void handleQuestion(
     }
 
 
-    // --------------------------------------------------------
-    // WiFi OFF sebelum Bluetooth.
-    // --------------------------------------------------------
-
     disconnectWiFi();
 
 
-    // --------------------------------------------------------
-    // PLAY
-    // --------------------------------------------------------
-
     playMP3();
 
-
-    // --------------------------------------------------------
-    // WiFi ON kembali.
-    // --------------------------------------------------------
 
     if (
         connectWiFi(false)
@@ -3113,11 +3583,7 @@ void setup() {
             true;
 
 
-        oledShowFace(
-            "ONLINE",
-            false,
-            false
-        );
+        oledShowOnline();
     }
 
 
@@ -3251,6 +3717,20 @@ void setup() {
 // ============================================================
 
 void loop() {
+
+    // --------------------------------------------------------
+    // UPDATE ANIMASI OLED MODE NORMAL
+    // --------------------------------------------------------
+    //
+    // Ini yang membuat struktur READY terus hidup:
+    //
+    // --___--__---___--__--
+    //
+    // tanpa perlu ada perintah dari user.
+    // --------------------------------------------------------
+
+    oledUpdateReadyAnimation();
+
 
     if (
         Serial.available()
