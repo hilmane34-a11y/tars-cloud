@@ -570,7 +570,7 @@ static const size_t PCM_OUTPUT_CHUNK =
     1024;
 
 static const float PCM_GAIN =
-    3.5f;
+    3.0f;
 
 // ============================================================
 // A2DP TAIL
@@ -2007,7 +2007,9 @@ bool startBluetooth() {
     // Reset OLED audio synchronization
     a2dpFirstAudioCallback = false;
     a2dpFirstAudioMillis = 0;
-    oledAudioSyncPending = false;
+
+    // JANGAN reset oledAudioSyncPending di sini.
+    // oledPrepareTyping() sudah mengaturnya menjadi true.
 
     printHeap(
         "BEFORE_BT"
@@ -2029,7 +2031,7 @@ bool startBluetooth() {
         BT_TIMEOUT_MS
     ) {
 
-        delay(50);
+        delay(20);
     }
 
     if (
@@ -2057,11 +2059,15 @@ bool startBluetooth() {
         btConnected ? 1 : 0
     );
 
+    // ========================================================
+    // LANGSUNG SIAP PLAYBACK
+    // Tidak ada delay tambahan.
+    // Tidak menunggu btAudioStarted.
+    // ========================================================
     Serial.println(
-        "TARS: Bluetooth READY"
+        "TARS: Bluetooth READY - PLAY NOW"
     );
 
-    // Tidak ada delay(300).
     printHeap(
         "BT_READY"
     );
@@ -2333,31 +2339,12 @@ bool playMP3() {
         false;
 
     // ========================================================
-    // WAIT FOR A2DP AUDIO START
+    // TIDAK ADA WAIT A2DP AUDIO START
     // ========================================================
-    uint32_t audioWaitStart =
-        millis();
-
-    while (
-        !btAudioStarted &&
-        btConnected &&
-        millis() -
-            audioWaitStart <
-        5000
-    ) {
-
-        // Jangan mulai OLED sebelum audio benar-benar aktif.
-        delay(5);
-    }
-
-    if (
-        btAudioStarted
-    ) {
-
-        Serial.println(
-            "TARS: A2DP AUDIO PIPELINE ACTIVE"
-        );
-    }
+    // Setelah btConnected, decoder langsung berjalan.
+    // A2DP callback akan mengambil PCM begitu PCM tersedia.
+    // OLED tetap menunggu FIRST REAL AUDIO CALLBACK.
+    // ========================================================
 
     // ========================================================
     // MAIN AUDIO LOOP
