@@ -753,12 +753,17 @@ bool startBluetooth() {
     printHeap("BEFORE_BT");
 
     a2dpSource->start(BT_DEVICE_NAME);
-    Serial.printf("a2dpSource->start returned=%d\n", ok ? 1 : 0);
 
-    uint32_t start = millis();
-    while (!btConnected && millis() - start < BT_TIMEOUT_MS) {
-        delay(100);
-    }
+uint32_t startWait = millis();
+
+while (!btConnected && millis() - startWait < BT_TIMEOUT_MS) {
+    delay(100);
+}
+
+if (!btConnected) {
+    Serial.println("TARS: A2DP CONNECT TIMEOUT");
+    return false;
+}
     Serial.printf("btConnected after wait = %d\n", btConnected ? 1 : 0);
 
     if (!btConnected) {
