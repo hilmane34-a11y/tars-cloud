@@ -935,26 +935,21 @@ static const char *BT_DEVICE_NAME =
     "I7-TWS";
 
 /*
- * SATU OBJECT SELAMA ESP32 HIDUP.
+ * Object hanya dibuat sekali selama satu boot.
  *
- * Jangan:
+ * Setelah audio selesai:
+ *
  *   end(true)
- *   delete
- *   new object setiap playback
+ *       ↓
+ *   Classic BT memory dilepas
+ *       ↓
+ *   ESP.restart()
  *
- * Kita memakai:
- *   start()
- *   ...
- *   end(false)
- *   ...
- *   start() lagi
+ * Setelah reboot object dibuat kembali dari awal.
  */
 
 BluetoothA2DPSource *a2dpSource =
     nullptr;
-
-static const uint32_t BT_DISCONNECT_TIMEOUT_MS =
-    5000;
 
 
 // ============================================================
@@ -966,9 +961,6 @@ volatile bool btConnected =
 
 volatile bool btAudioStarted =
     false;
-
-volatile bool btDisconnectComplete =
-    true;
 
 volatile bool playbackRunning =
     false;
@@ -1623,6 +1615,7 @@ bool connectWiFi(
             !ntpSynced
         ) {
 
+            // lanjut ke pengecekan waktu
         }
         else {
 
@@ -1721,6 +1714,26 @@ bool isTimeValid() {
 
 bool syncNTP() {
 
+    // ========================================================
+    // PENTING:
+    // Kalau waktu sudah valid sejak pengecekan pertama,
+    // langsung selesai. Tidak ada attempt 2, 3, dst.
+    // ========================================================
+
+    if (
+        isTimeValid()
+    ) {
+
+        ntpSynced =
+            true;
+
+        Serial.println(
+            "TARS: NTP ALREADY VALID"
+        );
+
+        return true;
+    }
+
     Serial.println(
         "TARS: TIME INVALID - NTP REQUIRED"
     );
@@ -1743,10 +1756,9 @@ bool syncNTP() {
         0;
 
     while (
-        !isTimeValid() &&
-
-        millis() - start <
-            NTP_TIMEOUT_MS
+        millis() -
+        start <
+        NTP_TIMEOUT_MS
     ) {
 
         attempt++;
@@ -1757,52 +1769,57 @@ bool syncNTP() {
         );
 
         delay(1000);
+
+        // ====================================================
+        // Begitu waktu valid langsung keluar.
+        // Tidak meneruskan attempt berikutnya.
+        // ====================================================
+
+        if (
+            isTimeValid()
+        ) {
+
+            time_t now =
+                time(nullptr);
+
+            struct tm timeInfo;
+
+            localtime_r(
+                &now,
+                &timeInfo
+            );
+
+            Serial.printf(
+                "TARS: NTP OK %04d-%02d-%02d %02d:%02d:%02d\n",
+
+                timeInfo.tm_year + 1900,
+
+                timeInfo.tm_mon + 1,
+
+                timeInfo.tm_mday,
+
+                timeInfo.tm_hour,
+
+                timeInfo.tm_min,
+
+                timeInfo.tm_sec
+            );
+
+            ntpSynced =
+                true;
+
+            return true;
+        }
     }
 
-    if (
-        !isTimeValid()
-    ) {
-
-        Serial.println(
-            "TARS: NTP FAILED"
-        );
-
-        ntpSynced =
-            false;
-
-        return false;
-    }
-
-    time_t now =
-        time(nullptr);
-
-    struct tm timeInfo;
-
-    localtime_r(
-        &now,
-        &timeInfo
-    );
-
-    Serial.printf(
-        "TARS: NTP OK %04d-%02d-%02d %02d:%02d:%02d\n",
-
-        timeInfo.tm_year + 1900,
-
-        timeInfo.tm_mon + 1,
-
-        timeInfo.tm_mday,
-
-        timeInfo.tm_hour,
-
-        timeInfo.tm_min,
-
-        timeInfo.tm_sec
+    Serial.println(
+        "TARS: NTP FAILED"
     );
 
     ntpSynced =
-        true;
+        false;
 
-    return true;
+    return false;
 }
 
 
@@ -1854,170 +1871,110 @@ String askAI(
 
     String answer = "";
 
-    for (
-        int attempt = 1;
-        attempt <= 2;
-        attempt++
-    ) {
-
-        Serial.printf(
-            "TARS: POST /ask attempt %d\n",
-            attempt
-        );
-
-        WiFiClientSecure client;
-
-        client.setInsecure();
-
-        HTTPClient http;
-
-        http.setConnectTimeout(
-            10000
-        );
-
-        http.setTimeout(
-            15000
-        );
-
-        if (
-            !http.begin(
-                client,
-                ASK_URL
-            )
-        ) {
-
-            Serial.println(
-                "ASK HTTP: begin FAILED"
-            );
-
-        }
-        else {
-
-            http.addHeader(
-                "Content-Type",
-                "application/json"
-            );
-
-            JsonDocument request;
-
-            request["text"] =
-                question;
-
-            String body;
-
-            serializeJson(
-                request,
-                body
-            );
-
-            int httpCode =
-                http.POST(
-                    body
-                );
-
-            Serial.printf(
-                "ASK HTTP: %d\n",
-                httpCode
-            );
-
-            if (
-                httpCode >= 200 &&
-                httpCode < 300
-            ) {
-
-                String response =
-                    http.getString();
-
-                http.end();
-
-                JsonDocument json;
-
-                DeserializationError error =
-                    deserializeJson(
-                        json,
-                        response
-                    );
-
-                if (error) {
-
-                    Serial.println(
-                        "TARS: JSON ERROR"
-                    );
-
-                    return "";
-                }
-
-                answer =
-                    json["response"] |
-                    "";
-
-                Serial.println(
-                    "TARS RESPONSE:"
-                );
-
-                Serial.println(
-                    answer
-                );
-
-                return answer;
-            }
-
-            http.end();
-        }
-
-        /*
-         * HTTP -1 biasanya berarti koneksi transport/TLS
-         * gagal sebelum mendapat HTTP response.
-         *
-         * Hanya lakukan recovery pada percobaan pertama.
-         */
-        if (
-            attempt == 1
-        ) {
-
-            Serial.println(
-                "TARS: HTTPS FAILED - WIFI RECOVERY"
-            );
-
-            disconnectWiFi();
-
-            delay(500);
-
-            if (
-                !connectWiFi(false)
-            ) {
-
-                Serial.println(
-                    "TARS: WIFI RECOVERY FAILED"
-                );
-
-                return "";
-            }
-
-            delay(500);
-
-            if (
-                !ensureTimeValid()
-            ) {
-
-                Serial.println(
-                    "TARS: NTP RECOVERY FAILED"
-                );
-
-                return "";
-            }
-
-            Serial.println(
-                "TARS: HTTPS RETRY"
-            );
-        }
-    }
-
     Serial.println(
-        "TARS: ASK FAILED AFTER RETRY"
+        "TARS: POST /ask"
     );
 
-    return "";
+    WiFiClientSecure client;
+
+    client.setInsecure();
+
+    HTTPClient http;
+
+    http.setConnectTimeout(
+        10000
+    );
+
+    http.setTimeout(
+        15000
+    );
+
+    if (
+        !http.begin(
+            client,
+            ASK_URL
+        )
+    ) {
+
+        Serial.println(
+            "ASK HTTP: begin FAILED"
+        );
+
+        return "";
+    }
+
+    http.addHeader(
+        "Content-Type",
+        "application/json"
+    );
+
+    JsonDocument request;
+
+    request["text"] =
+        question;
+
+    String body;
+
+    serializeJson(
+        request,
+        body
+    );
+
+    int httpCode =
+        http.POST(
+            body
+        );
+
+    Serial.printf(
+        "ASK HTTP: %d\n",
+        httpCode
+    );
+
+    if (
+        httpCode < 200 ||
+        httpCode >= 300
+    ) {
+
+        http.end();
+
+        return "";
+    }
+
+    String response =
+        http.getString();
+
+    http.end();
+
+    JsonDocument json;
+
+    DeserializationError error =
+        deserializeJson(
+            json,
+            response
+        );
+
+    if (error) {
+
+        Serial.println(
+            "TARS: JSON ERROR"
+        );
+
+        return "";
+    }
+
+    answer =
+        json["response"] |
+        "";
+
+    Serial.println(
+        "TARS RESPONSE:"
+    );
+
+    Serial.println(
+        answer
+    );
+
+    return answer;
 }
 
 
@@ -2318,9 +2275,6 @@ void onBTConnectionState(
         btConnected =
             true;
 
-        btDisconnectComplete =
-            false;
-
         Serial.println(
             "TARS: A2DP CONNECTED"
         );
@@ -2337,11 +2291,8 @@ void onBTConnectionState(
         btAudioStarted =
             false;
 
-        btDisconnectComplete =
-            true;
-
         Serial.println(
-            "TARS: A2DP DISCONNECTED - LIFECYCLE COMPLETE"
+            "TARS: A2DP DISCONNECTED"
         );
 
     }
@@ -2488,9 +2439,6 @@ bool startBluetooth() {
     btAudioStarted =
         false;
 
-    btDisconnectComplete =
-        false;
-
     btCallbackCalls =
         0;
 
@@ -2533,12 +2481,11 @@ bool startBluetooth() {
         );
 
         /*
-         * Jangan end(true).
-         * Jangan delete object.
-         *
-         * Controller memory tetap dipertahankan
-         * agar sesi berikutnya dapat start kembali.
+         * Pada kegagalan koneksi kita hanya menghentikan
+         * A2DP. Jangan end(true), karena sesi ini belum
+         * selesai dan ESP tidak perlu restart di sini.
          */
+
         a2dpSource->end(
             false
         );
@@ -2548,9 +2495,6 @@ bool startBluetooth() {
 
         btAudioStarted =
             false;
-
-        btDisconnectComplete =
-            true;
 
         return false;
     }
@@ -2570,10 +2514,10 @@ bool startBluetooth() {
 
 
 // ============================================================
-// STOP BLUETOOTH
+// STOP BLUETOOTH + FULL MEMORY RELEASE + RESTART
 // ============================================================
 
-void stopBluetooth() {
+void stopBluetoothAndRestart() {
 
     Serial.println(
         "TARS: Bluetooth STOP"
@@ -2583,14 +2527,19 @@ void stopBluetooth() {
         a2dpSource == nullptr
     ) {
 
-        btConnected =
-            false;
+        Serial.println(
+            "TARS: A2DP OBJECT NULL"
+        );
 
-        btAudioStarted =
-            false;
+        delay(200);
 
-        btDisconnectComplete =
-            true;
+        Serial.println(
+            "TARS: ESP RESTART"
+        );
+
+        delay(300);
+
+        ESP.restart();
 
         return;
     }
@@ -2598,73 +2547,27 @@ void stopBluetooth() {
     btAudioStarted =
         false;
 
-    btDisconnectComplete =
-        false;
-
     Serial.println(
-        "TARS: BT END(FALSE)"
+        "TARS: BT END(TRUE)"
     );
 
     /*
-     * end(false):
+     * TRUE:
      *
-     * - disconnect A2DP
-     * - shutdown A2DP
-     * - shutdown app task
-     * - TIDAK release Classic BT memory
+     * Bluetooth controller memory dilepas.
      *
-     * Object tetap hidup untuk sesi berikutnya.
+     * Karena setelah end(true) library tidak dirancang
+     * untuk start kembali pada object yang sama, kita
+     * TIDAK melakukan start lagi pada object ini.
+     *
+     * ESP32 langsung reboot.
      */
+
     a2dpSource->end(
-        false
+        true
     );
 
-    /*
-     * Tunggu callback DISCONNECTED yang sebenarnya.
-     */
-    uint32_t waitStart =
-        millis();
-
-    while (
-        !btDisconnectComplete &&
-
-        millis() -
-        waitStart <
-            BT_DISCONNECT_TIMEOUT_MS
-    ) {
-
-        delay(10);
-
-        yield();
-    }
-
-    if (
-        btDisconnectComplete
-    ) {
-
-        Serial.println(
-            "TARS: BT DISCONNECTED CONFIRMED"
-        );
-
-    }
-    else {
-
-        Serial.println(
-            "TARS: BT DISCONNECT WAIT TIMEOUT"
-        );
-    }
-
-    btConnected =
-        false;
-
-    btAudioStarted =
-        false;
-
-    /*
-     * Kesempatan terakhir untuk event/task
-     * selesai sebelum WiFi dinyalakan kembali.
-     */
-    delay(100);
+    delay(500);
 
     Serial.printf(
         "TARS: A2DP callbacks = %u\n",
@@ -2672,8 +2575,22 @@ void stopBluetooth() {
     );
 
     printHeap(
-        "AFTER_BT_STOP"
+        "AFTER_BT_END_TRUE"
     );
+
+    Serial.println(
+        "TARS: BLUETOOTH MEMORY RELEASED"
+    );
+
+    Serial.println(
+        "TARS: ESP RESTART"
+    );
+
+    delay(500);
+
+    ESP.restart();
+
+    delay(1000);
 }
 
 
@@ -2834,7 +2751,14 @@ bool playMP3() {
 
         mp3File.close();
 
-        stopBluetooth();
+        /*
+         * Decoder gagal sebelum playback normal selesai.
+         * Tidak melakukan full BT memory release di sini.
+         */
+
+        a2dpSource->end(
+            false
+        );
 
         playbackRunning =
             false;
@@ -3079,9 +3003,6 @@ bool playMP3() {
     uint32_t tailStart =
         millis();
 
-    uint32_t lastCallback =
-        btCallbackCalls;
-
     while (
         millis() -
         tailStart <
@@ -3099,15 +3020,6 @@ bool playMP3() {
         ) {
             break;
         }
-
-        if (
-            btCallbackCalls !=
-            lastCallback
-        ) {
-
-            lastCallback =
-                btCallbackCalls;
-        }
     }
 
     Serial.printf(
@@ -3117,62 +3029,31 @@ bool playMP3() {
 
 
     // --------------------------------------------------------
-    // BLUETOOTH STOP
+    // FULL BLUETOOTH RELEASE
     // --------------------------------------------------------
 
-    stopBluetooth();
+    /*
+     * Ini adalah titik akhir sesi.
+     *
+     * Tidak ada:
+     *
+     *   end(false)
+     *   delete
+     *   new
+     *   WiFi ON
+     *
+     * Setelah end(true), ESP32 reboot.
+     */
+
+    stopBluetoothAndRestart();
 
 
     // --------------------------------------------------------
-    // AUDIO SESSION CLEANUP
+    // Tidak seharusnya sampai sini karena ESP.restart().
     // --------------------------------------------------------
-
-    cleanupAudioSession();
-
 
     playbackRunning =
         false;
-
-
-    if (
-        !decoderFinished
-    ) {
-
-        Serial.println(
-            "TARS: PLAYBACK TIMEOUT"
-        );
-
-        oledShowReady();
-
-        return false;
-    }
-
-
-    // --------------------------------------------------------
-    // Pastikan seluruh teks selesai.
-    // --------------------------------------------------------
-
-    while (
-        oledTyping
-    ) {
-
-        oledUpdateTyping(
-            false
-        );
-
-        delay(5);
-    }
-
-
-    oledShowReady();
-
-    Serial.println(
-        "TARS: PLAY DONE"
-    );
-
-    printHeap(
-        "PLAY_DONE"
-    );
 
     return true;
 }
@@ -3260,7 +3141,27 @@ void handleQuestion(
 
     disconnectWiFi();
 
+    /*
+     * playMP3() akan:
+     *
+     * 1. Start BT
+     * 2. Play MP3
+     * 3. Drain PCM
+     * 4. Tail 1000 ms
+     * 5. end(true)
+     * 6. ESP.restart()
+     *
+     * Jadi program tidak akan kembali ke sini
+     * setelah playback normal selesai.
+     */
+
     playMP3();
+
+
+    /*
+     * Hanya tercapai jika playback gagal sebelum
+     * restart.
+     */
 
     if (
         connectWiFi(false)
@@ -3393,7 +3294,7 @@ void setup() {
     );
 
     Serial.println(
-        "A2DP : PERSISTENT OBJECT / END(FALSE)"
+        "A2DP : END(TRUE) / ESP RESTART"
     );
 
     printHeap(
