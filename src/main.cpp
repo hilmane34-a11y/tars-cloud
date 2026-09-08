@@ -2,6 +2,7 @@
 // Optimized Bluetooth heap + lazy audio allocation
 // BT failure -> ESP32 REBOOT
 // PLAY DONE -> ESP32 REBOOT
+// OLED typing synchronized to first A2DP audio callback
 
 #include <Arduino.h>
 #include <WiFi.h>
@@ -48,6 +49,21 @@ static size_t oledTypedChars = 0;
 static uint32_t oledLastType = 0;
 static const uint32_t OLED_TYPE_INTERVAL = 44;
 static bool oledTyping = false;
+
+// ============================================================
+// OLED AUDIO SYNC
+// ============================================================
+// OLED TIDAK mulai ketika jawaban diterima.
+// OLED baru mulai setelah A2DP meminta data audio pertama.
+//
+// Delay kecil 50 ms membuat teks lebih dekat dengan suara
+// yang benar-benar mulai terdengar dari speaker.
+// ============================================================
+volatile bool a2dpFirstAudioCallback = false;
+volatile uint32_t a2dpFirstAudioMillis = 0;
+
+static bool oledAudioSyncPending = false;
+static const uint32_t OLED_AUDIO_SYNC_DELAY_MS = 50;
 
 // ============================================================
 // OLED MECHANICAL ANIMATION
@@ -304,7 +320,15 @@ void oledUpdateReadyAnimation() {
     oled.display();
 }
 
-void oledStartTyping(
+// ============================================================
+// PREPARE OLED ANSWER
+// ============================================================
+// Hanya menyiapkan teks.
+// TIDAK memulai typing.
+//
+// Typing baru dimulai setelah callback audio A2DP pertama.
+// ============================================================
+void oledPrepareTyping(
     const String &text
 ) {
     if (!oledReadyFlag) return;
@@ -313,7 +337,22 @@ void oledStartTyping(
     oledTypedChars = 0;
     oledLastType = millis();
     oledMechanicalFrame = 0;
+    oledTyping = false;
+    oledAudioSyncPending = true;
+}
+
+void oledStartTypingNow() {
+    if (!oledReadyFlag) return;
+
+    oledTypedChars = 0;
+    oledLastType = millis();
+    oledMechanicalFrame = 0;
     oledTyping = true;
+    oledAudioSyncPending = false;
+
+    Serial.println(
+        "TARS: OLED TYPING START - AUDIO SYNC"
+    );
 }
 
 void oledDrawTypedText(
@@ -413,6 +452,30 @@ void oledUpdateTyping(
 
     uint32_t now = millis();
 
+    // ========================================================
+    // AUDIO -> OLED SYNCHRONIZATION
+    // ========================================================
+    if (
+        oledAudioSyncPending &&
+        a2dpFirstAudioCallback
+    ) {
+
+        uint32_t audioStart =
+            a2dpFirstAudioMillis;
+
+        if (
+            now - audioStart >=
+            OLED_AUDIO_SYNC_DELAY_MS
+        ) {
+
+            oledStartTypingNow();
+
+            oledDrawTypedText(
+                true
+            );
+        }
+    }
+
     bool redraw = false;
 
     if (
@@ -481,8 +544,15 @@ static const uint32_t WIFI_TIMEOUT_MS =
 static const uint32_t NTP_TIMEOUT_MS =
     15000;
 
+// ============================================================
+// BLUETOOTH CONNECTION TIMEOUT
+// ============================================================
+// Ini BUKAN delay koneksi.
+// ESP32 langsung mencoba connect.
+// 2000 ms hanya batas maksimum menunggu.
+// ============================================================
 static const uint32_t BT_TIMEOUT_MS =
-    20000;
+    2000;
 
 static const uint32_t PLAY_TIMEOUT_MS =
     120000;
@@ -515,7 +585,7 @@ static const size_t PCM_OUTPUT_CHUNK =
     1024;
 
 static const float PCM_GAIN =
-    3.0f;
+    3.5f;
 
 // ============================================================
 // A2DP TAIL
@@ -1663,6 +1733,21 @@ int32_t getAudioData(
 
     btCallbackCalls++;
 
+    // ========================================================
+    // CATAT CALLBACK AUDIO PERTAMA
+    // ========================================================
+    if (
+        !a2dpFirstAudioCallback
+    ) {
+
+        a2dpFirstAudioCallback = true;
+        a2dpFirstAudioMillis = millis();
+
+        Serial.println(
+            "TARS: A2DP FIRST AUDIO CALLBACK"
+        );
+    }
+
     size_t got =
         pcmRing.read(
             data,
@@ -1918,11 +2003,17 @@ bool startBluetooth() {
     btAudioStarted = false;
     btCallbackCalls = 0;
 
+    // Reset OLED audio synchronization
+    a2dpFirstAudioCallback = false;
+    a2dpFirstAudioMillis = 0;
+    oledAudioSyncPending = false;
+
     printHeap(
         "BEFORE_BT"
     );
 
     // ESP32-A2DP 1.8.11 start() returns void.
+    // Connection attempt starts immediately.
     a2dpSource->start(
         BT_DEVICE_NAME
     );
@@ -1936,7 +2027,7 @@ bool startBluetooth() {
         BT_TIMEOUT_MS
     ) {
 
-        delay(100);
+        delay(50);
     }
 
     if (
@@ -1951,12 +2042,7 @@ bool startBluetooth() {
             "BT_FAILED"
         );
 
-        // ====================================================
-        // IMPORTANT:
-        // DO NOT call end(false) while still in CONNECTING.
-        // ESP32-A2DP can crash during incomplete shutdown.
-        // The board will reboot immediately instead.
-        // ====================================================
+        // Do NOT call end(false) while connecting/disconnecting.
         rebootTARS(
             "BT CONNECTION FAILED"
         );
@@ -1973,8 +2059,8 @@ bool startBluetooth() {
         "TARS: Bluetooth READY"
     );
 
-    delay(300);
-
+    // Tidak perlu delay(300).
+    // Bluetooth sudah Connected, langsung lanjut ke Helix.
     printHeap(
         "BT_READY"
     );
@@ -1987,14 +2073,8 @@ bool startBluetooth() {
 // ============================================================
 void releaseBluetooth() {
 
-    // ========================================================
-    // NO end(false) HERE.
-    //
-    // TARS always reboots after successful playback.
-    // Avoiding A2DP shutdown prevents the lifecycle crash
-    // observed during previous sessions.
-    // ========================================================
-
+    // No end(false).
+    // ESP32 akan reboot setelah playback.
     btAudioStarted = false;
     btConnected = false;
 
@@ -2029,9 +2109,6 @@ void cleanupAudioSession() {
     Serial.println(
         "TARS: AUDIO CLEANUP"
     );
-
-    // mp3Stream.end() is already called after decoding.
-    // Calling it again is intentionally avoided here.
 
     pcmRing.end();
 
@@ -2159,8 +2236,6 @@ bool playMP3() {
         !startBluetooth()
     ) {
 
-        // Normally unreachable because startBluetooth()
-        // reboots on connection timeout.
         Serial.println(
             "TARS: BT FAILED - AUDIO ABORT"
         );
@@ -2256,14 +2331,20 @@ bool playMP3() {
     bool decoderFinished =
         false;
 
-    uint32_t oledAudioWaitStart =
+    // ========================================================
+    // WAIT FOR A2DP AUDIO START
+    // ========================================================
+    // Tidak memulai OLED di sini.
+    // Kita hanya menunggu sampai A2DP mulai meminta audio.
+    // ========================================================
+    uint32_t audioWaitStart =
         millis();
 
     while (
         !btAudioStarted &&
         btConnected &&
         millis() -
-            oledAudioWaitStart <
+            audioWaitStart <
         5000
     ) {
 
@@ -2277,8 +2358,9 @@ bool playMP3() {
     if (
         btAudioStarted
     ) {
-        oledDrawTypedText(
-            true
+
+        Serial.println(
+            "TARS: A2DP AUDIO PIPELINE ACTIVE"
         );
     }
 
@@ -2290,6 +2372,8 @@ bool playMP3() {
         PLAY_TIMEOUT_MS
     ) {
 
+        // Di sini OLED akan otomatis mulai
+        // 50 ms setelah callback audio pertama.
         oledUpdateTyping(
             true
         );
@@ -2598,7 +2682,12 @@ void handleQuestion(
         return;
     }
 
-    oledStartTyping(
+    // ========================================================
+    // PENTING:
+    // HANYA SIAPKAN TEKS.
+    // JANGAN MULAI TYPING DI SINI.
+    // ========================================================
+    oledPrepareTyping(
         answer
     );
 
@@ -2625,11 +2714,11 @@ void handleQuestion(
     // ========================================================
     // PLAYBACK
     // ========================================================
-    // playMP3() will reboot after successful playback.
+    // OLED akan mulai otomatis setelah callback
+    // audio A2DP pertama.
     playMP3();
 
-    // No WiFi restart here.
-    // ESP32 restarts after playback.
+    // ESP32 reboot setelah playback.
 }
 
 // ============================================================
@@ -2732,6 +2821,14 @@ void setup() {
 
     Serial.println(
         "A2DP : STANDBY AT BOOT"
+    );
+
+    Serial.println(
+        "BT   : CONNECT TIMEOUT 2 SEC"
+    );
+
+    Serial.println(
+        "OLED : AUDIO SYNC 50 MS"
     );
 
     printHeap(
