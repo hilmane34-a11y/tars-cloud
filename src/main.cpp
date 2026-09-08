@@ -861,6 +861,17 @@ static const uint32_t PLAY_TIMEOUT_MS =
 
 
 // ============================================================
+// WIFI STABILIZATION
+// ============================================================
+
+static const uint32_t WIFI_SETTLE_MS =
+    1000;
+
+static const uint32_t WIFI_OFF_SETTLE_MS =
+    500;
+
+
+// ============================================================
 // AUDIO
 // ============================================================
 
@@ -913,15 +924,15 @@ static const char *BT_DEVICE_NAME =
     "I7-TWS";
 
 /*
- * A2DP object dibuat sekali dan digunakan kembali.
+ * Object A2DP dibuat SATU KALI.
  *
- * JANGAN:
+ * Jangan:
  *   end(true)
  *   delete a2dpSource
+ *   new object setiap pertanyaan
  *
- * end(false) digunakan agar A2DP berhenti/deinit,
- * tetapi controller Bluetooth tetap dapat digunakan
- * untuk sesi berikutnya.
+ * end(false) digunakan supaya object
+ * dapat dipakai kembali pada sesi berikutnya.
  */
 
 BluetoothA2DPSource *a2dpSource =
@@ -1584,6 +1595,7 @@ bool connectWiFi(
             requireTime &&
             !ntpSynced
         ) {
+            // lanjut ke pemeriksaan waktu
         }
         else {
 
@@ -1595,9 +1607,16 @@ bool connectWiFi(
         "TARS: WiFi ON"
     );
 
+    /*
+     * Pastikan interface STA benar-benar aktif
+     * setelah Bluetooth shutdown.
+     */
+
     WiFi.mode(
         WIFI_STA
     );
+
+    delay(200);
 
     WiFi.begin(
         WIFI_SSID,
@@ -1641,6 +1660,14 @@ bool connectWiFi(
         WiFi.localIP()
     );
 
+    /*
+     * Beri waktu stack WiFi/TCP/IP settle
+     * sebelum koneksi HTTPS berikutnya.
+     */
+    delay(
+        WIFI_SETTLE_MS
+    );
+
     return true;
 }
 
@@ -1650,6 +1677,9 @@ void disconnectWiFi() {
         "TARS: WiFi OFF"
     );
 
+    /*
+     * Putuskan koneksi secara penuh.
+     */
     WiFi.disconnect(
         true
     );
@@ -1658,7 +1688,9 @@ void disconnectWiFi() {
         WIFI_OFF
     );
 
-    delay(300);
+    delay(
+        WIFI_OFF_SETTLE_MS
+    );
 }
 
 
@@ -1828,6 +1860,10 @@ String askAI(
         return "";
     }
 
+    http.setTimeout(
+        15000
+    );
+
     http.addHeader(
         "Content-Type",
         "application/json"
@@ -1953,6 +1989,10 @@ bool downloadTTS(
 
         return false;
     }
+
+    http.setTimeout(
+        20000
+    );
 
     http.addHeader(
         "Content-Type",
@@ -2328,14 +2368,7 @@ bool startBluetooth() {
     );
 
     /*
-     * Object hanya dibuat sekali.
-     *
-     * Setelah sesi pertama selesai:
-     * end(false) akan menghentikan A2DP,
-     * tetapi object tetap ada.
-     *
-     * Sesi berikutnya langsung menggunakan
-     * object yang sama.
+     * Object dibuat sekali.
      */
 
     if (
@@ -2439,10 +2472,6 @@ bool startBluetooth() {
 
         /*
          * Jangan end(true).
-         *
-         * end(false) cukup untuk menghentikan
-         * sesi A2DP dan object tetap bisa
-         * dipakai pada pertanyaan berikutnya.
          */
 
         if (
@@ -2461,7 +2490,9 @@ bool startBluetooth() {
         btAudioStarted =
             false;
 
-        delay(300);
+        delay(
+            500
+        );
 
         return false;
     }
@@ -2510,27 +2541,43 @@ void stopBluetooth() {
     /*
      * PENTING:
      *
-     * Jangan gunakan end(true).
+     * end(false)
+     * bukan end(true).
      *
-     * end(false):
-     * - disconnect speaker
-     * - stop/deinit A2DP
-     * - tidak menghancurkan object
-     * - controller Bluetooth tetap tersedia
-     * - sesi berikutnya dapat start kembali
+     * Object tetap hidup dan dapat
+     * dipakai untuk sesi berikutnya.
      */
 
     a2dpSource->end(
         false
     );
 
+    /*
+     * end(false) sudah menangani disconnect
+     * dan penghentian A2DP.
+     *
+     * Beri waktu callback/event terakhir
+     * selesai sebelum WiFi diaktifkan.
+     */
+
+    uint32_t settleStart =
+        millis();
+
+    while (
+        millis() -
+        settleStart <
+        800
+    ) {
+
+        delay(10);
+        yield();
+    }
+
     btConnected =
         false;
 
     btAudioStarted =
         false;
-
-    delay(300);
 
     Serial.println(
         "TARS: Bluetooth A2DP STOPPED"
@@ -3116,10 +3163,17 @@ void handleQuestion(
         return;
     }
 
+    /*
+     * WiFi dimatikan sebelum Bluetooth.
+     */
     disconnectWiFi();
 
     playMP3();
 
+    /*
+     * Setelah A2DP benar-benar berhenti,
+     * hidupkan WiFi kembali.
+     */
     if (
         connectWiFi(false)
     ) {
@@ -3256,6 +3310,14 @@ void setup() {
 
     Serial.println(
         "BT   : AUTO RECONNECT OFF"
+    );
+
+    Serial.println(
+        "BT   : END(FALSE)"
+    );
+
+    Serial.println(
+        "WIFI : SETTLE AFTER BT"
     );
 
     printHeap(
