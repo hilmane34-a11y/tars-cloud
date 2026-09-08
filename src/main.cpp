@@ -3,6 +3,7 @@
 // BT failure -> ESP32 REBOOT
 // PLAY DONE -> ESP32 REBOOT
 // OLED typing synchronized to first REAL A2DP audio callback
+// No artificial delay after Bluetooth connection
 
 #include <Arduino.h>
 #include <WiFi.h>
@@ -327,6 +328,9 @@ void oledPrepareTyping(
     oledLastType = millis();
     oledMechanicalFrame = 0;
     oledTyping = false;
+
+    // Penting:
+    // OLED menunggu FIRST REAL AUDIO CALLBACK.
     oledAudioSyncPending = true;
 }
 
@@ -570,7 +574,7 @@ static const size_t PCM_OUTPUT_CHUNK =
     1024;
 
 static const float PCM_GAIN =
-    3.0f;
+    3.5f;
 
 // ============================================================
 // A2DP TAIL
@@ -1172,16 +1176,14 @@ bool connectWiFi(
         "TARS: WiFi ON"
     );
 
-    WiFi.mode(WIFI_STA);
+    WiFi.mode(
+        WIFI_STA
+    );
 
-WiFi.setTxPower(
-    WIFI_POWER_8_5dBm
-);
-
-WiFi.begin(
-    WIFI_SSID,
-    WIFI_PASSWORD
-);
+    WiFi.begin(
+        WIFI_SSID,
+        WIFI_PASSWORD
+    );
 
     uint32_t start =
         millis();
@@ -1724,7 +1726,7 @@ int32_t getAudioData(
     // AMBIL PCM DULU
     // ========================================================
     // Callback A2DP bisa terjadi ketika PCM ring masih kosong.
-    // Jadi callback pertama TIDAK otomatis berarti suara mulai.
+    // Callback pertama TIDAK otomatis berarti suara mulai.
     // ========================================================
     size_t got =
         pcmRing.read(
@@ -1998,6 +2000,8 @@ bool startBluetooth() {
         return false;
     }
 
+    // Callback audio dipasang SEBELUM start().
+    // Jadi callback sudah siap ketika A2DP mulai meminta PCM.
     a2dpSource->set_data_callback(
         getAudioData
     );
@@ -2006,34 +2010,41 @@ bool startBluetooth() {
     btAudioStarted = false;
     btCallbackCalls = 0;
 
-    // Reset OLED audio synchronization
+    // ========================================================
+    // RESET FIRST REAL AUDIO DETECTION
+    // ========================================================
     a2dpFirstAudioCallback = false;
     a2dpFirstAudioMillis = 0;
 
-    // JANGAN reset oledAudioSyncPending di sini.
-    // oledPrepareTyping() sudah mengaturnya menjadi true.
+    // ========================================================
+    // JANGAN RESET oledAudioSyncPending DI SINI
+    // ========================================================
+    // oledPrepareTyping() sudah membuat flag ini TRUE.
+    // OLED harus tetap menunggu FIRST REAL AUDIO CALLBACK.
+    // ========================================================
 
     printHeap(
         "BEFORE_BT"
     );
 
+    uint32_t btStart =
+        millis();
+
     a2dpSource->start(
         BT_DEVICE_NAME
     );
 
-    uint32_t startWait =
-        millis();
-
     // ========================================================
-    // TUNGGU SAMPAI BENAR-BENAR CONNECTED
+    // TUNGGU HANYA SAMPAI BLUETOOTH CONNECTED
     // ========================================================
     while (
         !btConnected &&
-        millis() - startWait <
+        millis() - btStart <
         BT_TIMEOUT_MS
     ) {
 
         delay(20);
+        yield();
     }
 
     if (
@@ -2048,7 +2059,8 @@ bool startBluetooth() {
             "BT_FAILED"
         );
 
-        // Do NOT call end(false) while connecting/disconnecting.
+        // Jangan end(false).
+        // Reboot jika koneksi gagal.
         rebootTARS(
             "BT CONNECTION FAILED"
         );
@@ -2061,11 +2073,6 @@ bool startBluetooth() {
         btConnected ? 1 : 0
     );
 
-    // ========================================================
-    // LANGSUNG SIAP PLAYBACK
-    // Tidak ada delay tambahan.
-    // Tidak menunggu btAudioStarted.
-    // ========================================================
     Serial.println(
         "TARS: Bluetooth READY - PLAY NOW"
     );
@@ -2073,6 +2080,17 @@ bool startBluetooth() {
     printHeap(
         "BT_READY"
     );
+
+    // ========================================================
+    // TIDAK ADA DELAY SETELAH CONNECTED
+    // ========================================================
+    // Tidak menunggu btAudioStarted.
+    // Tidak delay(300).
+    // Tidak delay(5000).
+    //
+    // Setelah Connected, fungsi langsung return ke playMP3().
+    // Helix kemudian langsung mulai decode MP3 -> PCM Ring.
+    // ========================================================
 
     return true;
 }
@@ -2341,11 +2359,13 @@ bool playMP3() {
         false;
 
     // ========================================================
-    // TIDAK ADA WAIT A2DP AUDIO START
+    // TIDAK ADA WAIT FOR A2DP AUDIO START
     // ========================================================
-    // Setelah btConnected, decoder langsung berjalan.
-    // A2DP callback akan mengambil PCM begitu PCM tersedia.
-    // OLED tetap menunggu FIRST REAL AUDIO CALLBACK.
+    // Sebelumnya ada loop menunggu btAudioStarted hingga 5 detik.
+    // Loop tersebut DIHAPUS.
+    //
+    // Setelah Bluetooth CONNECTED dan Helix READY,
+    // decoding langsung dimulai.
     // ========================================================
 
     // ========================================================
@@ -2437,6 +2457,9 @@ bool playMP3() {
             continue;
         }
 
+        // ====================================================
+        // LANGSUNG DECODE / ISI PCM RING
+        // ====================================================
         size_t copied =
             mp3Copier.copy();
 
