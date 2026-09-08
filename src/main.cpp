@@ -1172,14 +1172,16 @@ bool connectWiFi(
         "TARS: WiFi ON"
     );
 
-    WiFi.mode(
-        WIFI_STA
-    );
+    WiFi.mode(WIFI_STA);
 
-    WiFi.begin(
-        WIFI_SSID,
-        WIFI_PASSWORD
-    );
+WiFi.setTxPower(
+    WIFI_POWER_8_5dBm
+);
+
+WiFi.begin(
+    WIFI_SSID,
+    WIFI_PASSWORD
+);
 
     uint32_t start =
         millis();
