@@ -547,12 +547,12 @@ static const uint32_t NTP_TIMEOUT_MS =
 // ============================================================
 // BLUETOOTH CONNECTION TIMEOUT
 // ============================================================
-// Ini BUKAN delay koneksi.
-// ESP32 langsung mencoba connect.
-// 2000 ms hanya batas maksimum menunggu.
+// ESP32 tetap menunggu sampai Bluetooth benar-benar Connected.
+// 20000 ms hanya batas maksimum jika koneksi benar-benar gagal.
+// Setelah Connected, langsung lanjut ke audio tanpa delay.
 // ============================================================
 static const uint32_t BT_TIMEOUT_MS =
-    2000;
+    20000;
 
 static const uint32_t PLAY_TIMEOUT_MS =
     120000;
@@ -2021,6 +2021,13 @@ bool startBluetooth() {
     uint32_t startWait =
         millis();
 
+    // ========================================================
+    // TUNGGU SAMPAI BENAR-BENAR CONNECTED
+    // ========================================================
+    // 20 detik hanya batas maksimum kegagalan.
+    // Begitu callback memberi status Connected,
+    // loop langsung berhenti.
+    // ========================================================
     while (
         !btConnected &&
         millis() - startWait <
@@ -2059,7 +2066,7 @@ bool startBluetooth() {
         "TARS: Bluetooth READY"
     );
 
-    // Tidak perlu delay(300).
+    // Tidak ada delay(300).
     // Bluetooth sudah Connected, langsung lanjut ke Helix.
     printHeap(
         "BT_READY"
@@ -2348,10 +2355,7 @@ bool playMP3() {
         5000
     ) {
 
-        oledUpdateTyping(
-            true
-        );
-
+        // Jangan mulai OLED sebelum audio benar-benar aktif.
         delay(5);
     }
 
@@ -2824,7 +2828,7 @@ void setup() {
     );
 
     Serial.println(
-        "BT   : CONNECT TIMEOUT 2 SEC"
+        "BT   : CONNECT TIMEOUT 20 SEC"
     );
 
     Serial.println(
