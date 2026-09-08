@@ -1,5 +1,6 @@
-// Complete main.cpp — optimized Bluetooth heap/largest + lazy audio allocation.
-// TARS Cloud + OLED + WiFi + NTP + TTS + A2DP + Helix MP3
+// Complete main.cpp — TARS Cloud + OLED + WiFi + NTP + TTS + A2DP + Helix MP3
+// Optimized Bluetooth heap + lazy audio allocation
+// BT failure -> ESP32 REBOOT
 // PLAY DONE -> ESP32 REBOOT
 
 #include <Arduino.h>
@@ -453,9 +454,6 @@ void oledUpdateTyping(
 // ============================================================
 // NETWORK
 // ============================================================
-static const char *WORKER_URL =
-    "https://tars-cloud-v1.hilmane34.workers.dev";
-
 static const char *ASK_URL =
     "https://tars-cloud-v1.hilmane34.workers.dev/ask";
 
@@ -495,9 +493,6 @@ static const uint32_t PLAY_TIMEOUT_MS =
 static const uint32_t INPUT_SAMPLE_RATE =
     22050;
 
-static const uint32_t OUTPUT_SAMPLE_RATE =
-    44100;
-
 static const uint8_t INPUT_CHANNELS =
     1;
 
@@ -520,7 +515,7 @@ static const size_t PCM_OUTPUT_CHUNK =
     1024;
 
 static const float PCM_GAIN =
-    2.0f;
+    3.0f;
 
 // ============================================================
 // A2DP TAIL
@@ -1834,9 +1829,6 @@ bool ensureBluetoothObject() {
         return false;
     }
 
-    // ========================================================
-    // MEMORY OPTIMIZATION
-    // ========================================================
     a2dpSource->set_event_queue_size(
         4
     );
@@ -1869,6 +1861,41 @@ bool ensureBluetoothObject() {
 }
 
 // ============================================================
+// REBOOT
+// ============================================================
+void rebootTARS(
+    const char *reason
+) {
+
+    Serial.println();
+    Serial.println(
+        "================================"
+    );
+
+    Serial.print(
+        "TARS: REBOOT - "
+    );
+
+    Serial.println(
+        reason
+    );
+
+    Serial.println(
+        "================================"
+    );
+
+    delay(500);
+
+    Serial.flush();
+
+    esp_restart();
+
+    while (true) {
+        delay(1000);
+    }
+}
+
+// ============================================================
 // START BLUETOOTH
 // ============================================================
 bool startBluetooth() {
@@ -1895,7 +1922,7 @@ bool startBluetooth() {
         "BEFORE_BT"
     );
 
-    // start() returns void in ESP32-A2DP 1.8.11.
+    // ESP32-A2DP 1.8.11 start() returns void.
     a2dpSource->start(
         BT_DEVICE_NAME
     );
@@ -1924,16 +1951,15 @@ bool startBluetooth() {
             "BT_FAILED"
         );
 
-        a2dpSource->set_data_callback(
-            getAudioDataNoop
+        // ====================================================
+        // IMPORTANT:
+        // DO NOT call end(false) while still in CONNECTING.
+        // ESP32-A2DP can crash during incomplete shutdown.
+        // The board will reboot immediately instead.
+        // ====================================================
+        rebootTARS(
+            "BT CONNECTION FAILED"
         );
-
-        a2dpSource->end(
-            false
-        );
-
-        btConnected = false;
-        btAudioStarted = false;
 
         return false;
     }
@@ -1961,62 +1987,23 @@ bool startBluetooth() {
 // ============================================================
 void releaseBluetooth() {
 
-    if (
-        a2dpSource == nullptr
-    ) {
-
-        btConnected = false;
-        btAudioStarted = false;
-
-        return;
-    }
-
-    Serial.println(
-        "TARS: Bluetooth RELEASE"
-    );
+    // ========================================================
+    // NO end(false) HERE.
+    //
+    // TARS always reboots after successful playback.
+    // Avoiding A2DP shutdown prevents the lifecycle crash
+    // observed during previous sessions.
+    // ========================================================
 
     btAudioStarted = false;
     btConnected = false;
 
-    a2dpSource->set_data_callback(
-        getAudioDataNoop
-    );
-
-    uint32_t graceStart =
-        millis();
-
-    while (
-        millis() - graceStart <
-        50
-    ) {
-
-        delay(1);
-    }
-
-    a2dpSource->end(
-        false
-    );
-
-    uint32_t waitStart =
-        millis();
-
-    while (
-        millis() - waitStart <
-        500
-    ) {
-
-        delay(10);
-    }
-
-    btConnected = false;
-    btAudioStarted = false;
-
     Serial.println(
-        "TARS: Bluetooth SESSION STOPPED"
+        "TARS: Bluetooth SESSION FINISHED"
     );
 
     printHeap(
-        "AFTER_BT_RELEASE"
+        "BT_SESSION_FINISHED"
     );
 }
 
@@ -2043,7 +2030,8 @@ void cleanupAudioSession() {
         "TARS: AUDIO CLEANUP"
     );
 
-    mp3Stream.end();
+    // mp3Stream.end() is already called after decoding.
+    // Calling it again is intentionally avoided here.
 
     pcmRing.end();
 
@@ -2171,6 +2159,8 @@ bool playMP3() {
         !startBluetooth()
     ) {
 
+        // Normally unreachable because startBluetooth()
+        // reboots on connection timeout.
         Serial.println(
             "TARS: BT FAILED - AUDIO ABORT"
         );
@@ -2221,11 +2211,13 @@ bool playMP3() {
 
         mp3File.close();
 
-        stopBluetooth();
-
         playbackRunning = false;
 
         cleanupAudioSession();
+
+        rebootTARS(
+            "MP3 DECODER FAILED"
+        );
 
         return false;
     }
@@ -2274,6 +2266,10 @@ bool playMP3() {
             oledAudioWaitStart <
         5000
     ) {
+
+        oledUpdateTyping(
+            true
+        );
 
         delay(5);
     }
@@ -2482,7 +2478,7 @@ bool playMP3() {
     );
 
     // ========================================================
-    // BLUETOOTH STOP
+    // BLUETOOTH
     // ========================================================
     stopBluetooth();
 
@@ -2501,7 +2497,9 @@ bool playMP3() {
             "TARS: PLAYBACK TIMEOUT"
         );
 
-        oledShowReady();
+        rebootTARS(
+            "PLAYBACK FAILED"
+        );
 
         return false;
     }
@@ -2533,17 +2531,10 @@ bool playMP3() {
     // ========================================================
     // REBOOT AFTER PLAY DONE
     // ========================================================
-    Serial.println(
-        "TARS: REBOOTING..."
+    rebootTARS(
+        "PLAYBACK COMPLETE"
     );
 
-    delay(500);
-
-    Serial.flush();
-
-    esp_restart();
-
-    // Tidak akan tercapai.
     return true;
 }
 
@@ -2634,13 +2625,11 @@ void handleQuestion(
     // ========================================================
     // PLAYBACK
     // ========================================================
-    // playMP3() akan reboot ESP32 setelah PLAY DONE.
+    // playMP3() will reboot after successful playback.
     playMP3();
 
-    // ========================================================
-    // TIDAK ADA WIFI ON LAGI DI SINI.
-    // ESP32 akan restart setelah playback selesai.
-    // ========================================================
+    // No WiFi restart here.
+    // ESP32 restarts after playback.
 }
 
 // ============================================================
