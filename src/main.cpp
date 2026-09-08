@@ -7,6 +7,7 @@
 #include <time.h>
 #include <ArduinoJson.h>
 #include <esp_heap_caps.h>
+#include <esp_a2dp_api.h>
 
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
@@ -37,7 +38,11 @@
 // I7-TWS
 //
 // BLUETOOTH:
-// ON sejak boot dan tetap hidup.
+// Classic Bluetooth/A2DP tetap persistent.
+//
+// A2DP MEDIA:
+// Saat idle, media diminta SUSPEND.
+// Saat playback, media diminta START.
 //
 // WIFI:
 // ON saat diperlukan,
@@ -978,6 +983,15 @@ volatile bool playbackRunning =
 volatile uint32_t btCallbackCalls =
     0;
 
+volatile bool a2dpSuspendPending =
+    false;
+
+volatile bool a2dpStartPending =
+    false;
+
+volatile bool a2dpMediaCommandBusy =
+    false;
+
 bool ntpSynced =
     false;
 
@@ -999,6 +1013,148 @@ void printHeap(
             MALLOC_CAP_INTERNAL
         )
     );
+}
+
+
+// ============================================================
+// A2DP MEDIA CONTROL
+//
+// Jangan panggil API ini langsung dari callback Bluetooth.
+// Callback hanya memasang flag.
+// Eksekusi dilakukan dari loop / fungsi normal.
+// ============================================================
+
+void requestA2DPSuspend() {
+
+    if (
+        !btConnected ||
+        a2dpSource == nullptr
+    ) {
+        return;
+    }
+
+    a2dpSuspendPending =
+        true;
+
+    a2dpStartPending =
+        false;
+}
+
+
+void requestA2DPStart() {
+
+    if (
+        !btConnected ||
+        a2dpSource == nullptr
+    ) {
+        return;
+    }
+
+    a2dpStartPending =
+        true;
+
+    a2dpSuspendPending =
+        false;
+}
+
+
+void processA2DPMediaControl() {
+
+    if (
+        a2dpMediaCommandBusy
+    ) {
+        return;
+    }
+
+    if (
+        !btConnected ||
+        a2dpSource == nullptr
+    ) {
+
+        a2dpSuspendPending =
+            false;
+
+        a2dpStartPending =
+            false;
+
+        return;
+    }
+
+    if (
+        a2dpStartPending
+    ) {
+
+        a2dpStartPending =
+            false;
+
+        a2dpMediaCommandBusy =
+            true;
+
+        Serial.println(
+            "TARS: A2DP MEDIA START REQUEST"
+        );
+
+        printHeap(
+            "BEFORE_A2DP_MEDIA_START"
+        );
+
+        esp_err_t result =
+            esp_a2d_media_ctrl(
+                ESP_A2D_MEDIA_CTRL_START
+            );
+
+        Serial.printf(
+            "TARS: A2DP MEDIA START RESULT = %d\n",
+            (int)result
+        );
+
+        printHeap(
+            "AFTER_A2DP_MEDIA_START"
+        );
+
+        a2dpMediaCommandBusy =
+            false;
+
+        return;
+    }
+
+    if (
+        a2dpSuspendPending
+    ) {
+
+        a2dpSuspendPending =
+            false;
+
+        a2dpMediaCommandBusy =
+            true;
+
+        Serial.println(
+            "TARS: A2DP MEDIA SUSPEND REQUEST"
+        );
+
+        printHeap(
+            "BEFORE_A2DP_MEDIA_SUSPEND"
+        );
+
+        esp_err_t result =
+            esp_a2d_media_ctrl(
+                ESP_A2D_MEDIA_CTRL_SUSPEND
+            );
+
+        Serial.printf(
+            "TARS: A2DP MEDIA SUSPEND RESULT = %d\n",
+            (int)result
+        );
+
+        printHeap(
+            "AFTER_A2DP_MEDIA_SUSPEND"
+        );
+
+        a2dpMediaCommandBusy =
+            false;
+
+        return;
+    }
 }
 
 
@@ -1508,6 +1664,8 @@ public:
                     true
                 );
 
+                processA2DPMediaControl();
+
                 if (
                     millis() -
                     waitStart >
@@ -1656,6 +1814,8 @@ bool connectWiFi(
             WIFI_TIMEOUT_MS
     ) {
 
+        processA2DPMediaControl();
+
         delay(250);
 
         Serial.print(
@@ -1725,7 +1885,6 @@ bool isTimeValid() {
 
 bool syncNTP() {
 
-    // Kalau sudah valid, jangan mulai attempt lagi.
     if (
         isTimeValid()
     ) {
@@ -1774,9 +1933,10 @@ bool syncNTP() {
             attempt
         );
 
+        processA2DPMediaControl();
+
         delay(1000);
 
-        // Begitu valid langsung return.
         if (
             isTimeValid()
         ) {
@@ -1985,7 +2145,6 @@ String askAI(
             http.end();
         }
 
-        // Recovery hanya satu kali.
         if (
             attempt == 1
         ) {
@@ -2295,7 +2454,7 @@ int32_t getAudioData(
 
 
 // ============================================================
-// BLUETOOTH CALLBACK
+// BLUETOOTH CONNECTION CALLBACK
 // ============================================================
 
 void onBTConnectionState(
@@ -2325,6 +2484,7 @@ void onBTConnectionState(
         );
     }
 
+
     if (
         state ==
         ESP_A2D_CONNECTION_STATE_CONNECTED
@@ -2333,9 +2493,34 @@ void onBTConnectionState(
         btConnected =
             true;
 
+        btAudioStarted =
+            false;
+
         Serial.println(
             "TARS: A2DP CONNECTED"
         );
+
+        /*
+         * Setelah koneksi berhasil, library dapat otomatis
+         * masuk ke media STARTED.
+         *
+         * Jangan langsung memanggil esp_a2d_media_ctrl()
+         * dari callback.
+         *
+         * Pasang request dan proses dari fungsi normal.
+         */
+
+        if (
+            !playbackRunning
+        ) {
+
+            a2dpSuspendPending =
+                true;
+
+            Serial.println(
+                "TARS: IDLE A2DP SUSPEND PENDING"
+            );
+        }
 
     }
     else if (
@@ -2349,18 +2534,35 @@ void onBTConnectionState(
         btAudioStarted =
             false;
 
+        a2dpSuspendPending =
+            false;
+
+        a2dpStartPending =
+            false;
+
         Serial.println(
             "TARS: A2DP DISCONNECTED"
         );
-
     }
-    else {
 
-        btConnected =
-            false;
-    }
+    /*
+     * PENTING:
+     *
+     * CONNECTING / DISCONNECTING tidak dianggap
+     * disconnected.
+     *
+     * Jadi jangan lagi melakukan:
+     *
+     * btConnected = false
+     *
+     * untuk semua state selain CONNECTED.
+     */
 }
 
+
+// ============================================================
+// BLUETOOTH AUDIO CALLBACK
+// ============================================================
 
 void onBTAudioState(
     esp_a2d_audio_state_t state,
@@ -2382,6 +2584,7 @@ void onBTAudioState(
         );
     }
 
+
     if (
         state ==
         ESP_A2D_AUDIO_STATE_STARTED
@@ -2393,6 +2596,29 @@ void onBTAudioState(
         Serial.println(
             "TARS: A2DP AUDIO STARTED"
         );
+
+        /*
+         * Kalau TARS sedang idle, STARTED ini bukan
+         * playback yang kita minta.
+         *
+         * Jangan suspend dari callback.
+         * Jadwalkan saja.
+         */
+
+        if (
+            !playbackRunning
+        ) {
+
+            Serial.println(
+                "TARS: IDLE AUDIO STARTED - SUSPEND PENDING"
+            );
+
+            a2dpSuspendPending =
+                true;
+
+            a2dpStartPending =
+                false;
+        }
 
     }
     else {
@@ -2442,13 +2668,6 @@ bool initBluetoothObject() {
         2048
     );
 
-    /*
-     * Auto reconnect library tetap OFF.
-     *
-     * Kita sendiri tidak memanggil start() lagi
-     * kalau masih connected.
-     */
-
     a2dpSource->set_auto_reconnect(
         false
     );
@@ -2494,10 +2713,8 @@ bool startBluetooth() {
     }
 
     /*
-     * INI BAGIAN PENTING.
-     *
-     * Kalau Bluetooth sudah connected,
-     * jangan start ulang dan jangan reconnect.
+     * Kalau sudah connected:
+     * jangan start ulang.
      */
 
     if (
@@ -2508,8 +2725,23 @@ bool startBluetooth() {
             "TARS: Bluetooth ALREADY CONNECTED"
         );
 
+        /*
+         * Kalau dipanggil dari playback, minta START.
+         * Kalau idle, tetap biarkan media suspend.
+         */
+
+        if (
+            playbackRunning
+        ) {
+
+            requestA2DPStart();
+        }
+
+        processA2DPMediaControl();
+
         return true;
     }
+
 
     Serial.println(
         "TARS: Bluetooth START"
@@ -2520,6 +2752,12 @@ bool startBluetooth() {
 
     btCallbackCalls =
         0;
+
+    a2dpSuspendPending =
+        false;
+
+    a2dpStartPending =
+        false;
 
     printHeap(
         "BEFORE_BT_START"
@@ -2539,6 +2777,8 @@ bool startBluetooth() {
         start <
         BT_TIMEOUT_MS
     ) {
+
+        processA2DPMediaControl();
 
         delay(100);
     }
@@ -2562,7 +2802,40 @@ bool startBluetooth() {
         "TARS: Bluetooth PERSISTENT READY"
     );
 
-    delay(300);
+
+    /*
+     * Beri waktu event audio dari library masuk.
+     * Setelah itu proses request SUSPEND bila idle.
+     */
+
+    uint32_t settleStart =
+        millis();
+
+    while (
+        millis() -
+        settleStart <
+        500
+    ) {
+
+        processA2DPMediaControl();
+
+        delay(10);
+    }
+
+
+    /*
+     * Pastikan idle benar-benar meminta suspend.
+     */
+
+    if (
+        !playbackRunning
+    ) {
+
+        requestA2DPSuspend();
+
+        processA2DPMediaControl();
+    }
+
 
     printHeap(
         "BT_READY"
@@ -2573,26 +2846,37 @@ bool startBluetooth() {
 
 
 // ============================================================
-// DO NOT STOP BLUETOOTH
+// KEEP BLUETOOTH
 // ============================================================
 
 void stopBluetooth() {
 
     /*
-     * Sengaja tidak memanggil:
+     * Bluetooth tidak dimatikan.
+     *
+     * Hanya media A2DP yang diminta SUSPEND.
+     *
+     * TIDAK memanggil:
      *
      * a2dpSource->end(false)
      *
-     * dan tidak:
+     * TIDAK memanggil:
      *
      * a2dpSource->end(true)
-     *
-     * Bluetooth tetap hidup.
      */
 
     Serial.println(
         "TARS: Bluetooth KEEP ALIVE"
     );
+
+    if (
+        btConnected
+    ) {
+
+        requestA2DPSuspend();
+
+        processA2DPMediaControl();
+    }
 
     btAudioStarted =
         false;
@@ -2613,10 +2897,6 @@ void cleanupAudioSession() {
         "TARS: AUDIO CLEANUP"
     );
 
-    // --------------------------------------------------------
-    // Stop Helix / EncodedAudioStream
-    // --------------------------------------------------------
-
     mp3Stream.end();
 
     Serial.println(
@@ -2624,20 +2904,12 @@ void cleanupAudioSession() {
     );
 
 
-    // --------------------------------------------------------
-    // Bebaskan PCM ring 16 KB.
-    // --------------------------------------------------------
-
     pcmRing.end();
 
     Serial.println(
         "TARS: PCM BUFFER RELEASED"
     );
 
-
-    // --------------------------------------------------------
-    // Hapus MP3.
-    // --------------------------------------------------------
 
     if (
         LittleFS.exists(
@@ -2654,10 +2926,6 @@ void cleanupAudioSession() {
         );
     }
 
-
-    // --------------------------------------------------------
-    // Bersihkan jawaban OLED dari heap.
-    // --------------------------------------------------------
 
     oledTyping =
         false;
@@ -2676,10 +2944,6 @@ void cleanupAudioSession() {
         "TARS: OLED RESPONSE CLEARED"
     );
 
-
-    // --------------------------------------------------------
-    // Pastikan tampilan fisik juga bersih.
-    // --------------------------------------------------------
 
     if (
         oledReadyFlag
@@ -2765,6 +3029,17 @@ bool playMP3() {
 
 
     // --------------------------------------------------------
+    // Pastikan idle suspend request dibatalkan.
+    // --------------------------------------------------------
+
+    a2dpSuspendPending =
+        false;
+
+    a2dpStartPending =
+        false;
+
+
+    // --------------------------------------------------------
     // Buat PCM ring hanya ketika audio diperlukan.
     // --------------------------------------------------------
 
@@ -2792,10 +3067,7 @@ bool playMP3() {
 
 
     // --------------------------------------------------------
-    // Bluetooth sudah seharusnya connected sejak boot.
-    //
-    // startBluetooth() hanya reconnect jika benar-benar
-    // sudah terputus.
+    // Bluetooth persistent.
     // --------------------------------------------------------
 
     if (
@@ -2817,8 +3089,21 @@ bool playMP3() {
     }
 
 
+    // --------------------------------------------------------
+    // Minta media START.
+    // --------------------------------------------------------
+
+    Serial.println(
+        "TARS: REQUEST A2DP PLAYBACK START"
+    );
+
+    requestA2DPStart();
+
+    processA2DPMediaControl();
+
+
     printHeap(
-        "AFTER_BT_BEFORE_HELIX"
+        "AFTER_A2DP_START_REQUEST"
     );
 
 
@@ -2909,10 +3194,7 @@ bool playMP3() {
 
 
     // --------------------------------------------------------
-    // Tunggu A2DP audio start.
-    //
-    // Pada playback berikutnya biasanya sudah connected,
-    // jadi tidak ada reconnect Bluetooth.
+    // Tunggu A2DP audio START.
     // --------------------------------------------------------
 
     uint32_t audioWaitStart =
@@ -2927,6 +3209,8 @@ bool playMP3() {
         5000
     ) {
 
+        processA2DPMediaControl();
+
         delay(5);
     }
 
@@ -2935,8 +3219,18 @@ bool playMP3() {
         btAudioStarted
     ) {
 
+        printHeap(
+            "A2DP_AUDIO_STARTED_PLAYBACK"
+        );
+
         oledDrawTypedText(
             true
+        );
+    }
+    else {
+
+        Serial.println(
+            "TARS: A2DP AUDIO START TIMEOUT"
         );
     }
 
@@ -2950,6 +3244,8 @@ bool playMP3() {
         playStart <
         PLAY_TIMEOUT_MS
     ) {
+
+        processA2DPMediaControl();
 
         oledUpdateTyping(
             true
@@ -3101,6 +3397,8 @@ bool playMP3() {
             true
         );
 
+        processA2DPMediaControl();
+
         delay(10);
     }
 
@@ -3125,8 +3423,6 @@ bool playMP3() {
 
     // --------------------------------------------------------
     // A2DP FINAL TAIL
-    //
-    // Bluetooth TETAP HIDUP setelah ini.
     // --------------------------------------------------------
 
     Serial.printf(
@@ -3147,6 +3443,8 @@ bool playMP3() {
             true
         );
 
+        processA2DPMediaControl();
+
         delay(10);
 
         if (
@@ -3164,14 +3462,14 @@ bool playMP3() {
 
 
     // --------------------------------------------------------
-    // JANGAN STOP BLUETOOTH
+    // SUSPEND MEDIA, BUKAN BLUETOOTH.
     // --------------------------------------------------------
 
     stopBluetooth();
 
 
     // --------------------------------------------------------
-    // Bersihkan semua resource audio.
+    // Bersihkan resource audio.
     // --------------------------------------------------------
 
     cleanupAudioSession();
@@ -3179,6 +3477,28 @@ bool playMP3() {
 
     playbackRunning =
         false;
+
+
+    /*
+     * Kalau sebelumnya masih ada request START dari
+     * event callback, batalkan karena sekarang idle.
+     */
+
+    a2dpStartPending =
+        false;
+
+    a2dpSuspendPending =
+        false;
+
+
+    if (
+        btConnected
+    ) {
+
+        requestA2DPSuspend();
+
+        processA2DPMediaControl();
+    }
 
 
     if (
@@ -3261,6 +3581,13 @@ void handleQuestion(
 
 
     // --------------------------------------------------------
+    // Pastikan A2DP idle tetap suspend sebelum WiFi.
+    // --------------------------------------------------------
+
+    processA2DPMediaControl();
+
+
+    // --------------------------------------------------------
     // WiFi ON
     // --------------------------------------------------------
 
@@ -3335,6 +3662,7 @@ void handleQuestion(
     // WiFi OFF.
     //
     // Bluetooth tetap ON.
+    // A2DP media masih idle/suspend.
     // --------------------------------------------------------
 
     disconnectWiFi();
@@ -3498,8 +3826,6 @@ void setup() {
 
     // --------------------------------------------------------
     // PCM TIDAK dialokasi saat idle.
-    //
-    // PCM ring baru dibuat ketika playMP3().
     // --------------------------------------------------------
 
     Serial.println(
@@ -3520,7 +3846,7 @@ void setup() {
     );
 
     Serial.println(
-        "A2DP : PERSISTENT / NEVER STOP AFTER PLAY"
+        "A2DP : PERSISTENT / IDLE MEDIA SUSPEND"
     );
 
 
@@ -3556,8 +3882,17 @@ void setup() {
     }
 
 
+    /*
+     * Setelah NTP selesai, pastikan A2DP idle tetap suspend.
+     *
+     * Ini checkpoint penting untuk membandingkan heap
+     * dengan log lama.
+     */
+
+    processA2DPMediaControl();
+
     printHeap(
-        "READY"
+        "READY_AFTER_A2DP_IDLE_CONTROL"
     );
 
 
@@ -3583,6 +3918,14 @@ void setup() {
 // ============================================================
 
 void loop() {
+
+    /*
+     * Media control A2DP diproses dari task utama,
+     * bukan langsung dari callback Bluetooth.
+     */
+
+    processA2DPMediaControl();
+
 
     oledUpdateReadyAnimation();
 
