@@ -4,6 +4,7 @@
 // PLAY DONE -> ESP32 REBOOT
 // OLED typing synchronized to first REAL A2DP audio callback
 // No artificial delay after Bluetooth connection
+// A2DP disconnect is performed properly before ESP32 restart
 
 #include <Arduino.h>
 #include <WiFi.h>
@@ -93,9 +94,16 @@ void oledDrawMechanical(bool speaking) {
 
     const int baseY = 62;
 
-    oled.drawLine(2, baseY, 125, baseY, SSD1306_WHITE);
+    oled.drawLine(
+        2,
+        baseY,
+        125,
+        baseY,
+        SSD1306_WHITE
+    );
 
     if (!speaking) {
+
         static const uint8_t normalPattern[24] = {
             2,2,5,5,5,2,
             2,4,4,2,2,5,
@@ -104,7 +112,9 @@ void oledDrawMechanical(bool speaking) {
         };
 
         for (int i = 0; i < 24; i++) {
-            int x = 3 + (i * 5);
+
+            int x =
+                3 + (i * 5);
 
             if (x > 123) break;
 
@@ -123,9 +133,12 @@ void oledDrawMechanical(bool speaking) {
             );
 
             if (i < 23) {
-                int nextX = x + 5;
+
+                int nextX =
+                    x + 5;
 
                 if (nextX <= 125) {
+
                     oled.drawLine(
                         x + 3,
                         baseY - height,
@@ -154,20 +167,26 @@ void oledDrawMechanical(bool speaking) {
     }
 
     for (int i = 0; i < 6; i++) {
-        int x = 8 + (i * 22);
+
+        int x =
+            8 + (i * 22);
+
         int height = 3;
 
         if (
             i ==
             (oledMechanicalFrame % 6)
         ) {
+
             height = 8;
+
         } else if (
             i ==
             ((oledMechanicalFrame + 5) % 6) ||
             i ==
             ((oledMechanicalFrame + 1) % 6)
         ) {
+
             height = 5;
         }
 
@@ -209,6 +228,7 @@ void oledDrawMechanical(bool speaking) {
 }
 
 void oledShowReady() {
+
     if (!oledReadyFlag) return;
 
     oled.clearDisplay();
@@ -225,10 +245,12 @@ void oledShowReady() {
 
     oled.display();
 
-    oledLastAnim = millis();
+    oledLastAnim =
+        millis();
 }
 
 void oledShowListening() {
+
     if (!oledReadyFlag) return;
 
     oled.clearDisplay();
@@ -247,6 +269,7 @@ void oledShowListening() {
 }
 
 void oledShowProcessing() {
+
     if (!oledReadyFlag) return;
 
     oled.clearDisplay();
@@ -265,6 +288,7 @@ void oledShowProcessing() {
 }
 
 void oledShowOnline() {
+
     if (!oledReadyFlag) return;
 
     oled.clearDisplay();
@@ -286,9 +310,11 @@ void oledShowOnline() {
 }
 
 void oledUpdateReadyAnimation() {
+
     if (!oledReadyFlag) return;
 
-    uint32_t now = millis();
+    uint32_t now =
+        millis();
 
     if (
         now - oledLastAnim <
@@ -297,7 +323,9 @@ void oledUpdateReadyAnimation() {
         return;
     }
 
-    oledLastAnim = now;
+    oledLastAnim =
+        now;
+
     oledMechanicalFrame++;
 
     oled.clearDisplay();
@@ -321,27 +349,46 @@ void oledUpdateReadyAnimation() {
 void oledPrepareTyping(
     const String &text
 ) {
+
     if (!oledReadyFlag) return;
 
-    oledAnswer = text;
-    oledTypedChars = 0;
-    oledLastType = millis();
-    oledMechanicalFrame = 0;
-    oledTyping = false;
+    oledAnswer =
+        text;
 
-    // Penting:
-    // OLED menunggu FIRST REAL AUDIO CALLBACK.
-    oledAudioSyncPending = true;
+    oledTypedChars =
+        0;
+
+    oledLastType =
+        millis();
+
+    oledMechanicalFrame =
+        0;
+
+    oledTyping =
+        false;
+
+    oledAudioSyncPending =
+        true;
 }
 
 void oledStartTypingNow() {
+
     if (!oledReadyFlag) return;
 
-    oledTypedChars = 0;
-    oledLastType = millis();
-    oledMechanicalFrame = 0;
-    oledTyping = true;
-    oledAudioSyncPending = false;
+    oledTypedChars =
+        0;
+
+    oledLastType =
+        millis();
+
+    oledMechanicalFrame =
+        0;
+
+    oledTyping =
+        true;
+
+    oledAudioSyncPending =
+        false;
 
     Serial.println(
         "TARS: OLED TYPING START - AUDIO SYNC"
@@ -351,12 +398,15 @@ void oledStartTypingNow() {
 void oledDrawTypedText(
     bool speaking
 ) {
+
     if (!oledReadyFlag) return;
 
     oled.clearDisplay();
 
     oledHeader(
-        speaking ? "SPEAKING" : "READY"
+        speaking ?
+        "SPEAKING" :
+        "READY"
     );
 
     oled.setTextColor(
@@ -393,11 +443,16 @@ void oledDrawTypedText(
         i < visible.length();
         i++
     ) {
-        char c = visible[i];
 
-        if (c == '\r') continue;
+        char c =
+            visible[i];
+
+        if (c == '\r') {
+            continue;
+        }
 
         if (c == '\n') {
+
             line++;
             column = 0;
 
@@ -414,6 +469,7 @@ void oledDrawTypedText(
         }
 
         if (column >= maxChars) {
+
             line++;
             column = 0;
 
@@ -428,6 +484,7 @@ void oledDrawTypedText(
         }
 
         oled.write(c);
+
         column++;
     }
 
@@ -441,9 +498,11 @@ void oledDrawTypedText(
 void oledUpdateTyping(
     bool speaking
 ) {
+
     if (!oledReadyFlag) return;
 
-    uint32_t now = millis();
+    uint32_t now =
+        millis();
 
     // ========================================================
     // AUDIO -> OLED SYNCHRONIZATION
@@ -476,16 +535,24 @@ void oledUpdateTyping(
         now - oledLastType >=
         OLED_TYPE_INTERVAL
     ) {
-        oledLastType = now;
+
+        oledLastType =
+            now;
 
         if (
             oledTypedChars <
             oledAnswer.length()
         ) {
+
             oledTypedChars++;
+
             redraw = true;
+
         } else {
-            oledTyping = false;
+
+            oledTyping =
+                false;
+
             redraw = true;
         }
     }
@@ -495,12 +562,17 @@ void oledUpdateTyping(
         now - oledLastAnim >=
         OLED_ANIM_INTERVAL
     ) {
-        oledLastAnim = now;
+
+        oledLastAnim =
+            now;
+
         oledMechanicalFrame++;
+
         redraw = true;
     }
 
     if (redraw) {
+
         oledDrawTypedText(
             speaking
         );
@@ -545,6 +617,12 @@ static const uint32_t BT_TIMEOUT_MS =
 
 static const uint32_t PLAY_TIMEOUT_MS =
     120000;
+
+// ============================================================
+// PROPER A2DP DISCONNECT TIMEOUT
+// ============================================================
+static const uint32_t BT_DISCONNECT_TIMEOUT_MS =
+    3000;
 
 // ============================================================
 // AUDIO
@@ -615,6 +693,7 @@ bool ntpSynced =
 void printHeap(
     const char *label
 ) {
+
     Serial.printf(
         "HEAP[%s]: free=%u largest=%u internal=%u\n",
         label,
@@ -630,6 +709,7 @@ void printHeap(
 // PCM RING BUFFER
 // ============================================================
 class PCMRingBuffer {
+
 private:
 
     uint8_t *buffer =
@@ -655,20 +735,28 @@ public:
     bool begin(
         size_t size
     ) {
+
         if (buffer != nullptr) {
+
             free(buffer);
-            buffer = nullptr;
+
+            buffer =
+                nullptr;
         }
 
         buffer =
             (uint8_t *)malloc(size);
 
         if (!buffer) {
-            capacity = 0;
+
+            capacity =
+                0;
+
             return false;
         }
 
-        capacity = size;
+        capacity =
+            size;
 
         clear();
 
@@ -678,14 +766,24 @@ public:
     void end() {
 
         if (buffer) {
+
             free(buffer);
-            buffer = nullptr;
+
+            buffer =
+                nullptr;
         }
 
-        capacity = 0;
-        readIndex = 0;
-        writeIndex = 0;
-        used = 0;
+        capacity =
+            0;
+
+        readIndex =
+            0;
+
+        writeIndex =
+            0;
+
+        used =
+            0;
     }
 
     void clear() {
@@ -694,9 +792,14 @@ public:
             &mux
         );
 
-        readIndex = 0;
-        writeIndex = 0;
-        used = 0;
+        readIndex =
+            0;
+
+        writeIndex =
+            0;
+
+        used =
+            0;
 
         portEXIT_CRITICAL(
             &mux
@@ -711,7 +814,8 @@ public:
             &mux
         );
 
-        value = used;
+        value =
+            used;
 
         portEXIT_CRITICAL(
             &mux
@@ -748,10 +852,12 @@ public:
             !src ||
             len == 0
         ) {
+
             return 0;
         }
 
-        size_t written = 0;
+        size_t written =
+            0;
 
         portENTER_CRITICAL(
             &mux
@@ -761,7 +867,8 @@ public:
             capacity - used;
 
         if (len > freeBytes) {
-            len = freeBytes;
+            len =
+                freeBytes;
         }
 
         if (len > 0) {
@@ -770,7 +877,8 @@ public:
                 capacity - writeIndex;
 
             if (first > len) {
-                first = len;
+                first =
+                    len;
             }
 
             memcpy(
@@ -795,9 +903,11 @@ public:
                 (writeIndex + len) %
                 capacity;
 
-            used += len;
+            used +=
+                len;
 
-            written = len;
+            written =
+                len;
         }
 
         portEXIT_CRITICAL(
@@ -817,17 +927,20 @@ public:
             !dst ||
             len == 0
         ) {
+
             return 0;
         }
 
-        size_t result = 0;
+        size_t result =
+            0;
 
         portENTER_CRITICAL(
             &mux
         );
 
         if (len > used) {
-            len = used;
+            len =
+                used;
         }
 
         if (len > 0) {
@@ -836,7 +949,8 @@ public:
                 capacity - readIndex;
 
             if (first > len) {
-                first = len;
+                first =
+                    len;
             }
 
             memcpy(
@@ -861,9 +975,11 @@ public:
                 (readIndex + len) %
                 capacity;
 
-            used -= len;
+            used -=
+                len;
 
-            result = len;
+            result =
+                len;
         }
 
         portEXIT_CRITICAL(
@@ -874,6 +990,7 @@ public:
     }
 
     bool isReady() {
+
         return (
             buffer != nullptr &&
             capacity > 0
@@ -908,14 +1025,18 @@ private:
             );
 
         if (value > 32767) {
-            value = 32767;
+            value =
+                32767;
         }
 
         if (value < -32768) {
-            value = -32768;
+            value =
+                -32768;
         }
 
-        return (int16_t)value;
+        return (
+            int16_t
+        )value;
     }
 
 public:
@@ -924,7 +1045,8 @@ public:
         AudioInfo info
     ) override {
 
-        currentInfo = info;
+        currentInfo =
+            info;
 
         AudioStream::setAudioInfo(
             info
@@ -957,7 +1079,8 @@ public:
                 freeBytes / 4;
 
             if (inputCapacity > 512) {
-                inputCapacity = 512;
+                inputCapacity =
+                    512;
             }
 
             return (
@@ -982,6 +1105,7 @@ public:
             !data ||
             size == 0
         ) {
+
             return 0;
         }
 
@@ -1015,7 +1139,8 @@ public:
             return 0;
         }
 
-        size_t inputOffset = 0;
+        size_t inputOffset =
+            0;
 
         while (
             inputOffset < size
@@ -1034,6 +1159,7 @@ public:
                 samples >
                 maxSamples
             ) {
+
                 samples =
                     maxSamples;
             }
@@ -1083,7 +1209,8 @@ public:
                     outputBuffer
                 );
 
-            size_t outSampleIndex = 0;
+            size_t outSampleIndex =
+                0;
 
             for (
                 size_t i = 0;
@@ -1098,19 +1225,23 @@ public:
 
                 outputSamples[
                     outSampleIndex++
-                ] = sample;
+                ] =
+                    sample;
 
                 outputSamples[
                     outSampleIndex++
-                ] = sample;
+                ] =
+                    sample;
 
                 outputSamples[
                     outSampleIndex++
-                ] = sample;
+                ] =
+                    sample;
 
                 outputSamples[
                     outSampleIndex++
-                ] = sample;
+                ] =
+                    sample;
             }
 
             size_t written =
@@ -1168,6 +1299,7 @@ bool connectWiFi(
         ) {
 
         } else {
+
             return true;
         }
     }
@@ -1276,7 +1408,8 @@ bool syncNTP() {
     uint32_t start =
         millis();
 
-    int attempt = 0;
+    int attempt =
+        0;
 
     while (
         !isTimeValid() &&
@@ -1302,7 +1435,8 @@ bool syncNTP() {
             "TARS: NTP FAILED"
         );
 
-        ntpSynced = false;
+        ntpSynced =
+            false;
 
         return false;
     }
@@ -1327,7 +1461,8 @@ bool syncNTP() {
         timeInfo.tm_sec
     );
 
-    ntpSynced = true;
+    ntpSynced =
+        true;
 
     return true;
 }
@@ -1338,6 +1473,7 @@ bool ensureTimeValid() {
         ntpSynced &&
         isTimeValid()
     ) {
+
         return true;
     }
 
@@ -1345,7 +1481,8 @@ bool ensureTimeValid() {
         isTimeValid()
     ) {
 
-        ntpSynced = true;
+        ntpSynced =
+            true;
 
         return true;
     }
@@ -1363,12 +1500,14 @@ String askAI(
     if (
         !connectWiFi(true)
     ) {
+
         return "";
     }
 
     if (
         !ensureTimeValid()
     ) {
+
         return "";
     }
 
@@ -1483,12 +1622,14 @@ bool downloadTTS(
     if (
         !connectWiFi(true)
     ) {
+
         return false;
     }
 
     if (
         !ensureTimeValid()
     ) {
+
         return false;
     }
 
@@ -1595,7 +1736,8 @@ bool downloadTTS(
 
     uint8_t buffer[1024];
 
-    size_t total = 0;
+    size_t total =
+        0;
 
     uint32_t lastData =
         millis();
@@ -1622,6 +1764,7 @@ bool downloadTTS(
                 readSize >
                 sizeof(buffer)
             ) {
+
                 readSize =
                     sizeof(buffer);
             }
@@ -1663,6 +1806,7 @@ bool downloadTTS(
                 lastData >
                 5000
             ) {
+
                 break;
             }
 
@@ -1717,48 +1861,34 @@ int32_t getAudioData(
         !data ||
         len <= 0
     ) {
+
         return 0;
     }
 
     btCallbackCalls++;
 
-    // ========================================================
-    // AMBIL PCM DULU
-    // ========================================================
-    // Callback A2DP bisa terjadi ketika PCM ring masih kosong.
-    // Callback pertama TIDAK otomatis berarti suara mulai.
-    // ========================================================
     size_t got =
         pcmRing.read(
             data,
             len
         );
 
-    // ========================================================
-    // SINKRONISASI DENGAN AUDIO NYATA
-    // ========================================================
-    // Hanya ketika benar-benar ada PCM yang diambil dari ring
-    // (got > 0), kita anggap audio TARS benar-benar dimulai.
-    // ========================================================
     if (
         got > 0 &&
         !a2dpFirstAudioCallback
     ) {
 
-        a2dpFirstAudioCallback = true;
-        a2dpFirstAudioMillis = millis();
+        a2dpFirstAudioCallback =
+            true;
+
+        a2dpFirstAudioMillis =
+            millis();
 
         Serial.println(
             "TARS: A2DP FIRST REAL AUDIO CALLBACK"
         );
     }
 
-    // ========================================================
-    // JIKA PCM BELUM CUKUP
-    // ========================================================
-    // Sisa buffer diisi silence supaya callback tetap
-    // mengembalikan len sesuai kebutuhan A2DP.
-    // ========================================================
     if (
         got <
         (size_t)len
@@ -1894,6 +2024,7 @@ bool ensureBluetoothObject() {
     if (
         a2dpSource != nullptr
     ) {
+
         return true;
     }
 
@@ -1958,6 +2089,7 @@ void rebootTARS(
 ) {
 
     Serial.println();
+
     Serial.println(
         "================================"
     );
@@ -1997,31 +2129,28 @@ bool startBluetooth() {
     if (
         !ensureBluetoothObject()
     ) {
+
         return false;
     }
 
-    // Callback audio dipasang SEBELUM start().
-    // Jadi callback sudah siap ketika A2DP mulai meminta PCM.
     a2dpSource->set_data_callback(
         getAudioData
     );
 
-    btConnected = false;
-    btAudioStarted = false;
-    btCallbackCalls = 0;
+    btConnected =
+        false;
 
-    // ========================================================
-    // RESET FIRST REAL AUDIO DETECTION
-    // ========================================================
-    a2dpFirstAudioCallback = false;
-    a2dpFirstAudioMillis = 0;
+    btAudioStarted =
+        false;
 
-    // ========================================================
-    // JANGAN RESET oledAudioSyncPending DI SINI
-    // ========================================================
-    // oledPrepareTyping() sudah membuat flag ini TRUE.
-    // OLED harus tetap menunggu FIRST REAL AUDIO CALLBACK.
-    // ========================================================
+    btCallbackCalls =
+        0;
+
+    a2dpFirstAudioCallback =
+        false;
+
+    a2dpFirstAudioMillis =
+        0;
 
     printHeap(
         "BEFORE_BT"
@@ -2035,7 +2164,7 @@ bool startBluetooth() {
     );
 
     // ========================================================
-    // TUNGGU HANYA SAMPAI BLUETOOTH CONNECTED
+    // HANYA TUNGGU CONNECTED
     // ========================================================
     while (
         !btConnected &&
@@ -2044,6 +2173,7 @@ bool startBluetooth() {
     ) {
 
         delay(20);
+
         yield();
     }
 
@@ -2059,8 +2189,6 @@ bool startBluetooth() {
             "BT_FAILED"
         );
 
-        // Jangan end(false).
-        // Reboot jika koneksi gagal.
         rebootTARS(
             "BT CONNECTION FAILED"
         );
@@ -2087,33 +2215,104 @@ bool startBluetooth() {
     // Tidak menunggu btAudioStarted.
     // Tidak delay(300).
     // Tidak delay(5000).
-    //
-    // Setelah Connected, fungsi langsung return ke playMP3().
-    // Helix kemudian langsung mulai decode MP3 -> PCM Ring.
     // ========================================================
 
     return true;
 }
 
 // ============================================================
-// RELEASE BLUETOOTH
+// RELEASE BLUETOOTH — PROPER A2DP DISCONNECT
 // ============================================================
 void releaseBluetooth() {
 
-    // No end(false).
-    // ESP32 akan reboot setelah playback.
-    btAudioStarted = false;
-    btConnected = false;
+    Serial.println(
+        "TARS: Bluetooth DISCONNECT START"
+    );
+
+    // ========================================================
+    // HENTIKAN AKSES PCM DARI CALLBACK A2DP
+    // ========================================================
+    if (
+        a2dpSource != nullptr
+    ) {
+
+        a2dpSource->set_data_callback(
+            getAudioDataNoop
+        );
+
+        Serial.println(
+            "TARS: A2DP DATA CALLBACK -> NOOP"
+        );
+
+        // ====================================================
+        // BENAR-BENAR PUTUSKAN KONEKSI A2DP
+        // ====================================================
+        if (
+            btConnected
+        ) {
+
+            Serial.println(
+                "TARS: A2DP DISCONNECT()"
+            );
+
+            a2dpSource->disconnect();
+
+            uint32_t disconnectStart =
+                millis();
+
+            while (
+                btConnected &&
+                millis() -
+                    disconnectStart <
+                    BT_DISCONNECT_TIMEOUT_MS
+            ) {
+
+                delay(10);
+
+                yield();
+            }
+
+            if (
+                btConnected
+            ) {
+
+                Serial.println(
+                    "TARS: A2DP DISCONNECT TIMEOUT"
+                );
+
+            } else {
+
+                Serial.println(
+                    "TARS: A2DP DISCONNECTED"
+                );
+            }
+
+        } else {
+
+            Serial.println(
+                "TARS: A2DP ALREADY DISCONNECTED"
+            );
+        }
+    }
+
+    btAudioStarted =
+        false;
+
+    btConnected =
+        false;
 
     Serial.println(
-        "TARS: Bluetooth SESSION FINISHED"
+        "TARS: Bluetooth SESSION CLOSED"
     );
 
     printHeap(
-        "BT_SESSION_FINISHED"
+        "BT_SESSION_CLOSED"
     );
 }
 
+// ============================================================
+// STOP BLUETOOTH
+// ============================================================
 void stopBluetooth() {
 
     Serial.println(
@@ -2154,7 +2353,8 @@ void cleanupAudioSession() {
         );
     }
 
-    oledTyping = false;
+    oledTyping =
+        false;
 
     oledTypedChars =
         oledAnswer.length();
@@ -2222,7 +2422,8 @@ bool playMP3() {
         "TARS: PLAY START"
     );
 
-    playbackRunning = true;
+    playbackRunning =
+        true;
 
     // ========================================================
     // LAZY PCM ALLOCATION
@@ -2239,7 +2440,8 @@ bool playMP3() {
 
         mp3File.close();
 
-        playbackRunning = false;
+        playbackRunning =
+            false;
 
         cleanupAudioSession();
 
@@ -2269,7 +2471,8 @@ bool playMP3() {
 
         mp3File.close();
 
-        playbackRunning = false;
+        playbackRunning =
+            false;
 
         cleanupAudioSession();
 
@@ -2313,7 +2516,8 @@ bool playMP3() {
 
         mp3File.close();
 
-        playbackRunning = false;
+        playbackRunning =
+            false;
 
         cleanupAudioSession();
 
@@ -2359,16 +2563,6 @@ bool playMP3() {
         false;
 
     // ========================================================
-    // TIDAK ADA WAIT FOR A2DP AUDIO START
-    // ========================================================
-    // Sebelumnya ada loop menunggu btAudioStarted hingga 5 detik.
-    // Loop tersebut DIHAPUS.
-    //
-    // Setelah Bluetooth CONNECTED dan Helix READY,
-    // decoding langsung dimulai.
-    // ========================================================
-
-    // ========================================================
     // MAIN AUDIO LOOP
     // ========================================================
     while (
@@ -2376,7 +2570,6 @@ bool playMP3() {
         PLAY_TIMEOUT_MS
     ) {
 
-        // OLED mulai hanya setelah FIRST REAL AUDIO CALLBACK.
         oledUpdateTyping(
             true
         );
@@ -2457,9 +2650,6 @@ bool playMP3() {
             continue;
         }
 
-        // ====================================================
-        // LANGSUNG DECODE / ISI PCM RING
-        // ====================================================
         size_t copied =
             mp3Copier.copy();
 
@@ -2549,6 +2739,7 @@ bool playMP3() {
         if (
             !btConnected
         ) {
+
             break;
         }
 
@@ -2568,7 +2759,7 @@ bool playMP3() {
     );
 
     // ========================================================
-    // BLUETOOTH
+    // PROPER BLUETOOTH DISCONNECT
     // ========================================================
     stopBluetooth();
 
@@ -2577,7 +2768,8 @@ bool playMP3() {
     // ========================================================
     cleanupAudioSession();
 
-    playbackRunning = false;
+    playbackRunning =
+        false;
 
     if (
         !decoderFinished
@@ -2638,6 +2830,7 @@ void handleQuestion(
     if (
         question.length() == 0
     ) {
+
         return;
     }
 
@@ -2688,10 +2881,6 @@ void handleQuestion(
         return;
     }
 
-    // ========================================================
-    // HANYA SIAPKAN TEKS.
-    // JANGAN MULAI TYPING DI SINI.
-    // ========================================================
     oledPrepareTyping(
         answer
     );
@@ -2720,8 +2909,6 @@ void handleQuestion(
     // PLAYBACK
     // ========================================================
     playMP3();
-
-    // ESP32 reboot setelah playback.
 }
 
 // ============================================================
@@ -2768,7 +2955,8 @@ void setup() {
         )
     ) {
 
-        oledReadyFlag = true;
+        oledReadyFlag =
+            true;
 
         oledShowOnline();
     }
@@ -2828,6 +3016,10 @@ void setup() {
 
     Serial.println(
         "BT   : CONNECT TIMEOUT 20 SEC"
+    );
+
+    Serial.println(
+        "BT   : PROPER DISCONNECT BEFORE REBOOT"
     );
 
     Serial.println(
