@@ -752,7 +752,7 @@ bool startBluetooth() {
 
     printHeap("BEFORE_BT");
 
-    bool ok = a2dpSource->start(BT_DEVICE_NAME);
+    a2dpSource->start(BT_DEVICE_NAME);
     Serial.printf("a2dpSource->start returned=%d\n", ok ? 1 : 0);
 
     uint32_t start = millis();
