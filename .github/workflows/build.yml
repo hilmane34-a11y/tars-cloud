@@ -31,13 +31,13 @@ jobs:
           cat partitions.csv
 
           grep -Eq '^spiffs,[[:space:]]*data,[[:space:]]*spiffs,[[:space:]]*0x2A0000,[[:space:]]*0x160000' partitions.csv || {
-            echo "ERROR: Partisi spiffs tidak sesuai!"
+            echo "ERROR: Partisi LittleFS tidak sesuai!"
             echo "Harus:"
             echo "spiffs,data,spiffs,0x2A0000,0x160000"
             exit 1
           }
 
-          echo "OK - partisi spiffs sesuai"
+          echo "OK - partisi LittleFS sesuai"
 
       - name: Prepare LittleFS
         shell: bash
@@ -152,9 +152,9 @@ jobs:
               raise SystemExit("ERROR: merged BIN bukan 4 MB penuh")
 
           print("OK - merged BIN tepat 4 MB")
-          print("LittleFS/spiffs offset: 0x2A0000")
-          print("LittleFS/spiffs size  : 0x160000")
-          print("Flash address          : 0x0000")
+          print("LittleFS offset : 0x2A0000")
+          print("LittleFS size   : 0x160000")
+          print("Flash address   : 0x0000")
           PY
 
       - name: Upload TARS firmware
