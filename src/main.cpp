@@ -4,7 +4,6 @@
 #include <HTTPClient.h>
 #include <LittleFS.h>
 #include <Wire.h>
-#include <time.h>
 #include <ArduinoJson.h>
 #include <driver/i2s.h>
 #include <Adafruit_GFX.h>
@@ -14,297 +13,253 @@
 #include "config.h"
 #include "wifi_manager.h"
 
-#define MIC_I2S I2S_NUM_1
-#define DAC_I2S I2S_NUM_0
-#define MIC_RATE 16000
-#define PLAY_RATE 22050
-#define MIC_BUF 2048
-#define MP3_BUF 1024
-#define RECORD_MS 4000
-#define STT_FILE "/stt.wav"
+#define DAC_PORT I2S_NUM_0
+#define MIC_PORT I2S_NUM_1
+#define MIC_SCK 18
+#define MIC_WS 19
+#define MIC_SD 34
+#define DAC_L 25
+#define DAC_R 26
 
-Adafruit_SSD1306 oled(128,64,&Wire,-1);
+const uint32_t MIC_RATE=16000,PLAY_RATE=22050,RECORD_MS=4000;
+const size_t BUF=1024;
+
+Adafruit_SSD1306 oled(OLED_WIDTH,OLED_HEIGHT,&Wire,-1);
 bool oledOK=false,micOK=false,dacOK=false,playing=false,singMode=false;
-bool typing=false,syncText=false,firstAudio=false;
-uint32_t firstAudioAt=0,recordStart=0,lastWifi=0,lastNtp=0,oledTick=0;
-uint32_t recordSamples=0;
-String answer="",question="";
-size_t chars=0;
-File rec;
+String oledText; size_t oledPos=0;
+uint32_t oledTick=0;
 
-int32_t micRaw[MIC_BUF/4];
-int16_t micPCM[MIC_BUF/4];
-
-static void oledDraw(const char *title,const String &txt="",bool speak=false){
+void oledShow(const char* title,const String& text=""){
   if(!oledOK)return;
   oled.clearDisplay(); oled.setTextColor(SSD1306_WHITE); oled.setTextSize(1);
-  oled.setCursor(45,0); oled.print("T A R S");
+  oled.setCursor(42,0);oled.print("T A R S");
   oled.drawLine(0,9,127,9,SSD1306_WHITE);
-  oled.setCursor(3,14); oled.print("> "); oled.print(title);
-  oled.setCursor(3,25);
-  int line=0,col=0;
-  for(size_t i=0;i<chars && i<txt.length();i++){
-    char c=txt[i];
-    if(c=='\n'){line++;col=0;if(line>3)break;oled.setCursor(3,25+line*9);continue;}
-    if(col>=21){line++;col=0;if(line>3)break;oled.setCursor(3,25+line*9);}
-    oled.write(c);col++;
-  }
-  int y=61;
-  if(speak){
-    for(int i=0;i<7;i++){
-      int h=4+((i+(millis()/70))%5)*4;
-      oled.drawLine(5+i*19,y,5+i*19,y-h,SSD1306_WHITE);
-    }
-  }else{
-    for(int i=0;i<24;i++){
-      int h=2+((i+(millis()/150))%4)*2;
-      oled.drawLine(2+i*5,y,2+i*5,y-h,SSD1306_WHITE);
-    }
-  }
+  oled.setCursor(3,14);oled.print(title);
+  if(text.length()){oled.setCursor(3,27);oled.print(text);}
   oled.display();
 }
 
-static void oledReady(){chars=0;answer="";oledDraw("READY");}
-static void oledListen(){chars=0;oledDraw("LISTENING","SPEAK NOW");}
-static void oledProcess(){chars=0;oledDraw("PROCESSING","ANALYZING...");}
-
-static void oledUpdate(){
-  if(!oledOK)return;
-  uint32_t now=millis();
-  if(now-oledTick<45)return;
-  oledTick=now;
-  if(syncText && firstAudio && now-firstAudioAt>50){
-    syncText=false;typing=true;chars=0;
-  }
-  if(typing && chars<answer.length())chars++;
-  if(typing || playing)oledDraw(playing?"SPEAKING":"READY",answer,playing);
+void oledType(){
+  if(!oledOK||!oledText.length())return;
+  if(millis()-oledTick<45)return;
+  oledTick=millis();
+  if(oledPos<oledText.length())oledPos++;
+  oled.clearDisplay();oled.setTextColor(SSD1306_WHITE);oled.setTextSize(1);
+  oled.setCursor(42,0);oled.print("T A R S");
+  oled.drawLine(0,9,127,9,SSD1306_WHITE);
+  oled.setCursor(3,14);oled.print(playing?"SPEAKING":"READY");
+  oled.setCursor(3,27);
+  for(size_t i=0;i<oledPos;i++)oled.print(oledText[i]);
+  oled.display();
 }
 
-static bool initDAC(){
+bool initDAC(){
   i2s_config_t c={};
   c.mode=(i2s_mode_t)(I2S_MODE_MASTER|I2S_MODE_TX|I2S_MODE_DAC_BUILT_IN);
   c.sample_rate=PLAY_RATE;c.bits_per_sample=I2S_BITS_PER_SAMPLE_16BIT;
   c.channel_format=I2S_CHANNEL_FMT_RIGHT_LEFT;
   c.communication_format=I2S_COMM_FORMAT_I2S_MSB;
   c.dma_buf_count=4;c.dma_buf_len=256;c.tx_desc_auto_clear=true;
-  if(i2s_driver_install(DAC_I2S,&c,0,NULL)!=ESP_OK)return false;
-  return i2s_set_dac_mode(I2S_DAC_CHANNEL_BOTH_EN)==ESP_OK;
+  if(i2s_driver_install(DAC_PORT,&c,0,nullptr)!=ESP_OK)return false;
+  if(i2s_set_dac_mode(I2S_DAC_CHANNEL_BOTH_EN)!=ESP_OK)return false;
+  i2s_zero_dma_buffer(DAC_PORT);return true;
 }
 
-class DACOut:public AudioStream{
-  AudioInfo info; uint16_t b[MP3_BUF/2];
-public:
-  void setAudioInfo(AudioInfo i)override{
-    info=i;AudioStream::setAudioInfo(i);
-    if(dacOK)i2s_set_clk(DAC_I2S,i.sample_rate,I2S_BITS_PER_SAMPLE_16BIT,I2S_CHANNEL_STEREO);
-  }
-  int availableForWrite()override{return MP3_BUF;}
-  size_t write(const uint8_t*d,size_t n)override{
-    if(!dacOK||!d||n<2||info.bits_per_sample!=16)return 0;
-    size_t f=n/(info.channels*2);f=min(f,(size_t)(MP3_BUF/4));
-    int peak=0;
-    for(size_t i=0;i<f;i++){
-      int16_t s;
-      if(info.channels==1)s=(int16_t)(d[i*2]|d[i*2+1]<<8);
-      else{
-        int16_t l=(int16_t)(d[i*4]|d[i*4+1]<<8);
-        int16_t r=(int16_t)(d[i*4+2]|d[i*4+3]<<8);s=(l+r)/2;
-      }
-      peak=max(peak,abs((int)s));
-      int32_t v=(int32_t)(s*3.5f);v=max(-32768L,min(32767L,v));
-      uint16_t x=(uint8_t)((v>>8)+128)<<8;b[i*2]=x;b[i*2+1]=x;
-    }
-    size_t w=0;
-    if(i2s_write(DAC_I2S,b,f*4,&w,portMAX_DELAY)!=ESP_OK)return 0;
-    if(w&&!firstAudio){firstAudio=true;firstAudioAt=millis();}
-    return f*info.channels*2;
-  }
-};
-
-DACOut dac;
-MP3DecoderHelix decoder;
-EncodedAudioStream mp3(&dac,&decoder);
-
-static bool initMic(){
+bool initMic(){
   i2s_config_t c={};
   c.mode=(i2s_mode_t)(I2S_MODE_MASTER|I2S_MODE_RX);
   c.sample_rate=MIC_RATE;c.bits_per_sample=I2S_BITS_PER_SAMPLE_32BIT;
   c.channel_format=I2S_CHANNEL_FMT_ONLY_LEFT;
   c.communication_format=I2S_COMM_FORMAT_I2S;
   c.dma_buf_count=2;c.dma_buf_len=256;
-  if(i2s_driver_install(MIC_I2S,&c,0,NULL)!=ESP_OK)return false;
-  i2s_pin_config_t p={18,19,I2S_PIN_NO_CHANGE,34};
-  return i2s_set_pin(MIC_I2S,&p)==ESP_OK;
+  if(i2s_driver_install(MIC_PORT,&c,0,nullptr)!=ESP_OK)return false;
+  i2s_pin_config_t p={MIC_SCK,MIC_WS,I2S_PIN_NO_CHANGE,MIC_SD};
+  return i2s_set_pin(MIC_PORT,&p)==ESP_OK;
 }
 
-static void wavHeader(File&f,uint32_t size){
+void put16(uint8_t*p,uint16_t v){p[0]=v;p[1]=v>>8;}
+void put32(uint8_t*p,uint32_t v){p[0]=v;p[1]=v>>8;p[2]=v>>16;p[3]=v>>24;}
+
+void wavHeader(File&f,uint32_t n){
   uint8_t h[44]={};
-  memcpy(h,"RIFF",4);memcpy(h+8,"WAVE",4);memcpy(h+12,"fmt ",4);
-  h[16]=16;h[20]=1;h[22]=1;
-  h[24]=MIC_RATE&255;h[25]=MIC_RATE>>8;h[26]=MIC_RATE>>16;h[27]=MIC_RATE>>24;
-  uint32_t br=MIC_RATE*2;h[28]=br&255;h[29]=br>>8;h[30]=br>>16;h[31]=br>>24;
-  h[32]=2;h[34]=16;memcpy(h+36,"data",4);
-  uint32_t rs=36+size;h[4]=rs&255;h[5]=rs>>8;h[6]=rs>>16;h[7]=rs>>24;
-  h[40]=size&255;h[41]=size>>8;h[42]=size>>16;h[43]=size>>24;
+  memcpy(h,"RIFF",4);put32(h+4,n+36);memcpy(h+8,"WAVEfmt ",8);
+  put32(h+16,16);put16(h+20,1);put16(h+22,1);
+  put32(h+24,MIC_RATE);put32(h+28,MIC_RATE*2);
+  put16(h+32,2);put16(h+34,16);memcpy(h+36,"data",4);put32(h+40,n);
   f.seek(0);f.write(h,44);
 }
 
-static bool startRecord(){
+bool recordMic(){
   if(!micOK)return false;
+  oledShow("LISTENING","SPEAK NOW");
   if(LittleFS.exists(STT_FILE))LittleFS.remove(STT_FILE);
-  rec=LittleFS.open(STT_FILE,FILE_WRITE);
-  if(!rec)return false;
-  uint8_t z[44]={};rec.write(z,44);recordSamples=0;recordStart=millis();oledListen();return true;
-}
-
-static bool recordStep(){
-  size_t n=0;
-  if(i2s_read(MIC_I2S,micRaw,sizeof(micRaw),&n,0)!=ESP_OK)return true;
-  for(size_t i=0;i<n/4;i++){
-    int32_t v=micRaw[i]>>14;v=max(-32768L,min(32767L,v));micPCM[i]=v;
+  File f=LittleFS.open(STT_FILE,FILE_WRITE);if(!f)return false;
+  uint8_t z[44]={};f.write(z,44);
+  int32_t raw[BUF/4];int16_t pcm[BUF/4];uint32_t samples=0,start=millis();
+  while(millis()-start<RECORD_MS){
+    size_t n=0;
+    if(i2s_read(MIC_PORT,raw,sizeof(raw),&n,100)==ESP_OK)
+      for(size_t i=0;i<n/4;i++){
+        int32_t v=raw[i]>>14;
+        v=max((int32_t)-32768,min((int32_t)32767,v));
+        pcm[i]=(int16_t)v;
+      }
+    size_t s=n/4;
+    if(s){f.write((uint8_t*)pcm,s*2);samples+=s;}
+    yield();
   }
-  size_t samples=n/4;rec.write((uint8_t*)micPCM,samples*2);recordSamples+=samples;
-  if(millis()-recordStart<RECORD_MS)return true;
-  wavHeader(rec,recordSamples*2);rec.close();return false;
+  wavHeader(f,samples*2);f.close();return samples>0;
 }
 
-static bool wifiOK(){
-  if(WiFi.status()==WL_CONNECTED)return true;
-  return wifiManagerConnect(false);
+bool wifiOK(){
+  if(WiFi.status()!=WL_CONNECTED)
+    if(!wifiManagerConnect(false))return false;
+  return true;
 }
 
-static void wifiMaintain(){
-  uint32_t n=millis();
-  if(n-lastWifi<3000)return;
-  lastWifi=n;
-  if(WiFi.status()!=WL_CONNECTED)wifiManagerConnect(false);
-  if(WiFi.status()==WL_CONNECTED && n-lastNtp>30000){
-    lastNtp=n;
-    if(time(nullptr)<1577836800)
-      configTime(7*3600,0,"pool.ntp.org","time.nist.gov");
-  }
-}
-
-static String httpJson(const char*url,const String&text){
-  if(!wifiOK())return "";
-  WiFiClientSecure c;c.setInsecure();HTTPClient h;
-  if(!h.begin(c,url))return "";
-  h.addHeader("Content-Type","application/json");
-  StaticJsonDocument<384> j;j["text"]=text;String body;serializeJson(j,body);
-  int code=h.POST(body);if(code<200||code>=300){h.end();return "";}
-  String r=h.getString();h.end();return r;
-}
-
-static String ask(const String&q){
-  oledProcess();String r=httpJson(ASK_URL,q);StaticJsonDocument<768>j;
-  if(deserializeJson(j,r))return "";String a=j["response"]|"";
-  a.trim();return a;
-}
-
-static String stt(){
+String stt(){
   if(!wifiOK())return "";
   File f=LittleFS.open(STT_FILE,FILE_READ);if(!f)return "";
-  const char*b="----TARSSTT";String pre="--"+String(b)+"\r\nContent-Disposition: form-data; name=\"file\"; filename=\"stt.wav\"\r\nContent-Type: audio/wav\r\n\r\n";
-  String post="\r\n--"+String(b)+"--\r\n";size_t total=pre.length()+f.size()+post.length();
+  const char*b="----TARSSTT";
+  String a="--"+String(b)+"\r\nContent-Disposition: form-data; name=\"file\"; filename=\"stt.wav\"\r\nContent-Type: audio/wav\r\n\r\n";
+  String e="\r\n--"+String(b)+"--\r\n";
   WiFiClientSecure c;c.setInsecure();
-  String host=TARS_CLOUD_URL;int x=host.indexOf("://");if(x>=0)host=host.substring(x+3);
-  x=host.indexOf('/');String path=x>=0?host.substring(x):"";if(x>=0)host=host.substring(0,x);
+  String host=String(TARS_CLOUD_URL).substring(String(TARS_CLOUD_URL).indexOf("://")+3);
+  int slash=host.indexOf('/');if(slash>=0)host=host.substring(0,slash);
   if(!c.connect(host.c_str(),443)){f.close();return "";}
-  c.printf("POST %s/stt HTTP/1.1\r\nHost: %s\r\nContent-Type: multipart/form-data; boundary=%s\r\nContent-Length: %u\r\nConnection: close\r\n\r\n",path.c_str(),host.c_str(),b,(unsigned)total);
-  c.print(pre);uint8_t buf[MP3_BUF];
-  while(f.available()){size_t n=f.read(buf,sizeof(buf));if(n)c.write(buf,n);yield();}
-  f.close();c.print(post);
-  uint32_t t=millis();while(c.connected()&&!c.available()&&millis()-t<15000)yield();
-  String r;while(c.available())r+=c.readStringUntil('\n');
-  c.stop();x=r.indexOf("\r\n\r\n");if(x>=0)r=r.substring(x+4);
-  StaticJsonDocument<512>j;if(deserializeJson(j,r))return "";
-  String s=j["text"]|j["transcript"]|"";s.trim();return s;
+  size_t total=a.length()+f.size()+e.length();
+  c.printf("POST /stt HTTP/1.1\r\nHost: %s\r\nContent-Type: multipart/form-data; boundary=%s\r\nContent-Length: %u\r\nConnection: close\r\n\r\n",host.c_str(),b,(unsigned)total);
+  c.print(a);uint8_t buf[BUF];
+  while(f.available()){
+    size_t n=f.read(buf,sizeof(buf));if(!n)break;
+    if(c.write(buf,n)!=n){f.close();c.stop();return "";}
+    yield();
+  }
+  f.close();c.print(e);
+  uint32_t t=millis();
+  while(!c.available()&&c.connected()&&millis()-t<15000){delay(5);yield();}
+  String r=c.readString();c.stop();
+  int p=r.indexOf("\r\n\r\n");if(p<0)return "";
+  JsonDocument j;if(deserializeJson(j,r.substring(p+4)))return "";
+  String s;
+  if(j["text"].is<const char*>())s=j["text"].as<const char*>();
+  if(!s.length()&&j["transcript"].is<const char*>())s=j["transcript"].as<const char*>();
+  s.trim();return s;
 }
 
-static bool downloadMP3(const char*url,const String&text){
+String ask(const String&q){
+  if(!wifiOK())return "";
+  oledShow("PROCESSING","ANALYZING...");
+  WiFiClientSecure c;c.setInsecure();HTTPClient h;
+  if(!h.begin(c,String(TARS_CLOUD_URL)+"/ask"))return "";
+  h.setTimeout(30000);h.addHeader("Content-Type","application/json");
+  JsonDocument j;j["text"]=q;String b;serializeJson(j,b);
+  int code=h.POST(b);if(code<200||code>=300){h.end();return "";}
+  String r=h.getString();h.end();JsonDocument x;
+  if(deserializeJson(x,r))return "";
+  String s=x["response"].as<String>();s.trim();return s;
+}
+
+bool downloadMP3(const String&url,const String&text){
   if(!wifiOK())return false;
   WiFiClientSecure c;c.setInsecure();HTTPClient h;
   if(!h.begin(c,url))return false;
-  h.addHeader("Content-Type","application/json");
-  StaticJsonDocument<384>j;j["text"]=text;String body;serializeJson(j,body);
-  int code=h.POST(body);if(code<200||code>=300){h.end();return false;}
-  if(LittleFS.exists(MP3_FILE))LittleFS.remove(MP3_FILE);
+  h.setTimeout(60000);h.addHeader("Content-Type","application/json");
+  JsonDocument j;j["text"]=text;String b;serializeJson(j,b);
+  int code=h.POST(b);if(code<200||code>=300){h.end();return false;}
   File f=LittleFS.open(MP3_FILE,FILE_WRITE);if(!f){h.end();return false;}
-  WiFiClient*s=h.getStreamPtr();uint8_t buf[MP3_BUF];int len=h.getSize();size_t total=0;uint32_t t=millis();
+  WiFiClient*s=h.getStreamPtr();uint8_t buf[BUF];int len=h.getSize();size_t total=0;
+  uint32_t t=millis();
   while(h.connected()&&(len>0||len==-1)){
-    size_t a=s->available();
-    if(a){size_t n=min(a,sizeof(buf));int r=s->readBytes(buf,n);if(r>0){f.write(buf,r);total+=r;if(len>0)len-=r;t=millis();}}
-    else{if(millis()-t>5000)break;yield();}
+    size_t n=s->available();
+    if(n){
+      n=min(n,sizeof(buf));int r=s->readBytes(buf,n);
+      if(r>0){f.write(buf,r);total+=r;if(len>0)len-=r;t=millis();}
+    }else{if(millis()-t>5000)break;delay(1);}
+    yield();
   }
   f.close();h.end();return total>0;
 }
 
-static bool playMP3(){
+class DACOut:public AudioStream{
+  AudioInfo info;
+  uint16_t b[BUF/2];
+public:
+  void setAudioInfo(AudioInfo i)override{info=i;AudioStream::setAudioInfo(i);}
+  int availableForWrite()override{return BUF;}
+  size_t write(const uint8_t*d,size_t n)override{
+    if(!dacOK||!d||info.bits_per_sample!=16)return 0;
+    size_t frames=n/(info.channels*2);if(frames>BUF/4)frames=BUF/4;
+    for(size_t i=0;i<frames;i++){
+      int16_t v;
+      if(info.channels==1)v=(int16_t)(d[i*2]|((uint16_t)d[i*2+1]<<8));
+      else{
+        int16_t l=d[i*4]|((uint16_t)d[i*4+1]<<8),r=d[i*4+2]|((uint16_t)d[i*4+3]<<8);
+        v=(int16_t)(((int32_t)l+r)/2);
+      }
+      int32_t x=(int32_t)(v*3.5f);
+      x=max((int32_t)-32768,min((int32_t)32767,x));
+      uint8_t u=(uint8_t)((x>>8)+128);
+      b[i*2]=b[i*2+1]=(uint16_t)u<<8;
+    }
+    size_t w=0;i2s_write(DAC_PORT,b,frames*4,&w,portMAX_DELAY);
+    return w?frames*info.channels*2:0;
+  }
+}dacOut;
+
+MP3DecoderHelix decoder;
+EncodedAudioStream mp3(&dacOut,&decoder);
+
+bool playMP3(){
   File f=LittleFS.open(MP3_FILE,FILE_READ);if(!f)return false;
-  playing=true;firstAudio=false;syncText=true;firstAudioAt=0;
-  mp3.begin();StreamCopy cp(mp3,f,MP3_BUF);uint32_t t=millis();
-  while(f.available()&&millis()-t<120000){cp.copy();oledUpdate();yield();}
-  mp3.end();f.close();playing=false;syncText=false;typing=false;singMode=false;
-  LittleFS.remove(MP3_FILE);oledReady();return true;
+  playing=true;oledPos=0;
+  if(!mp3.begin()){f.close();playing=false;return false;}
+  StreamCopy copy(mp3,f,BUF);uint32_t t=millis();
+  while(f.available()&&millis()-t<120000){
+    copy.copy();oledType();yield();
+  }
+  mp3.end();f.close();playing=false;LittleFS.remove(MP3_FILE);
+  oledShow("READY","WAITING...");
+  return true;
 }
 
-static void processQuestion(String q){
-  q.trim();if(!q.length())return;
-  question=q;answer=ask(q);if(!answer.length()){oledReady();return;}
-  chars=0;typing=false;syncText=false;
-  bool sing=q.indexOf("nyanyi")>=0||q.indexOf("bernyanyi")>=0||q.indexOf("nyanyikan")>=0;
-  singMode=sing;
-  if(downloadMP3(sing?SING_URL:TTS_URL,sing?q:answer))playMP3();
-  else oledReady();
+bool singRequest(String s){
+  s.toLowerCase();
+  return s.indexOf("nyanyi")>=0||s.indexOf("bernyanyi")>=0||s.indexOf("nyanyikan")>=0;
 }
 
-enum State{IDLE,REC,STT,ASK};
-State state=IDLE;
+void processQuestion(const String&q){
+  String answer=ask(q);if(!answer.length()){oledShow("READY");return;}
+  oledText=answer;oledPos=0;
+  bool sing=singRequest(q);singMode=sing;
+  String url=String(TARS_CLOUD_URL)+(sing?"/sing":"/tts");
+  if(downloadMP3(url,sing?q:answer))playMP3();
+  else oledShow("READY","AUDIO ERROR");
+  singMode=false;
+}
 
 void setup(){
   Serial.begin(SERIAL_BAUD);
   Wire.begin(OLED_SDA,OLED_SCL);
   oledOK=oled.begin(SSD1306_SWITCHCAPVCC,OLED_ADDR);
-  if(oledOK)oledReady();
-
+  if(oledOK)oledShow("BOOT");
   LittleFS.begin(true);
   dacOK=initDAC();
   micOK=initMic();
-
-  Serial.println("TARS: INIT");
   Serial.println("TARS: BLUETOOTH DISABLED");
-  Serial.println("TARS: SERIAL MONITOR ONLY");
-
-  if(wifiManagerBegin()){
-    if(wifiManagerConnect(false)){
-      configTime(7*3600,0,"pool.ntp.org","time.nist.gov");
-      Serial.println("TARS: WIFI ON");
-    }
-  }
-  oledReady();
-  Serial.println("TARS: READY");
+  wifiManagerBegin();
+  wifiOK();
+  oledShow("READY","WAITING...");
 }
 
 void loop(){
-  wifiMaintain();
-  oledUpdate();
-
-  if(state==IDLE){
-    if(WiFi.status()==WL_CONNECTED&&startRecord())state=REC;
+  if(WiFi.status()!=WL_CONNECTED&&!playing)wifiManagerConnect(false);
+  if(!playing){
+    if(recordMic()){
+      String q=stt();LittleFS.remove(STT_FILE);
+      if(q.length())processQuestion(q);
+      else oledShow("READY","NO INPUT");
+    }
   }
-  else if(state==REC){
-    if(!recordStep())state=STT;
-  }
-  else if(state==STT){
-    question=stt();LittleFS.remove(STT_FILE);
-    if(question.length())state=ASK;
-    else state=IDLE,oledReady();
-  }
-  else if(state==ASK){
-    processQuestion(question);
-    question="";answer="";
-    state=IDLE;
-  }
-
-  yield();
+  delay(10);
 }
