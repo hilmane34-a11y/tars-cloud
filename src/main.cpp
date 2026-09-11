@@ -20,7 +20,7 @@
 #define MIC_WS  19
 #define MIC_SD  34
 
-const uint32_t MIC_RATE=16000, PLAY_RATE=22050, RECORD_MS=4000;
+const uint32_t MIC_RATE=16000,PLAY_RATE=22050,RECORD_MS=4000;
 const size_t BUF=1024;
 static const char *STT_FILE="/stt.wav";
 
@@ -126,6 +126,7 @@ bool recordMic(){
 
   if(LittleFS.exists(STT_FILE))LittleFS.remove(STT_FILE);
   File f=LittleFS.open(STT_FILE,FILE_WRITE);
+
   if(!f){
     Serial.println("TARS: WAV OPEN ERROR");
     return false;
@@ -136,6 +137,7 @@ bool recordMic(){
 
   int32_t raw[BUF/4];
   int16_t pcm[BUF/4];
+
   uint32_t samples=0,start=millis(),reads=0,errors=0;
   int32_t peak=0,minV=32767,maxV=-32768;
 
@@ -154,7 +156,10 @@ bool recordMic(){
     size_t count=n/sizeof(int32_t);
 
     for(size_t i=0;i<count;i++){
-      int32_t v=raw[i]>>14;
+      // INMP441 24-bit data -> 16-bit PCM.
+      // >>16 menjaga level agar tidak mudah clipping.
+      int32_t v=raw[i]>>16;
+
       v=max((int32_t)-32768,min((int32_t)32767,v));
       pcm[i]=(int16_t)v;
 
@@ -203,12 +208,90 @@ bool wifiOK(){
   return true;
 }
 
+// ================= STT HTTP BODY =================
+String readHTTPBody(WiFiClientSecure &c){
+  String line;
+  bool chunked=false;
+  int contentLength=-1;
+
+  // Header
+  while(c.connected()){
+    line=c.readStringUntil('\n');
+    line.trim();
+
+    if(!line.length())break;
+
+    String low=line;
+    low.toLowerCase();
+
+    if(low.startsWith("content-length:"))
+      contentLength=low.substring(15).toInt();
+
+    if(low.indexOf("transfer-encoding:")>=0&&
+       low.indexOf("chunked")>=0)
+      chunked=true;
+  }
+
+  Serial.printf(
+    "TARS: STT TRANSFER=%s LENGTH=%d\r\n",
+    chunked?"CHUNKED":"NORMAL",contentLength
+  );
+
+  String body;
+
+  if(chunked){
+    while(c.connected()){
+      line=c.readStringUntil('\n');
+      line.trim();
+
+      if(!line.length())continue;
+
+      int chunkSize=(int)strtol(line.c_str(),nullptr,16);
+
+      if(chunkSize<=0){
+        c.readStringUntil('\n');
+        break;
+      }
+
+      while(chunkSize>0){
+        uint8_t buf[BUF];
+        size_t want=min((int)sizeof(buf),chunkSize);
+        size_t n=c.readBytes(buf,want);
+
+        if(!n)break;
+
+        body.concat((const char*)buf,n);
+        chunkSize-=n;
+      }
+
+      c.readStringUntil('\n');
+    }
+  }else if(contentLength>=0){
+    while((int)body.length()<contentLength&&c.connected()){
+      uint8_t buf[BUF];
+      int remain=contentLength-body.length();
+      size_t want=min((int)sizeof(buf),remain);
+      size_t n=c.readBytes(buf,want);
+
+      if(!n)break;
+      body.concat((const char*)buf,n);
+    }
+  }else{
+    body=c.readString();
+  }
+
+  return body;
+}
+
 // ================= STT =================
 String stt(){
   if(!wifiOK())return "";
 
   File f=LittleFS.open(STT_FILE,FILE_READ);
-  if(!f)return "";
+  if(!f){
+    Serial.println("TARS: STT WAV OPEN ERROR");
+    return "";
+  }
 
   const char *b="----TARSSTT";
   String a="--"+String(b)+
@@ -218,6 +301,7 @@ String stt(){
 
   WiFiClientSecure c;
   c.setInsecure();
+  c.setTimeout(15000);
 
   String base=TARS_CLOUD_URL;
   int proto=base.indexOf("://");
@@ -225,7 +309,10 @@ String stt(){
   int slash=host.indexOf('/');
   if(slash>=0)host=host.substring(0,slash);
 
+  Serial.println("TARS: STT CONNECTING");
+
   if(!c.connect(host.c_str(),443)){
+    Serial.println("TARS: STT CONNECT ERROR");
     f.close();
     return "";
   }
@@ -247,9 +334,11 @@ String stt(){
 
   while(f.available()){
     size_t n=f.read(buf,sizeof(buf));
+
     if(!n)break;
 
     if(c.write(buf,n)!=n){
+      Serial.println("TARS: STT UPLOAD ERROR");
       f.close();
       c.stop();
       return "";
@@ -261,21 +350,44 @@ String stt(){
   f.close();
   c.print(e);
 
+  Serial.println("TARS: STT WAITING");
+
   uint32_t t=millis();
 
-  while(!c.available()&&c.connected()&&millis()-t<15000){
+  while(!c.available()&&c.connected()&&millis()-t<20000){
     delay(5);
     yield();
   }
 
-  String r=c.readString();
+  if(!c.available()){
+    Serial.println("TARS: STT TIMEOUT");
+    c.stop();
+    return "";
+  }
+
+  String status=c.readStringUntil('\n');
+  status.trim();
+
+  Serial.print("TARS: STT HTTP = ");
+  Serial.println(status);
+
+  String body=readHTTPBody(c);
   c.stop();
 
-  int p=r.indexOf("\r\n\r\n");
-  if(p<0)return "";
+  if(!body.length()){
+    Serial.println("TARS: STT EMPTY RESPONSE");
+    return "";
+  }
+
+  Serial.print("TARS: STT BODY = ");
+  Serial.println(body);
 
   JsonDocument j;
-  if(deserializeJson(j,r.substring(p+4)))return "";
+
+  if(deserializeJson(j,body)){
+    Serial.println("TARS: STT JSON ERROR");
+    return "";
+  }
 
   String s;
 
@@ -287,8 +399,12 @@ String stt(){
 
   s.trim();
 
-  Serial.print("TARS: STT = ");
-  Serial.println(s);
+  if(s.length()){
+    Serial.print("TARS: STT = ");
+    Serial.println(s);
+  }else{
+    Serial.println("TARS: STT NO TEXT");
+  }
 
   return s;
 }
@@ -296,6 +412,9 @@ String stt(){
 // ================= ASK =================
 String ask(const String &q){
   if(!wifiOK())return "";
+
+  Serial.print("TARS: ASK = ");
+  Serial.println(q);
 
   oledShow("PROCESSING","ANALYZING...");
 
@@ -316,6 +435,8 @@ String ask(const String &q){
 
   int code=h.POST(b);
 
+  Serial.printf("TARS: ASK HTTP = %d\r\n",code);
+
   if(code<200||code>=300){
     h.end();
     return "";
@@ -330,12 +451,19 @@ String ask(const String &q){
   String s=x["response"].as<String>();
   s.trim();
 
+  Serial.print("TARS: ANSWER = ");
+  Serial.println(s);
+
   return s;
 }
 
 // ================= TTS / SING =================
 bool downloadMP3(const String &url,const String &text){
   if(!wifiOK())return false;
+
+  Serial.println(
+    url.endsWith("/sing")?"TARS: SING":"TARS: TTS"
+  );
 
   WiFiClientSecure c;
   c.setInsecure();
@@ -354,12 +482,15 @@ bool downloadMP3(const String &url,const String &text){
 
   int code=h.POST(b);
 
+  Serial.printf("TARS: AUDIO HTTP = %d\r\n",code);
+
   if(code<200||code>=300){
     h.end();
     return false;
   }
 
   File f=LittleFS.open(MP3_FILE,FILE_WRITE);
+
   if(!f){
     h.end();
     return false;
@@ -381,6 +512,7 @@ bool downloadMP3(const String &url,const String &text){
       if(r>0){
         f.write(buf,r);
         total+=r;
+
         if(len>0)len-=r;
         t=millis();
       }
@@ -394,6 +526,8 @@ bool downloadMP3(const String &url,const String &text){
 
   f.close();
   h.end();
+
+  Serial.printf("TARS: MP3 BYTES = %lu\r\n",(unsigned long)total);
 
   return total>0;
 }
@@ -448,16 +582,24 @@ EncodedAudioStream mp3(&dacOut,&decoder);
 // ================= PLAY MP3 =================
 bool playMP3(){
   File f=LittleFS.open(MP3_FILE,FILE_READ);
-  if(!f)return false;
+  if(!f){
+    Serial.println("TARS: MP3 FILE ERROR");
+    return false;
+  }
+
+  Serial.printf("TARS: PLAY MP3 SIZE=%u\r\n",(unsigned)f.size());
 
   playing=true;
   oledPos=0;
 
   if(!mp3.begin()){
+    Serial.println("TARS: MP3 DECODER ERROR");
     f.close();
     playing=false;
     return false;
   }
+
+  oledText=oledText;
 
   StreamCopy copy(mp3,f,BUF);
   uint32_t t=millis();
@@ -480,6 +622,7 @@ bool playMP3(){
 // ================= SING DETECTOR =================
 bool singRequest(String s){
   s.toLowerCase();
+
   return s.indexOf("nyanyi")>=0||
          s.indexOf("bernyanyi")>=0||
          s.indexOf("nyanyikan")>=0;
@@ -490,7 +633,7 @@ void processQuestion(const String &q){
   String answer=ask(q);
 
   if(!answer.length()){
-    oledShow("READY");
+    oledShow("READY","ASK ERROR");
     return;
   }
 
@@ -501,10 +644,10 @@ void processQuestion(const String &q){
 
   String url=String(TARS_CLOUD_URL)+(singMode?"/sing":"/tts");
 
-  if(downloadMP3(url,singMode?q:answer))
-    playMP3();
-  else
+  if(!downloadMP3(url,singMode?q:answer))
     oledShow("READY","AUDIO ERROR");
+  else
+    playMP3();
 
   singMode=false;
 }
@@ -540,6 +683,7 @@ void loop(){
   if(!playing){
     if(recordMic()){
       String q=stt();
+
       LittleFS.remove(STT_FILE);
 
       if(q.length())
