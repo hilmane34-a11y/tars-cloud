@@ -13,24 +13,18 @@
 #include "config.h"
 #include "wifi_manager.h"
 
-// =========================
-// HARDWARE
-// =========================
+// ========================= HARDWARE =========================
 #define DAC_PORT I2S_NUM_0
 #define MIC_PORT I2S_NUM_1
 #define MIC_SCK 18
 #define MIC_WS  19
 #define MIC_SD  34
-#define DAC_L   25
-#define DAC_R   26
 
-const uint32_t MIC_RATE=16000, PLAY_RATE=22050, RECORD_MS=4000;
+const uint32_t MIC_RATE=16000,PLAY_RATE=22050,RECORD_MS=4000;
 const size_t BUF=1024;
 static const char *STT_FILE="/stt.wav";
 
-// =========================
-// OLED
-// =========================
+// ========================= OLED =========================
 Adafruit_SSD1306 oled(OLED_WIDTH,OLED_HEIGHT,&Wire,-1);
 bool oledOK=false,micOK=false,dacOK=false,playing=false,singMode=false;
 String oledText;
@@ -65,9 +59,7 @@ void oledType(){
   oled.display();
 }
 
-// =========================
-// I2S
-// =========================
+// ========================= I2S =========================
 bool initDAC(){
   i2s_config_t c={};
   c.mode=(i2s_mode_t)(I2S_MODE_MASTER|I2S_MODE_TX|I2S_MODE_DAC_BUILT_IN);
@@ -97,46 +89,37 @@ bool initMic(){
 
   if(i2s_driver_install(MIC_PORT,&c,0,nullptr)!=ESP_OK)return false;
 
-  i2s_pin_config_t p={MIC_SCK,MIC_WS,I2S_PIN_NO_CHANGE,MIC_SD};
+  i2s_pin_config_t p={};
+  p.mck_io_num=I2S_PIN_NO_CHANGE;
+  p.bck_io_num=MIC_SCK;
+  p.ws_io_num=MIC_WS;
+  p.data_out_num=I2S_PIN_NO_CHANGE;
+  p.data_in_num=MIC_SD;
+
   return i2s_set_pin(MIC_PORT,&p)==ESP_OK;
 }
 
-// =========================
-// WAV
-// =========================
+// ========================= WAV =========================
 void put16(uint8_t *p,uint16_t v){
-  p[0]=v;
-  p[1]=v>>8;
+  p[0]=v;p[1]=v>>8;
 }
 
 void put32(uint8_t *p,uint32_t v){
-  p[0]=v;
-  p[1]=v>>8;
-  p[2]=v>>16;
-  p[3]=v>>24;
+  p[0]=v;p[1]=v>>8;p[2]=v>>16;p[3]=v>>24;
 }
 
 void wavHeader(File &f,uint32_t n){
   uint8_t h[44]={};
-  memcpy(h,"RIFF",4);
-  put32(h+4,n+36);
+  memcpy(h,"RIFF",4);put32(h+4,n+36);
   memcpy(h+8,"WAVEfmt ",8);
-  put32(h+16,16);
-  put16(h+20,1);
-  put16(h+22,1);
-  put32(h+24,MIC_RATE);
-  put32(h+28,MIC_RATE*2);
-  put16(h+32,2);
-  put16(h+34,16);
-  memcpy(h+36,"data",4);
-  put32(h+40,n);
-  f.seek(0);
-  f.write(h,44);
+  put32(h+16,16);put16(h+20,1);put16(h+22,1);
+  put32(h+24,MIC_RATE);put32(h+28,MIC_RATE*2);
+  put16(h+32,2);put16(h+34,16);
+  memcpy(h+36,"data",4);put32(h+40,n);
+  f.seek(0);f.write(h,44);
 }
 
-// =========================
-// RECORD
-// =========================
+// ========================= RECORD =========================
 bool recordMic(){
   if(!micOK)return false;
 
@@ -178,18 +161,14 @@ bool recordMic(){
   return samples>0;
 }
 
-// =========================
-// WIFI
-// =========================
+// ========================= WIFI =========================
 bool wifiOK(){
   if(WiFi.status()!=WL_CONNECTED)
     if(!wifiManagerConnect(false))return false;
   return true;
 }
 
-// =========================
-// STT
-// =========================
+// ========================= STT =========================
 String stt(){
   if(!wifiOK())return "";
 
@@ -197,12 +176,9 @@ String stt(){
   if(!f)return "";
 
   const char *b="----TARSSTT";
-
-  String a=
-    "--"+String(b)+
+  String a="--"+String(b)+
     "\r\nContent-Disposition: form-data; name=\"file\"; filename=\"stt.wav\""
     "\r\nContent-Type: audio/wav\r\n\r\n";
-
   String e="\r\n--"+String(b)+"--\r\n";
 
   WiFiClientSecure c;
@@ -251,7 +227,6 @@ String stt(){
   c.print(e);
 
   uint32_t t=millis();
-
   while(!c.available()&&c.connected()&&millis()-t<15000){
     delay(5);
     yield();
@@ -278,9 +253,7 @@ String stt(){
   return s;
 }
 
-// =========================
-// ASK
-// =========================
+// ========================= ASK =========================
 String ask(const String &q){
   if(!wifiOK())return "";
 
@@ -319,9 +292,7 @@ String ask(const String &q){
   return s;
 }
 
-// =========================
-// TTS / SING DOWNLOAD
-// =========================
+// ========================= TTS / SING =========================
 bool downloadMP3(const String &url,const String &text){
   if(!wifiOK())return false;
 
@@ -385,9 +356,7 @@ bool downloadMP3(const String &url,const String &text){
   return total>0;
 }
 
-// =========================
-// DAC AUDIO OUTPUT
-// =========================
+// ========================= DAC OUTPUT =========================
 class DACOut:public AudioStream{
   AudioInfo info;
   uint16_t b[BUF/2];
@@ -436,9 +405,7 @@ public:
 MP3DecoderHelix decoder;
 EncodedAudioStream mp3(&dacOut,&decoder);
 
-// =========================
-// PLAY MP3
-// =========================
+// ========================= PLAY MP3 =========================
 bool playMP3(){
   File f=LittleFS.open(MP3_FILE,FILE_READ);
   if(!f)return false;
@@ -470,20 +437,15 @@ bool playMP3(){
   return true;
 }
 
-// =========================
-// SING DETECTOR
-// =========================
+// ========================= SING DETECTOR =========================
 bool singRequest(String s){
   s.toLowerCase();
-
   return s.indexOf("nyanyi")>=0||
          s.indexOf("bernyanyi")>=0||
          s.indexOf("nyanyikan")>=0;
 }
 
-// =========================
-// PROCESS QUESTION
-// =========================
+// ========================= PROCESS =========================
 void processQuestion(const String &q){
   String answer=ask(q);
 
@@ -500,21 +462,17 @@ void processQuestion(const String &q){
 
   String url=String(TARS_CLOUD_URL)+(sing?"/sing":"/tts");
 
-  if(downloadMP3(url,sing?q:answer)){
+  if(downloadMP3(url,sing?q:answer))
     playMP3();
-  }else{
+  else
     oledShow("READY","AUDIO ERROR");
-  }
 
   singMode=false;
 }
 
-// =========================
-// SETUP
-// =========================
+// ========================= SETUP =========================
 void setup(){
   Serial.begin(SERIAL_BAUD);
-
   Wire.begin(OLED_SDA,OLED_SCL);
 
   oledOK=oled.begin(SSD1306_SWITCHCAPVCC,OLED_ADDR);
@@ -533,9 +491,7 @@ void setup(){
   oledShow("READY","WAITING...");
 }
 
-// =========================
-// LOOP
-// =========================
+// ========================= LOOP =========================
 void loop(){
   if(WiFi.status()!=WL_CONNECTED&&!playing)
     wifiManagerConnect(false);
@@ -543,7 +499,6 @@ void loop(){
   if(!playing){
     if(recordMic()){
       String q=stt();
-
       LittleFS.remove(STT_FILE);
 
       if(q.length())
