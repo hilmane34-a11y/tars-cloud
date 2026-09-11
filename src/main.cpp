@@ -1,9 +1,14 @@
 // ============================================================
-// TARS CLOUD - FINAL LOW RAM
+// TARS CLOUD - FINAL BUILD READY
 // INMP441 STT + OLED + WiFi Manager + NTP
 // ElevenLabs STT via /stt
 // TTS / SING MP3 + Helix + ESP32 DAC
 // ESP32-WROOM-32 / NO PSRAM
+//
+// WiFi: ALWAYS ON
+// Serial: MONITOR ONLY
+// Bluetooth: DISABLED
+// Boot animation: NONE
 // ============================================================
 
 #include <Arduino.h>
@@ -15,11 +20,13 @@
 #include <time.h>
 #include <ArduinoJson.h>
 #include <driver/i2s.h>
+
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 
 #include "AudioTools.h"
 #include "AudioTools/AudioCodecs/CodecMP3Helix.h"
+
 #include "config.h"
 #include "wifi_manager.h"
 
@@ -64,15 +71,13 @@ static const char *NTP2 = "time.nist.gov";
 static const long GMT_OFFSET = 7 * 3600;
 static const int DST_OFFSET = 0;
 
-static const uint32_t NTP_TIMEOUT = 15000;
-static const uint32_t PLAY_TIMEOUT = 120000;
+static const uint32_t NTP_RETRY_MS = 30000;
 
 // ============================================================
-// FILES
+// FILE
 // ============================================================
 
 static const char *STT_FILE = "/stt.wav";
-static const char *MP3_FILE = "/tts.mp3";
 
 // ============================================================
 // URL
@@ -98,6 +103,7 @@ static bool oledOK = false;
 
 static String oledAnswer;
 static size_t oledChars = 0;
+
 static uint32_t oledTypeAt = 0;
 static uint32_t oledAnimAt = 0;
 
@@ -111,23 +117,58 @@ static const uint32_t OLED_ANIM_MS = 80;
 static const uint32_t OLED_SYNC_MS = 50;
 
 // ============================================================
-// STATE
+// SYSTEM STATE
 // ============================================================
 
 static bool dacOK = false;
 static bool micOK = false;
 static bool ntpOK = false;
 
-static bool playing = false;
-static bool singMode = false;
-
+static volatile bool playing = false;
 static volatile bool firstAudio = false;
 static volatile uint32_t firstAudioAt = 0;
-
 static volatile uint8_t singLevel = 0;
 
+static bool singMode = false;
+
 // ============================================================
-// HEAP MONITOR
+// VOICE PIPELINE STATE
+// ============================================================
+
+enum VoiceState {
+  VOICE_IDLE,
+  VOICE_RECORD,
+  VOICE_STT,
+  VOICE_ASK,
+  VOICE_AUDIO,
+  VOICE_PLAY,
+  VOICE_FINISH
+};
+
+static VoiceState voiceState = VOICE_IDLE;
+
+static uint32_t stateAt = 0;
+static uint32_t recordStart = 0;
+
+static String voiceText;
+static String aiAnswer;
+static bool voiceSing = false;
+
+// ============================================================
+// RECORD STATE
+// ============================================================
+
+static File recordFile;
+
+static uint32_t recordSamples = 0;
+
+static uint8_t wavHeader[44];
+
+static int32_t micRaw[MIC_BUF_SIZE / 4];
+static int16_t micPCM[MIC_BUF_SIZE / 4];
+
+// ============================================================
+// HEAP
 // ============================================================
 
 static void heapInfo(const char *name) {
@@ -145,7 +186,8 @@ static void heapInfo(const char *name) {
 
 static void oledHeader(const char *title) {
 
-  if (!oledOK) return;
+  if (!oledOK)
+    return;
 
   oled.setTextColor(SSD1306_WHITE);
   oled.setTextSize(1);
@@ -165,7 +207,8 @@ static void oledHeader(const char *title) {
 
 static void oledMechanical(bool speaking) {
 
-  if (!oledOK) return;
+  if (!oledOK)
+    return;
 
   const int base = 62;
 
@@ -230,6 +273,7 @@ static void oledMechanical(bool speaking) {
 
     if (i == oledFrame % 6)
       h = 8;
+
     else if (
       i == (oledFrame + 5) % 6 ||
       i == (oledFrame + 1) % 6
@@ -264,7 +308,8 @@ static void oledMechanical(bool speaking) {
 
 static void oledReady() {
 
-  if (!oledOK) return;
+  if (!oledOK)
+    return;
 
   oled.clearDisplay();
 
@@ -283,7 +328,8 @@ static void oledReady() {
 
 static void oledListening() {
 
-  if (!oledOK) return;
+  if (!oledOK)
+    return;
 
   oled.clearDisplay();
 
@@ -302,7 +348,8 @@ static void oledListening() {
 
 static void oledProcessing() {
 
-  if (!oledOK) return;
+  if (!oledOK)
+    return;
 
   oled.clearDisplay();
 
@@ -323,7 +370,8 @@ static void oledTypingPrepare(
   const String &text
 ) {
 
-  if (!oledOK) return;
+  if (!oledOK)
+    return;
 
   oledAnswer = text;
   oledChars = 0;
@@ -345,9 +393,12 @@ static void oledTypingStart() {
   oledFrame = 0;
 }
 
-static void oledTypedDraw(bool speaking) {
+static void oledTypedDraw(
+  bool speaking
+) {
 
-  if (!oledOK) return;
+  if (!oledOK)
+    return;
 
   oled.clearDisplay();
 
@@ -413,7 +464,8 @@ static void oledTypedDraw(bool speaking) {
 
 static void oledSingDraw() {
 
-  if (!oledOK) return;
+  if (!oledOK)
+    return;
 
   oled.clearDisplay();
 
@@ -451,23 +503,32 @@ static void oledSingDraw() {
   oled.display();
 }
 
-static void oledUpdate(bool speaking) {
+static void oledUpdate() {
 
   if (!oledOK)
     return;
 
-  if (singMode) {
+  uint32_t now = millis();
 
-    oledSingDraw();
+  if (singMode && playing) {
+
+    if (
+      now - oledAnimAt >=
+      OLED_ANIM_MS
+    ) {
+
+      oledAnimAt = now;
+      oledSingDraw();
+    }
+
     return;
   }
-
-  uint32_t now = millis();
 
   if (
     oledAudioSync &&
     firstAudio &&
-    now - firstAudioAt >= OLED_SYNC_MS
+    now - firstAudioAt >=
+    OLED_SYNC_MS
   ) {
 
     oledTypingStart();
@@ -478,7 +539,8 @@ static void oledUpdate(bool speaking) {
 
   if (
     oledTyping &&
-    now - oledTypeAt >= OLED_TYPE_MS
+    now - oledTypeAt >=
+    OLED_TYPE_MS
   ) {
 
     oledTypeAt = now;
@@ -486,18 +548,18 @@ static void oledUpdate(bool speaking) {
     if (
       oledChars <
       oledAnswer.length()
-    ) {
+    )
       oledChars++;
-    } else {
+    else
       oledTyping = false;
-    }
 
     redraw = true;
   }
 
   if (
-    speaking &&
-    now - oledAnimAt >= OLED_ANIM_MS
+    playing &&
+    now - oledAnimAt >=
+    OLED_ANIM_MS
   ) {
 
     oledAnimAt = now;
@@ -507,7 +569,7 @@ static void oledUpdate(bool speaking) {
   }
 
   if (redraw)
-    oledTypedDraw(speaking);
+    oledTypedDraw(playing);
 }
 
 static void oledReadyAnimation() {
@@ -515,13 +577,15 @@ static void oledReadyAnimation() {
   if (!oledOK)
     return;
 
+  uint32_t now = millis();
+
   if (
-    millis() - oledAnimAt <
+    now - oledAnimAt <
     OLED_ANIM_MS
   )
     return;
 
-  oledAnimAt = millis();
+  oledAnimAt = now;
   oledFrame++;
 
   oledReady();
@@ -548,7 +612,8 @@ static bool initDAC() {
       I2S_MODE_DAC_BUILT_IN
     );
 
-  cfg.sample_rate = PLAY_RATE;
+  cfg.sample_rate =
+    PLAY_RATE;
 
   cfg.bits_per_sample =
     I2S_BITS_PER_SAMPLE_16BIT;
@@ -560,10 +625,8 @@ static bool initDAC() {
     I2S_COMM_FORMAT_I2S_MSB;
 
   cfg.intr_alloc_flags = 0;
-
   cfg.dma_buf_count = 4;
   cfg.dma_buf_len = 256;
-
   cfg.use_apll = false;
   cfg.tx_desc_auto_clear = true;
   cfg.fixed_mclk = 0;
@@ -611,27 +674,8 @@ static bool initDAC() {
   return true;
 }
 
-static void stopDAC() {
-
-  if (!dacOK)
-    return;
-
-  i2s_zero_dma_buffer(
-    DAC_PORT
-  );
-
-  i2s_driver_uninstall(
-    DAC_PORT
-  );
-
-  dacOK = false;
-}
-
-// ============================================================
-// MP3 OUTPUT
-// ============================================================
-
-class DACOutput : public AudioStream {
+class DACOutput :
+  public AudioStream {
 
   AudioInfo info;
 
@@ -732,7 +776,11 @@ public:
 
     int peak = 0;
 
-    for (size_t i = 0; i < frames; i++) {
+    for (
+      size_t i = 0;
+      i < frames;
+      i++
+    ) {
 
       int16_t sample;
 
@@ -772,14 +820,15 @@ public:
 
         sample =
           (int16_t)(
-            ((int32_t)l +
-             (int32_t)r) / 2
+            (
+              (int32_t)l +
+              (int32_t)r
+            ) / 2
           );
       }
 
-      int a = abs(
-        (int)sample
-      );
+      int a =
+        abs((int)sample);
 
       if (a > peak)
         peak = a;
@@ -877,10 +926,8 @@ static bool initMic() {
     I2S_COMM_FORMAT_I2S;
 
   cfg.intr_alloc_flags = 0;
-
   cfg.dma_buf_count = 2;
   cfg.dma_buf_len = 256;
-
   cfg.use_apll = false;
   cfg.tx_desc_auto_clear = false;
   cfg.fixed_mclk = 0;
@@ -907,7 +954,8 @@ static bool initMic() {
 
   pins.bck_io_num = MIC_SCK;
   pins.ws_io_num = MIC_WS;
-  pins.data_out_num = I2S_PIN_NO_CHANGE;
+  pins.data_out_num =
+    I2S_PIN_NO_CHANGE;
   pins.data_in_num = MIC_SD;
 
   err =
@@ -973,11 +1021,7 @@ static void writeWavHeader(
     sizeof(h)
   );
 
-  memcpy(
-    h,
-    "RIFF",
-    4
-  );
+  memcpy(h, "RIFF", 4);
 
   put32(
     h + 4,
@@ -1051,31 +1095,30 @@ static void writeWavHeader(
 }
 
 // ============================================================
-// RECORD MIC
+// RECORD START
 // ============================================================
 
-static bool recordMic() {
+static bool startRecording() {
 
   if (!micOK)
     return false;
 
-  oledListening();
+  if (
+    LittleFS.exists(
+      STT_FILE
+    )
+  )
+    LittleFS.remove(
+      STT_FILE
+    );
 
-  Serial.println();
-  Serial.println(
-    "TARS: RECORDING..."
-  );
-
-  if (LittleFS.exists(STT_FILE))
-    LittleFS.remove(STT_FILE);
-
-  File file =
+  recordFile =
     LittleFS.open(
       STT_FILE,
       FILE_WRITE
     );
 
-  if (!file) {
+  if (!recordFile) {
 
     Serial.println(
       "TARS: STT FILE FAILED"
@@ -1084,107 +1127,111 @@ static bool recordMic() {
     return false;
   }
 
-  uint8_t header[44];
-
   memset(
-    header,
+    wavHeader,
     0,
-    sizeof(header)
+    sizeof(wavHeader)
   );
 
-  file.write(
-    header,
-    sizeof(header)
+  recordFile.write(
+    wavHeader,
+    sizeof(wavHeader)
   );
 
-  static int32_t raw[
-    MIC_BUF_SIZE / 4
-  ];
+  recordSamples = 0;
 
-  static int16_t pcm[
-    MIC_BUF_SIZE / 4
-  ];
+  recordStart = millis();
 
-  size_t totalSamples = 0;
+  oledListening();
 
-  uint32_t start = millis();
+  Serial.println(
+    "TARS: RECORDING..."
+  );
 
-  while (
-    millis() - start <
+  return true;
+}
+
+// ============================================================
+// RECORD STEP
+// ============================================================
+
+static bool recordStep() {
+
+  if (!recordFile)
+    return false;
+
+  size_t bytesRead = 0;
+
+  esp_err_t err =
+    i2s_read(
+      MIC_PORT,
+      micRaw,
+      sizeof(micRaw),
+      &bytesRead,
+      0
+    );
+
+  if (
+    err != ESP_OK ||
+    bytesRead == 0
+  )
+    return true;
+
+  size_t samples =
+    bytesRead /
+    sizeof(int32_t);
+
+  for (
+    size_t i = 0;
+    i < samples;
+    i++
+  ) {
+
+    int32_t v =
+      micRaw[i] >> 14;
+
+    if (v > 32767)
+      v = 32767;
+
+    if (v < -32768)
+      v = -32768;
+
+    micPCM[i] =
+      (int16_t)v;
+  }
+
+  recordFile.write(
+    (uint8_t *)micPCM,
+    samples * 2
+  );
+
+  recordSamples += samples;
+
+  if (
+    millis() - recordStart >=
     RECORD_MS
   ) {
 
-    size_t bytesRead = 0;
+    uint32_t dataSize =
+      recordSamples * 2;
 
-    esp_err_t err =
-      i2s_read(
-        MIC_PORT,
-        raw,
-        sizeof(raw),
-        &bytesRead,
-        pdMS_TO_TICKS(100)
-      );
-
-    if (
-      err != ESP_OK ||
-      bytesRead == 0
-    )
-      continue;
-
-    size_t samples =
-      bytesRead / sizeof(int32_t);
-
-    for (
-      size_t i = 0;
-      i < samples;
-      i++
-    ) {
-
-      // INMP441 24-bit data
-      // converted to signed 16-bit.
-      int32_t v =
-        raw[i] >> 14;
-
-      if (v > 32767)
-        v = 32767;
-
-      if (v < -32768)
-        v = -32768;
-
-      pcm[i] =
-        (int16_t)v;
-    }
-
-    size_t bytes =
-      samples * sizeof(int16_t);
-
-    file.write(
-      (uint8_t *)pcm,
-      bytes
+    writeWavHeader(
+      recordFile,
+      dataSize
     );
 
-    totalSamples += samples;
+    recordFile.flush();
+    recordFile.close();
 
-    yield();
+    Serial.printf(
+      "TARS: RECORD DONE %u bytes\n",
+      (unsigned)dataSize
+    );
+
+    return false;
   }
 
-  uint32_t dataSize =
-    totalSamples * 2;
-
-  writeWavHeader(
-    file,
-    dataSize
-  );
-
-  file.flush();
-  file.close();
-
-  Serial.printf(
-    "TARS: RECORD DONE %u bytes\n",
-    (unsigned)dataSize
-  );
-
-  return dataSize > 0;
+  return true;
 }
 
 // ============================================================
@@ -1197,11 +1244,7 @@ static bool timeValid() {
     1577836800;
 }
 
-static bool syncNTP() {
-
-  Serial.println(
-    "TARS: NTP START"
-  );
+static void startNTP() {
 
   configTime(
     GMT_OFFSET,
@@ -1210,37 +1253,50 @@ static bool syncNTP() {
     NTP2
   );
 
-  uint32_t start =
-    millis();
+  ntpOK = false;
 
-  while (
-    !timeValid() &&
-    millis() - start <
-    NTP_TIMEOUT
-  ) {
+  Serial.println(
+    "TARS: NTP START"
+  );
+}
 
-    delay(500);
-    yield();
-  }
+static void updateNTP() {
+
+  if (
+    ntpOK &&
+    timeValid()
+  )
+    return;
+
+  static uint32_t lastTry = 0;
+
+  uint32_t now = millis();
+
+  if (
+    lastTry != 0 &&
+    now - lastTry <
+    NTP_RETRY_MS
+  )
+    return;
+
+  lastTry = now;
 
   if (!timeValid()) {
-
     Serial.println(
-      "TARS: NTP FAILED"
+      "TARS: NTP WAITING"
     );
-
-    ntpOK = false;
-
-    return false;
+    return;
   }
 
-  time_t now =
+  ntpOK = true;
+
+  time_t tnow =
     time(nullptr);
 
   struct tm t;
 
   localtime_r(
-    &now,
+    &tnow,
     &t
   );
 
@@ -1253,30 +1309,42 @@ static bool syncNTP() {
     t.tm_min,
     t.tm_sec
   );
-
-  ntpOK = true;
-
-  return true;
 }
 
-static bool ensureTime() {
+// ============================================================
+// WIFI ALWAYS ON
+// ============================================================
+
+static bool ensureWiFi() {
 
   if (
-    ntpOK &&
-    timeValid()
+    WiFi.status() ==
+    WL_CONNECTED
   )
     return true;
 
-  return syncNTP();
+  Serial.println(
+    "TARS: WIFI RECONNECT"
+  );
+
+  return wifiManagerConnect(
+    false
+  );
 }
 
-// ============================================================
-// WIFI
-// ============================================================
+static void maintainWiFi() {
 
-static bool connectWiFi(
-  bool needTime
-) {
+  static uint32_t lastCheck = 0;
+
+  uint32_t now = millis();
+
+  if (
+    now - lastCheck <
+    3000
+  )
+    return;
+
+  lastCheck = now;
 
   if (
     WiFi.status() !=
@@ -1284,41 +1352,17 @@ static bool connectWiFi(
   ) {
 
     Serial.println(
-      "TARS: WIFI ON"
+      "TARS: WIFI LOST"
     );
 
-    if (
-      !wifiManagerConnect(false)
-    ) {
+    wifiManagerConnect(
+      false
+    );
 
-      Serial.println(
-        "TARS: WIFI FAILED"
-      );
-
-      return false;
-    }
+    return;
   }
 
-  if (
-    needTime &&
-    !ensureTime()
-  )
-    return false;
-
-  Serial.print(
-    "TARS: IP = "
-  );
-
-  Serial.println(
-    WiFi.localIP()
-  );
-
-  return true;
-}
-
-static void disconnectWiFi() {
-
-  wifiManagerDisconnect();
+  updateNTP();
 }
 
 // ============================================================
@@ -1329,9 +1373,7 @@ static String askAI(
   const String &question
 ) {
 
-  if (
-    !connectWiFi(true)
-  )
+  if (!ensureWiFi())
     return "";
 
   oledProcessing();
@@ -1409,6 +1451,8 @@ static String askAI(
   String answer =
     json["response"] | "";
 
+  answer.trim();
+
   Serial.println(
     "TARS RESPONSE:"
   );
@@ -1421,14 +1465,12 @@ static String askAI(
 }
 
 // ============================================================
-// SEND STT
+// STT
 // ============================================================
 
 static String speechToText() {
 
-  if (
-    !connectWiFi(true)
-  )
+  if (!ensureWiFi())
     return "";
 
   if (
@@ -1450,39 +1492,20 @@ static String speechToText() {
   const char *boundary =
     "----TARSSTTBoundary";
 
-  const char *field =
-    "file";
-
-  const char *filename =
-    "stt.wav";
-
-  const char *type =
-    "audio/wav";
-
   String prefix;
 
-  prefix += "--";
-  prefix += boundary;
-  prefix += "\r\n";
+  prefix =
+    "--" +
+    String(boundary) +
+    "\r\n"
+    "Content-Disposition: form-data; "
+    "name=\"file\"; filename=\"stt.wav\"\r\n"
+    "Content-Type: audio/wav\r\n\r\n";
 
-  prefix +=
-    "Content-Disposition: form-data; name=\"";
-  prefix += field;
-  prefix +=
-    "\"; filename=\"";
-  prefix += filename;
-  prefix += "\"\r\n";
-
-  prefix +=
-    "Content-Type: ";
-  prefix += type;
-  prefix += "\r\n\r\n";
-
-  String suffix;
-
-  suffix += "\r\n--";
-  suffix += boundary;
-  suffix += "--\r\n";
+  String suffix =
+    "\r\n--" +
+    String(boundary) +
+    "--\r\n";
 
   size_t fileSize =
     file.size();
@@ -1496,120 +1519,45 @@ static String speechToText() {
 
   client.setInsecure();
 
-  HTTPClient http;
-
-  if (
-    !http.begin(
-      client,
-      STT_URL
-    )
-  ) {
-
-    file.close();
-
-    return "";
-  }
-
-  String contentType =
-    "multipart/form-data; boundary=";
-
-  contentType += boundary;
-
-  http.addHeader(
-    "Content-Type",
-    contentType
-  );
-
-  http.addHeader(
-    "Content-Length",
-    String(contentLength)
-  );
-
-  WiFiClient *stream =
-    http.getStreamPtr();
-
-  if (!stream) {
-
-    file.close();
-    http.end();
-
-    return "";
-  }
-
-  int code =
-    http.sendRequest(
-      "POST",
-      (uint8_t *)nullptr,
-      0
-    );
-
-  if (
-    code < 0
-  ) {
-
-    file.close();
-    http.end();
-
-    Serial.printf(
-      "STT HTTP ERROR: %d\n",
-      code
-    );
-
-    return "";
-  }
-
-  // Some HTTPClient versions do not
-  // expose a safe streaming body API
-  // through sendRequest(). Therefore
-  // use a fresh raw POST connection below.
-
-  http.end();
-
-  WiFiClientSecure raw;
-
-  raw.setInsecure();
-
-  String host =
+  String base =
     String(TARS_CLOUD_URL);
 
-  int slash =
-    host.indexOf(
-      "://"
-    );
+  int scheme =
+    base.indexOf("://");
 
-  if (slash >= 0)
-    host =
-      host.substring(
-        slash + 3
+  if (scheme >= 0)
+    base =
+      base.substring(
+        scheme + 3
       );
 
-  int pathStart =
-    host.indexOf('/');
+  int slash =
+    base.indexOf('/');
 
-  String hostOnly = host;
+  String host = base;
 
-  String basePath = "/";
+  String basePath = "";
 
-  if (pathStart >= 0) {
+  if (slash >= 0) {
 
-    hostOnly =
-      host.substring(
+    host =
+      base.substring(
         0,
-        pathStart
+        slash
       );
 
     basePath =
-      host.substring(
-        pathStart
+      base.substring(
+        slash
       );
   }
 
-  String sttPath =
+  String path =
     basePath + "/stt";
 
   if (
-    !raw.connect(
-      hostOnly.c_str(),
+    !client.connect(
+      host.c_str(),
       443
     )
   ) {
@@ -1623,39 +1571,41 @@ static String speechToText() {
     return "";
   }
 
-  raw.printf(
+  client.printf(
     "POST %s HTTP/1.1\r\n",
-    sttPath.c_str()
+    path.c_str()
   );
 
-  raw.printf(
+  client.printf(
     "Host: %s\r\n",
-    hostOnly.c_str()
+    host.c_str()
   );
 
-  raw.printf(
-    "Content-Type: %s\r\n",
-    contentType.c_str()
+  client.printf(
+    "Content-Type: multipart/form-data; boundary=%s\r\n",
+    boundary
   );
 
-  raw.printf(
+  client.printf(
     "Content-Length: %u\r\n",
     (unsigned)contentLength
   );
 
-  raw.println(
+  client.println(
     "Connection: close"
   );
 
-  raw.println();
+  client.println();
 
-  raw.print(prefix);
+  client.print(prefix);
 
   static uint8_t buffer[
     MP3_BUF_SIZE
   ];
 
-  while (file.available()) {
+  while (
+    file.available()
+  ) {
 
     size_t n =
       file.read(
@@ -1668,10 +1618,12 @@ static String speechToText() {
 
     size_t sent = 0;
 
-    while (sent < n) {
+    while (
+      sent < n
+    ) {
 
       size_t w =
-        raw.write(
+        client.write(
           buffer + sent,
           n - sent
         );
@@ -1679,58 +1631,63 @@ static String speechToText() {
       if (!w) {
 
         file.close();
-        raw.stop();
+        client.stop();
 
         return "";
       }
 
       sent += w;
+
       yield();
     }
   }
 
   file.close();
 
-  raw.print(suffix);
+  client.print(
+    suffix
+  );
 
-  uint32_t timeout =
+  uint32_t start =
     millis();
 
   while (
-    raw.connected() &&
-    !raw.available() &&
-    millis() - timeout <
-    15000
+    client.connected() &&
+    !client.available() &&
+    millis() - start < 15000
   ) {
 
-    delay(10);
     yield();
   }
 
   String response;
 
   while (
-    raw.available()
+    client.available()
   ) {
 
     response +=
-      raw.readStringUntil('\n');
+      client.readStringUntil(
+        '\n'
+      );
 
     response += "\n";
   }
 
-  raw.stop();
+  client.stop();
 
   int bodyPos =
     response.indexOf(
       "\r\n\r\n"
     );
 
-  if (bodyPos >= 0)
+  if (bodyPos >= 0) {
+
     response =
       response.substring(
         bodyPos + 4
       );
+  }
 
   Serial.println(
     "STT RESPONSE:"
@@ -1777,9 +1734,7 @@ static bool downloadMP3(
   const String &text
 ) {
 
-  if (
-    !connectWiFi(true)
-  )
+  if (!ensureWiFi())
     return false;
 
   WiFiClientSecure client;
@@ -1898,6 +1853,7 @@ static bool downloadMP3(
         );
 
         total += r;
+
         last = millis();
 
         if (len > 0)
@@ -1912,7 +1868,7 @@ static bool downloadMP3(
       )
         break;
 
-      delay(1);
+      yield();
     }
   }
 
@@ -1971,10 +1927,6 @@ static bool playMP3() {
   firstAudioAt = 0;
   singLevel = 0;
 
-  heapInfo(
-    "BEFORE_HELIX"
-  );
-
   mp3Decoder.setMaxPCMSize(
     2048
   );
@@ -1988,6 +1940,7 @@ static bool playMP3() {
   ) {
 
     file.close();
+
     playing = false;
 
     Serial.println(
@@ -2018,17 +1971,17 @@ static bool playMP3() {
 
   while (
     millis() - start <
-    PLAY_TIMEOUT
+    120000
   ) {
 
-    oledUpdate(true);
+    oledUpdate();
 
     if (
-      file.position() >= size
+      file.position() >=
+      size
     ) {
 
       finished = true;
-
       break;
     }
 
@@ -2036,7 +1989,7 @@ static bool playMP3() {
       copier.copy();
 
     if (!n)
-      delay(2);
+      yield();
     else
       yield();
   }
@@ -2045,9 +1998,8 @@ static bool playMP3() {
 
   file.close();
 
-  delay(300);
-
   playing = false;
+
   singLevel = 0;
 
   LittleFS.remove(
@@ -2056,12 +2008,9 @@ static bool playMP3() {
 
   singMode = false;
   oledTyping = false;
+  oledAudioSync = false;
 
   oledReady();
-
-  heapInfo(
-    "PLAY_DONE"
-  );
 
   return finished;
 }
@@ -2107,15 +2056,17 @@ static void handleQuestion(
     question
   );
 
-  bool sing =
+  voiceSing =
     isSingRequest(
       question
     );
 
-  String answer =
-    askAI(question);
+  aiAnswer =
+    askAI(
+      question
+    );
 
-  if (!answer.length()) {
+  if (!aiAnswer.length()) {
 
     oledReady();
 
@@ -2123,18 +2074,21 @@ static void handleQuestion(
   }
 
   oledTypingPrepare(
-    answer
+    aiAnswer
   );
 
-  // IMPORTANT:
-  // SING sends ORIGINAL QUESTION.
-  // TTS sends AI ANSWER.
+  // TTS = AI answer
+  // SING = original question
   const String &audioText =
-    sing ? question : answer;
+    voiceSing ?
+    question :
+    aiAnswer;
 
   if (
     !downloadMP3(
-      sing ? SING_URL : TTS_URL,
+      voiceSing ?
+      SING_URL :
+      TTS_URL,
       audioText
     )
   ) {
@@ -2148,20 +2102,26 @@ static void handleQuestion(
     return;
   }
 
-  singMode = sing;
+  singMode =
+    voiceSing;
 
-  disconnectWiFi();
-
+  // IMPORTANT:
+  // WiFi remains ON.
+  // No wifiManagerDisconnect().
   playMP3();
-
-  connectWiFi(false);
 }
 
 // ============================================================
-// VOICE PIPELINE
+// VOICE START
 // ============================================================
 
-static void handleVoice() {
+static void beginVoice() {
+
+  if (
+    voiceState !=
+    VOICE_IDLE
+  )
+    return;
 
   if (
     !micOK ||
@@ -2169,40 +2129,143 @@ static void handleVoice() {
   )
     return;
 
-  if (!recordMic())
+  if (
+    WiFi.status() !=
+    WL_CONNECTED
+  )
     return;
 
-  String text =
-    speechToText();
-
-  LittleFS.remove(
-    STT_FILE
-  );
-
-  text.trim();
-
-  if (!text.length()) {
-
-    Serial.println(
-      "TARS: STT EMPTY"
-    );
-
-    oledReady();
-
+  if (
+    !startRecording()
+  )
     return;
+
+  voiceState =
+    VOICE_RECORD;
+
+  stateAt =
+    millis();
+}
+
+// ============================================================
+// VOICE STATE MACHINE
+// ============================================================
+
+static void updateVoice() {
+
+  switch (
+    voiceState
+  ) {
+
+    case VOICE_IDLE:
+
+      beginVoice();
+
+      break;
+
+    case VOICE_RECORD:
+
+      if (
+        !recordStep()
+      ) {
+
+        voiceState =
+          VOICE_STT;
+
+        stateAt =
+          millis();
+      }
+
+      break;
+
+    case VOICE_STT: {
+
+      Serial.println(
+        "TARS: STT START"
+      );
+
+      voiceText =
+        speechToText();
+
+      LittleFS.remove(
+        STT_FILE
+      );
+
+      voiceText.trim();
+
+      if (
+        !voiceText.length()
+      ) {
+
+        Serial.println(
+          "TARS: STT EMPTY"
+        );
+
+        oledReady();
+
+        voiceState =
+          VOICE_IDLE;
+
+        break;
+      }
+
+      Serial.print(
+        "TARS STT: "
+      );
+
+      Serial.println(
+        voiceText
+      );
+
+      voiceState =
+        VOICE_ASK;
+
+      stateAt =
+        millis();
+
+      break;
+    }
+
+    case VOICE_ASK:
+
+      handleQuestion(
+        voiceText
+      );
+
+      voiceState =
+        VOICE_FINISH;
+
+      stateAt =
+        millis();
+
+      break;
+
+    case VOICE_AUDIO:
+
+      voiceState =
+        VOICE_FINISH;
+
+      break;
+
+    case VOICE_PLAY:
+
+      voiceState =
+        VOICE_FINISH;
+
+      break;
+
+    case VOICE_FINISH:
+
+      voiceText = "";
+      aiAnswer = "";
+
+      voiceSing = false;
+
+      voiceState =
+        VOICE_IDLE;
+
+      break;
   }
-
-  Serial.print(
-    "TARS STT: "
-  );
-
-  Serial.println(
-    text
-  );
-
-  handleQuestion(
-    text
-  );
 }
 
 // ============================================================
@@ -2215,27 +2278,22 @@ void setup() {
     SERIAL_BAUD
   );
 
-  delay(1000);
+  // NO BOOT DELAY.
+  // NO BOOT ANIMATION.
 
   Serial.println();
   Serial.println(
-    "================================"
-  );
-  Serial.println(
-    "       TARS ESP32 FINAL"
-  );
-  Serial.println(
-    "       LOW RAM + INMP441"
-  );
-  Serial.println(
-    "================================"
+    "TARS: INIT"
   );
 
   heapInfo(
-    "BOOT"
+    "START"
   );
 
+  // ----------------------------------------------------------
   // OLED
+  // ----------------------------------------------------------
+
   Wire.begin(
     OLED_SDA,
     OLED_SCL
@@ -2256,7 +2314,10 @@ void setup() {
     oledReady();
   }
 
-  // LittleFS
+  // ----------------------------------------------------------
+  // LITTLEFS
+  // ----------------------------------------------------------
+
   if (
     !LittleFS.begin(true)
   ) {
@@ -2272,44 +2333,49 @@ void setup() {
     );
   }
 
+  // ----------------------------------------------------------
   // DAC
+  // ----------------------------------------------------------
+
   dacOK =
     initDAC();
 
+  // ----------------------------------------------------------
   // MIC
+  // ----------------------------------------------------------
+
   micOK =
     initMic();
 
-  Serial.println(
-    "TARS: BT DISABLED"
-  );
+  // ----------------------------------------------------------
+  // BLUETOOTH
+  // ----------------------------------------------------------
 
   Serial.println(
-    "TARS: SERIAL = MONITOR ONLY"
+    "TARS: BLUETOOTH DISABLED"
   );
 
-  heapInfo(
-    "BEFORE_WIFI"
+  Serial.println(
+    "TARS: SERIAL MONITOR ONLY"
   );
 
-  // WiFi Manager
+  // ----------------------------------------------------------
+  // WIFI MANAGER
+  // ----------------------------------------------------------
+
   if (
-    !wifiManagerBegin()
+    wifiManagerBegin()
   ) {
 
-    Serial.println(
-      "TARS: WIFI SETUP REQUIRED"
-    );
-
-  } else {
-
     if (
-      connectWiFi(true)
+      wifiManagerConnect(false)
     ) {
 
       Serial.println(
-        "TARS: ONLINE"
+        "TARS: WIFI CONNECTED"
       );
+
+      startNTP();
 
     } else {
 
@@ -2317,7 +2383,17 @@ void setup() {
         "TARS: WIFI NOT READY"
       );
     }
+
+  } else {
+
+    Serial.println(
+      "TARS: WIFI SETUP REQUIRED"
+    );
   }
+
+  // ----------------------------------------------------------
+  // READY
+  // ----------------------------------------------------------
 
   heapInfo(
     "READY"
@@ -2326,19 +2402,11 @@ void setup() {
   oledReady();
 
   Serial.println(
-    "================================"
-  );
-
-  Serial.println(
     "TARS: READY"
   );
 
   Serial.println(
     "TARS: SPEAK TO INMP441"
-  );
-
-  Serial.println(
-    "================================"
   );
 }
 
@@ -2348,16 +2416,21 @@ void setup() {
 
 void loop() {
 
-  // Serial hanya monitoring.
-  // Tidak digunakan sebagai input pertanyaan.
+  // WiFi stays ON.
+  maintainWiFi();
 
-  if (!playing) {
+  // OLED animations continue independently.
+  oledUpdate();
 
-    // Automatic voice capture.
-    handleVoice();
+  // Voice pipeline.
+  // No Serial input.
+  if (
+    !playing
+  ) {
+
+    updateVoice();
   }
 
-  oledReadyAnimation();
-
-  delay(10);
+  // Small cooperative yield.
+  yield();
 }
