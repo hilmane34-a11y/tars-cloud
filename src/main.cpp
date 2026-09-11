@@ -82,7 +82,7 @@ bool initMic(){
   c.mode=(i2s_mode_t)(I2S_MODE_MASTER|I2S_MODE_RX);
   c.sample_rate=MIC_RATE;
   c.bits_per_sample=I2S_BITS_PER_SAMPLE_32BIT;
-  c.channel_format=I2S_CHANNEL_FMT_ONLY_LEFT;
+  c.channel_format=I2S_CHANNEL_FMT_ONLY_RIGHT;
   c.communication_format=I2S_COMM_FORMAT_I2S;
   c.dma_buf_count=2;
   c.dma_buf_len=256;
