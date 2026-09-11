@@ -14,20 +14,22 @@
 #include "config.h"
 #include "wifi_manager.h"
 
-// ================= HARDWARE =================
 #define DAC_PORT I2S_NUM_0
 #define MIC_PORT I2S_NUM_1
-#define MIC_SCK  18
-#define MIC_WS   19
-#define MIC_SD   34
+#define MIC_SCK 18
+#define MIC_WS 19
+#define MIC_SD 34
 
 const uint32_t MIC_RATE=16000,PLAY_RATE=22050,RECORD_MS=4000;
 const size_t BUF=1024;
-static const char *STT_FILE="/stt.wav";
 const int32_t MIC_THRESHOLD=2500;
+static const char *STT_FILE="/stt.wav";
 
-// ================= STATE =================
-bool oledOK=false,micOK=false,dacOK=false,playing=false,singMode=false,ntpOK=false;
+Adafruit_SSD1306 oled(OLED_WIDTH,OLED_HEIGHT,&Wire,-1);
+
+bool oledOK=false,micOK=false,dacOK=false;
+bool playing=false,singMode=false,ntpOK=false;
+
 String oledText;
 size_t oledPos=0;
 uint32_t oledTick=0,dotTick=0;
@@ -42,26 +44,27 @@ void oledBase(const char *title,const String &text=""){
   oled.setCursor(42,0);oled.print("T A R S");
   oled.drawLine(0,9,127,9,SSD1306_WHITE);
   oled.setCursor(3,14);oled.print(title);
-  if(text.length()){oled.setCursor(3,27);oled.print(text);}
+  if(text.length()){
+    oled.setCursor(3,27);
+    oled.print(text);
+  }
   oled.display();
 }
 
 void oledListening(){
-  if(!oledOK)return;
-  if(millis()-dotTick<350)return;
+  if(!oledOK||millis()-dotTick<350)return;
   dotTick=millis();
-  dotState++;
-  if(dotState>4)dotState=1;
+  dotState=dotState>=4?1:dotState+1;
 
   String d="";
   for(uint8_t i=0;i<dotState;i++)d+=".";
-
   oledBase("LISTENING",d);
 }
 
 void oledType(){
   if(!oledOK||!oledText.length()||millis()-oledTick<65)return;
   oledTick=millis();
+
   if(oledPos<oledText.length())oledPos++;
 
   oled.clearDisplay();
@@ -69,7 +72,8 @@ void oledType(){
   oled.setTextSize(1);
   oled.setCursor(42,0);oled.print("T A R S");
   oled.drawLine(0,9,127,9,SSD1306_WHITE);
-  oled.setCursor(3,14);oled.print(playing?(singMode?"SINGING":"SPEAKING"):"READY");
+  oled.setCursor(3,14);
+  oled.print(playing?(singMode?"SINGING":"SPEAKING"):"READY");
   oled.setCursor(3,27);
 
   for(size_t i=0;i<oledPos;i++)oled.print(oledText[i]);
@@ -90,11 +94,12 @@ bool initDAC(){
 
   if(i2s_driver_install(DAC_PORT,&c,0,nullptr)!=ESP_OK)return false;
   if(i2s_set_dac_mode(I2S_DAC_CHANNEL_BOTH_EN)!=ESP_OK)return false;
+
   i2s_zero_dma_buffer(DAC_PORT);
   return true;
 }
 
-// ================= I2S INMP441 =================
+// ================= INMP441 =================
 bool initMic(){
   i2s_config_t c={};
   c.mode=(i2s_mode_t)(I2S_MODE_MASTER|I2S_MODE_RX);
@@ -118,18 +123,36 @@ bool initMic(){
 }
 
 // ================= WAV =================
-void put16(uint8_t *p,uint16_t v){p[0]=v;p[1]=v>>8;}
-void put32(uint8_t *p,uint32_t v){p[0]=v;p[1]=v>>8;p[2]=v>>16;p[3]=v>>24;}
+void put16(uint8_t *p,uint16_t v){
+  p[0]=v;
+  p[1]=v>>8;
+}
+
+void put32(uint8_t *p,uint32_t v){
+  p[0]=v;
+  p[1]=v>>8;
+  p[2]=v>>16;
+  p[3]=v>>24;
+}
 
 void wavHeader(File &f,uint32_t n){
   uint8_t h[44]={};
-  memcpy(h,"RIFF",4);put32(h+4,n+36);
+
+  memcpy(h,"RIFF",4);
+  put32(h+4,n+36);
   memcpy(h+8,"WAVEfmt ",8);
-  put32(h+16,16);put16(h+20,1);put16(h+22,1);
-  put32(h+24,MIC_RATE);put32(h+28,MIC_RATE*2);
-  put16(h+32,2);put16(h+34,16);
-  memcpy(h+36,"data",4);put32(h+40,n);
-  f.seek(0);f.write(h,44);
+  put32(h+16,16);
+  put16(h+20,1);
+  put16(h+22,1);
+  put32(h+24,MIC_RATE);
+  put32(h+28,MIC_RATE*2);
+  put16(h+32,2);
+  put16(h+34,16);
+  memcpy(h+36,"data",4);
+  put32(h+40,n);
+
+  f.seek(0);
+  f.write(h,44);
 }
 
 // ================= RECORD =================
@@ -139,12 +162,14 @@ bool recordMic(){
     return false;
   }
 
-  oledBase("LISTENING",".");
   dotState=1;
   dotTick=millis();
+  oledBase("LISTENING",".");
   Serial.println("TARS: RECORDING");
 
-  if(LittleFS.exists(STT_FILE))LittleFS.remove(STT_FILE);
+  if(LittleFS.exists(STT_FILE))
+    LittleFS.remove(STT_FILE);
+
   File f=LittleFS.open(STT_FILE,FILE_WRITE);
 
   if(!f){
@@ -271,9 +296,10 @@ bool wifiOK(){
       return false;
   }
 
-  if(!ntpOK)
+  if(!ntpOK){
     if(!syncTime())
       return false;
+  }
 
   return true;
 }
@@ -287,6 +313,7 @@ String readHTTPBody(WiFiClientSecure &c){
   while(c.connected()){
     line=c.readStringUntil('\n');
     line.trim();
+
     if(!line.length())break;
 
     String low=line;
@@ -302,13 +329,15 @@ String readHTTPBody(WiFiClientSecure &c){
 
   Serial.printf(
     "TARS: STT TRANSFER=%s LENGTH=%d\r\n",
-    chunked?"CHUNKED":"NORMAL",contentLength
+    chunked?"CHUNKED":"NORMAL",
+    contentLength
   );
 
   if(chunked){
     while(c.connected()){
       line=c.readStringUntil('\n');
       line.trim();
+
       if(!line.length())continue;
 
       int size=(int)strtol(line.c_str(),nullptr,16);
@@ -322,6 +351,7 @@ String readHTTPBody(WiFiClientSecure &c){
         uint8_t buf[BUF];
         size_t want=min((int)sizeof(buf),size);
         size_t n=c.readBytes(buf,want);
+
         if(!n)break;
 
         body.concat((const char*)buf,n);
@@ -336,6 +366,7 @@ String readHTTPBody(WiFiClientSecure &c){
       int remain=contentLength-body.length();
       size_t want=min((int)sizeof(buf),remain);
       size_t n=c.readBytes(buf,want);
+
       if(!n)break;
 
       body.concat((const char*)buf,n);
@@ -352,6 +383,7 @@ String stt(){
   if(!wifiOK())return "";
 
   File f=LittleFS.open(STT_FILE,FILE_READ);
+
   if(!f){
     Serial.println("TARS: STT WAV OPEN ERROR");
     return "";
@@ -372,10 +404,14 @@ String stt(){
 
   String host=TARS_CLOUD_URL;
   int proto=host.indexOf("://");
-  if(proto>=0)host=host.substring(proto+3);
+
+  if(proto>=0)
+    host=host.substring(proto+3);
 
   int slash=host.indexOf('/');
-  if(slash>=0)host=host.substring(0,slash);
+
+  if(slash>=0)
+    host=host.substring(0,slash);
 
   Serial.println("TARS: STT CONNECTING");
 
@@ -402,6 +438,7 @@ String stt(){
 
   while(f.available()){
     size_t n=f.read(buf,sizeof(buf));
+
     if(!n)break;
 
     if(c.write(buf,n)!=n){
@@ -421,7 +458,11 @@ String stt(){
 
   uint32_t t=millis();
 
-  while(!c.available()&&c.connected()&&millis()-t<20000){
+  while(
+    !c.available()&&
+    c.connected()&&
+    millis()-t<20000
+  ){
     delay(5);
     yield();
   }
@@ -635,7 +676,9 @@ public:
     AudioStream::setAudioInfo(i);
   }
 
-  int availableForWrite()override{return BUF;}
+  int availableForWrite()override{
+    return BUF;
+  }
 
   size_t write(const uint8_t *d,size_t n)override{
     if(!dacOK||!d||info.bits_per_sample!=16)return 0;
@@ -785,7 +828,8 @@ void setup(){
     OLED_ADDR
   );
 
-  if(oledOK)oledBase("BOOT");
+  if(oledOK)
+    oledBase("BOOT");
 
   LittleFS.begin(true);
 
@@ -804,10 +848,8 @@ void setup(){
 
   Serial.println("TARS: BLUETOOTH DISABLED");
 
-  // WiFi manager menangani konfigurasi awal.
   wifiManagerBegin();
 
-  // Setelah konfigurasi, pastikan NTP valid.
   if(wifiOK()){
     wifiManagerDisconnect();
     Serial.println("TARS: WIFI OFF");
@@ -833,7 +875,6 @@ void loop(){
     else
       oledBase("READY","NO INPUT");
 
-    // Internet tidak dibiarkan ON saat idle.
     wifiManagerDisconnect();
     ntpOK=false;
   }else{
