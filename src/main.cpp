@@ -13,18 +13,18 @@
 #include "config.h"
 #include "wifi_manager.h"
 
-// ========================= HARDWARE =========================
+// ================= HARDWARE =================
 #define DAC_PORT I2S_NUM_0
 #define MIC_PORT I2S_NUM_1
 #define MIC_SCK 18
 #define MIC_WS  19
 #define MIC_SD  34
 
-const uint32_t MIC_RATE=16000,PLAY_RATE=22050,RECORD_MS=4000;
+const uint32_t MIC_RATE=16000, PLAY_RATE=22050, RECORD_MS=4000;
 const size_t BUF=1024;
 static const char *STT_FILE="/stt.wav";
 
-// ========================= OLED =========================
+// ================= OLED =================
 Adafruit_SSD1306 oled(OLED_WIDTH,OLED_HEIGHT,&Wire,-1);
 bool oledOK=false,micOK=false,dacOK=false,playing=false,singMode=false;
 String oledText;
@@ -59,7 +59,7 @@ void oledType(){
   oled.display();
 }
 
-// ========================= I2S =========================
+// ================= I2S =================
 bool initDAC(){
   i2s_config_t c={};
   c.mode=(i2s_mode_t)(I2S_MODE_MASTER|I2S_MODE_TX|I2S_MODE_DAC_BUILT_IN);
@@ -99,14 +99,9 @@ bool initMic(){
   return i2s_set_pin(MIC_PORT,&p)==ESP_OK;
 }
 
-// ========================= WAV =========================
-void put16(uint8_t *p,uint16_t v){
-  p[0]=v;p[1]=v>>8;
-}
-
-void put32(uint8_t *p,uint32_t v){
-  p[0]=v;p[1]=v>>8;p[2]=v>>16;p[3]=v>>24;
-}
+// ================= WAV =================
+void put16(uint8_t *p,uint16_t v){p[0]=v;p[1]=v>>8;}
+void put32(uint8_t *p,uint32_t v){p[0]=v;p[1]=v>>8;p[2]=v>>16;p[3]=v>>24;}
 
 void wavHeader(File &f,uint32_t n){
   uint8_t h[44]={};
@@ -119,38 +114,59 @@ void wavHeader(File &f,uint32_t n){
   f.seek(0);f.write(h,44);
 }
 
-// ========================= RECORD =========================
+// ================= RECORD MIC =================
 bool recordMic(){
-  if(!micOK)return false;
+  if(!micOK){
+    Serial.println("TARS: MIC NOT READY");
+    return false;
+  }
 
   oledShow("LISTENING","SPEAK NOW");
+  Serial.println("TARS: RECORDING");
 
   if(LittleFS.exists(STT_FILE))LittleFS.remove(STT_FILE);
   File f=LittleFS.open(STT_FILE,FILE_WRITE);
-  if(!f)return false;
+  if(!f){
+    Serial.println("TARS: WAV OPEN ERROR");
+    return false;
+  }
 
   uint8_t z[44]={};
   f.write(z,44);
 
   int32_t raw[BUF/4];
   int16_t pcm[BUF/4];
-  uint32_t samples=0,start=millis();
+  uint32_t samples=0,start=millis(),reads=0,errors=0;
+  int32_t peak=0,minV=32767,maxV=-32768;
 
   while(millis()-start<RECORD_MS){
     size_t n=0;
+    esp_err_t err=i2s_read(
+      MIC_PORT,raw,sizeof(raw),&n,pdMS_TO_TICKS(100)
+    );
 
-    if(i2s_read(MIC_PORT,raw,sizeof(raw),&n,100)==ESP_OK){
-      for(size_t i=0;i<n/4;i++){
-        int32_t v=raw[i]>>14;
-        v=max((int32_t)-32768,min((int32_t)32767,v));
-        pcm[i]=(int16_t)v;
-      }
+    if(err!=ESP_OK){
+      errors++;
+      continue;
     }
 
-    size_t s=n/4;
-    if(s){
-      f.write((uint8_t*)pcm,s*2);
-      samples+=s;
+    reads++;
+    size_t count=n/sizeof(int32_t);
+
+    for(size_t i=0;i<count;i++){
+      int32_t v=raw[i]>>14;
+      v=max((int32_t)-32768,min((int32_t)32767,v));
+      pcm[i]=(int16_t)v;
+
+      int32_t av=abs(v);
+      if(av>peak)peak=av;
+      if(v<minV)minV=v;
+      if(v>maxV)maxV=v;
+    }
+
+    if(count){
+      f.write((uint8_t*)pcm,count*2);
+      samples+=count;
     }
 
     yield();
@@ -158,17 +174,36 @@ bool recordMic(){
 
   wavHeader(f,samples*2);
   f.close();
+
+  Serial.printf(
+    "TARS: MIC READ=%lu ERROR=%lu SAMPLES=%lu\r\n",
+    (unsigned long)reads,
+    (unsigned long)errors,
+    (unsigned long)samples
+  );
+
+  Serial.printf(
+    "TARS: MIC MIN=%ld MAX=%ld PEAK=%ld\r\n",
+    (long)minV,(long)maxV,(long)peak
+  );
+
+  if(peak<50){
+    Serial.println("TARS: MIC AUDIO TOO LOW");
+    return false;
+  }
+
+  Serial.println("TARS: MIC AUDIO OK");
   return samples>0;
 }
 
-// ========================= WIFI =========================
+// ================= WIFI =================
 bool wifiOK(){
   if(WiFi.status()!=WL_CONNECTED)
     if(!wifiManagerConnect(false))return false;
   return true;
 }
 
-// ========================= STT =========================
+// ================= STT =================
 String stt(){
   if(!wifiOK())return "";
 
@@ -227,6 +262,7 @@ String stt(){
   c.print(e);
 
   uint32_t t=millis();
+
   while(!c.available()&&c.connected()&&millis()-t<15000){
     delay(5);
     yield();
@@ -250,10 +286,14 @@ String stt(){
     s=j["transcript"].as<const char*>();
 
   s.trim();
+
+  Serial.print("TARS: STT = ");
+  Serial.println(s);
+
   return s;
 }
 
-// ========================= ASK =========================
+// ================= ASK =================
 String ask(const String &q){
   if(!wifiOK())return "";
 
@@ -289,10 +329,11 @@ String ask(const String &q){
 
   String s=x["response"].as<String>();
   s.trim();
+
   return s;
 }
 
-// ========================= TTS / SING =========================
+// ================= TTS / SING =================
 bool downloadMP3(const String &url,const String &text){
   if(!wifiOK())return false;
 
@@ -353,10 +394,11 @@ bool downloadMP3(const String &url,const String &text){
 
   f.close();
   h.end();
+
   return total>0;
 }
 
-// ========================= DAC OUTPUT =========================
+// ================= DAC OUTPUT =================
 class DACOut:public AudioStream{
   AudioInfo info;
   uint16_t b[BUF/2];
@@ -367,9 +409,7 @@ public:
     AudioStream::setAudioInfo(i);
   }
 
-  int availableForWrite()override{
-    return BUF;
-  }
+  int availableForWrite()override{return BUF;}
 
   size_t write(const uint8_t *d,size_t n)override{
     if(!dacOK||!d||info.bits_per_sample!=16)return 0;
@@ -405,7 +445,7 @@ public:
 MP3DecoderHelix decoder;
 EncodedAudioStream mp3(&dacOut,&decoder);
 
-// ========================= PLAY MP3 =========================
+// ================= PLAY MP3 =================
 bool playMP3(){
   File f=LittleFS.open(MP3_FILE,FILE_READ);
   if(!f)return false;
@@ -437,7 +477,7 @@ bool playMP3(){
   return true;
 }
 
-// ========================= SING DETECTOR =========================
+// ================= SING DETECTOR =================
 bool singRequest(String s){
   s.toLowerCase();
   return s.indexOf("nyanyi")>=0||
@@ -445,7 +485,7 @@ bool singRequest(String s){
          s.indexOf("nyanyikan")>=0;
 }
 
-// ========================= PROCESS =========================
+// ================= PROCESS =================
 void processQuestion(const String &q){
   String answer=ask(q);
 
@@ -457,12 +497,11 @@ void processQuestion(const String &q){
   oledText=answer;
   oledPos=0;
 
-  bool sing=singRequest(q);
-  singMode=sing;
+  singMode=singRequest(q);
 
-  String url=String(TARS_CLOUD_URL)+(sing?"/sing":"/tts");
+  String url=String(TARS_CLOUD_URL)+(singMode?"/sing":"/tts");
 
-  if(downloadMP3(url,sing?q:answer))
+  if(downloadMP3(url,singMode?q:answer))
     playMP3();
   else
     oledShow("READY","AUDIO ERROR");
@@ -470,7 +509,7 @@ void processQuestion(const String &q){
   singMode=false;
 }
 
-// ========================= SETUP =========================
+// ================= SETUP =================
 void setup(){
   Serial.begin(SERIAL_BAUD);
   Wire.begin(OLED_SDA,OLED_SCL);
@@ -483,6 +522,8 @@ void setup(){
   dacOK=initDAC();
   micOK=initMic();
 
+  Serial.printf("TARS: DAC %s\r\n",dacOK?"READY":"ERROR");
+  Serial.printf("TARS: MIC %s\r\n",micOK?"READY":"ERROR");
   Serial.println("TARS: BLUETOOTH DISABLED");
 
   wifiManagerBegin();
@@ -491,7 +532,7 @@ void setup(){
   oledShow("READY","WAITING...");
 }
 
-// ========================= LOOP =========================
+// ================= LOOP =================
 void loop(){
   if(WiFi.status()!=WL_CONNECTED&&!playing)
     wifiManagerConnect(false);
