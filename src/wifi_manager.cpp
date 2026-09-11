@@ -14,11 +14,14 @@ static const char *AP_NAME = "TARS-SETUP";
 static const char *AP_PASSWORD = "12345678";
 
 static const uint32_t WIFI_TIMEOUT_MS = 15000;
+static const uint32_t PORTAL_DNS_PORT = 53;
 
 static String savedSSID;
 static String savedPassword;
+
 static bool portalRunning = false;
 static bool wifiReady = false;
+static bool routesRegistered = false;
 
 static String htmlPage() {
   String page =
@@ -27,8 +30,10 @@ static String htmlPage() {
     "<title>TARS WiFi</title>"
     "<style>"
     "body{font-family:Arial;text-align:center;padding:30px;background:#111;color:#fff}"
-    "input{width:90%;padding:12px;margin:8px 0;font-size:16px}"
-    "button{padding:12px 30px;font-size:16px}"
+    "h1{margin-bottom:8px}"
+    "p{line-height:1.5}"
+    "input{box-sizing:border-box;width:90%;max-width:360px;padding:12px;margin:8px 0;font-size:16px}"
+    "button{padding:12px 30px;font-size:16px;cursor:pointer}"
     "</style></head><body>"
     "<h1>TARS</h1>"
     "<p>WiFi Setup</p>"
@@ -38,26 +43,24 @@ static String htmlPage() {
     "<br><button type='submit'>SIMPAN</button>"
     "</form>"
     "<p>Hubungkan HP ke <b>TARS-SETUP</b></p>"
+    "<p>Password: <b>12345678</b></p>"
+    "<p>Buka <b>192.168.4.1</b></p>"
     "</body></html>";
 
   return page;
 }
 
-static void startPortal() {
-  if (portalRunning) return;
-
-  Serial.println("TARS: WIFI SETUP MODE");
-  Serial.println("TARS: Connect HP to TARS-SETUP");
-  Serial.println("TARS: Password = 12345678");
-  Serial.println("TARS: Open http://192.168.4.1");
-
-  WiFi.mode(WIFI_AP_STA);
-  WiFi.softAP(AP_NAME, AP_PASSWORD);
-
-  dnsServer.start(53, "*", WiFi.softAPIP());
+static void registerPortalRoutes() {
+  if (routesRegistered) {
+    return;
+  }
 
   server.on("/", HTTP_GET, []() {
-    server.send(200, "text/html", htmlPage());
+    server.send(
+      200,
+      "text/html",
+      htmlPage()
+    );
   });
 
   server.on("/save", HTTP_POST, []() {
@@ -68,19 +71,31 @@ static void startPortal() {
     password.trim();
 
     if (!ssid.length()) {
-      server.send(400, "text/plain", "SSID kosong");
+      server.send(
+        400,
+        "text/plain",
+        "SSID kosong"
+      );
       return;
     }
 
+    Serial.println("TARS: SAVING WIFI CREDENTIALS");
+
     prefs.begin("wifi", false);
+
     prefs.putString("ssid", ssid);
     prefs.putString("pass", password);
+
     prefs.end();
+
+    savedSSID = ssid;
+    savedPassword = password;
 
     server.send(
       200,
       "text/html",
-      "<html><body style='font-family:Arial;text-align:center;padding:30px'>"
+      "<!DOCTYPE html><html><body "
+      "style='font-family:Arial;text-align:center;padding:30px'>"
       "<h2>TARS</h2>"
       "<p>WiFi tersimpan.</p>"
       "<p>TARS sedang restart...</p>"
@@ -92,57 +107,177 @@ static void startPortal() {
   });
 
   server.onNotFound([]() {
-    server.send(200, "text/html", htmlPage());
+    server.send(
+      200,
+      "text/html",
+      htmlPage()
+    );
   });
 
+  routesRegistered = true;
+}
+
+static void startPortal() {
+  if (portalRunning) {
+    return;
+  }
+
+  Serial.println();
+  Serial.println("========================================");
+  Serial.println("       TARS WIFI SETUP MODE");
+  Serial.println("========================================");
+  Serial.println("TARS: Connect HP to TARS-SETUP");
+  Serial.println("TARS: Password = 12345678");
+  Serial.println("TARS: Open http://192.168.4.1");
+  Serial.println("========================================");
+
+  WiFi.persistent(false);
+  WiFi.disconnect(true);
+  delay(100);
+
+  WiFi.mode(WIFI_AP_STA);
+
+  bool apOK = WiFi.softAP(
+    AP_NAME,
+    AP_PASSWORD
+  );
+
+  if (!apOK) {
+    Serial.println("TARS: AP START FAILED");
+    return;
+  }
+
+  IPAddress apIP = WiFi.softAPIP();
+
+  Serial.print("TARS: AP IP = ");
+  Serial.println(apIP);
+
+  dnsServer.start(
+    PORTAL_DNS_PORT,
+    "*",
+    apIP
+  );
+
+  registerPortalRoutes();
+
   server.begin();
+
   portalRunning = true;
 }
 
-bool wifiManagerBegin() {
-  prefs.begin("wifi", true);
+static void handlePortal() {
+  if (!portalRunning) {
+    return;
+  }
 
-  savedSSID = prefs.getString("ssid", "");
-  savedPassword = prefs.getString("pass", "");
+  dnsServer.processNextRequest();
+  server.handleClient();
+}
+
+static void portalWaitLoop() {
+  if (!portalRunning) {
+    return;
+  }
+
+  Serial.println(
+    "TARS: WAITING FOR WIFI CONFIGURATION..."
+  );
+
+  while (portalRunning) {
+    handlePortal();
+    delay(2);
+    yield();
+  }
+}
+
+bool wifiManagerBegin() {
+  WiFi.persistent(false);
+
+  prefs.begin(
+    "wifi",
+    true
+  );
+
+  savedSSID = prefs.getString(
+    "ssid",
+    ""
+  );
+
+  savedPassword = prefs.getString(
+    "pass",
+    ""
+  );
 
   prefs.end();
 
   if (!savedSSID.length()) {
+    Serial.println(
+      "TARS: NO SAVED WIFI"
+    );
+
     startPortal();
 
-    while (true) {
-      dnsServer.processNextRequest();
-      server.handleClient();
-      delay(2);
-    }
+    portalWaitLoop();
+
+    return false;
   }
+
+  Serial.print(
+    "TARS: SAVED WIFI = "
+  );
+
+  Serial.println(savedSSID);
 
   return true;
 }
 
-bool wifiManagerConnect(bool requireTime) {
+bool wifiManagerConnect(
+  bool requireTime
+) {
+  (void)requireTime;
+
   if (WiFi.status() == WL_CONNECTED) {
+    wifiReady = true;
     return true;
   }
 
   if (!savedSSID.length()) {
+    Serial.println(
+      "TARS: NO WIFI CREDENTIALS"
+    );
+
     startPortal();
+
+    portalWaitLoop();
+
     return false;
   }
 
-  Serial.print("TARS: WiFi connecting to ");
+  Serial.print(
+    "TARS: WiFi connecting to "
+  );
+
   Serial.println(savedSSID);
 
+  WiFi.persistent(false);
   WiFi.mode(WIFI_STA);
-  WiFi.begin(savedSSID.c_str(), savedPassword.c_str());
+
+  WiFi.setAutoReconnect(false);
+
+  WiFi.begin(
+    savedSSID.c_str(),
+    savedPassword.c_str()
+  );
 
   uint32_t start = millis();
 
-  while (WiFi.status() != WL_CONNECTED &&
-         millis() - start < WIFI_TIMEOUT_MS) {
-
+  while (
+    WiFi.status() != WL_CONNECTED &&
+    millis() - start < WIFI_TIMEOUT_MS
+  ) {
     delay(250);
     Serial.print(".");
+    yield();
   }
 
   Serial.println();
@@ -150,30 +285,67 @@ bool wifiManagerConnect(bool requireTime) {
   if (WiFi.status() == WL_CONNECTED) {
     wifiReady = true;
 
-    Serial.print("TARS: IP = ");
-    Serial.println(WiFi.localIP());
+    Serial.println(
+      "TARS: WIFI CONNECTED"
+    );
+
+    Serial.print(
+      "TARS: IP = "
+    );
+
+    Serial.println(
+      WiFi.localIP()
+    );
+
+    Serial.print(
+      "TARS: RSSI = "
+    );
+
+    Serial.println(
+      WiFi.RSSI()
+    );
 
     return true;
   }
 
-  Serial.println("TARS: WIFI FAILED");
+  wifiReady = false;
+
+  Serial.println(
+    "TARS: WIFI FAILED"
+  );
+
+  Serial.println(
+    "TARS: STARTING WIFI SETUP PORTAL"
+  );
+
+  WiFi.disconnect(true);
+  delay(100);
+
   startPortal();
 
-  while (true) {
-    dnsServer.processNextRequest();
-    server.handleClient();
-    delay(2);
-  }
+  portalWaitLoop();
 
   return false;
 }
 
 void wifiManagerDisconnect() {
-  Serial.println("TARS: WiFi OFF");
+  Serial.println(
+    "TARS: WiFi OFF"
+  );
 
-  WiFi.disconnect(false);
+  if (portalRunning) {
+    server.stop();
+    dnsServer.stop();
+
+    WiFi.softAPdisconnect(true);
+
+    portalRunning = false;
+  }
+
+  WiFi.disconnect(true);
   WiFi.mode(WIFI_OFF);
 
   wifiReady = false;
+
   delay(300);
 }
