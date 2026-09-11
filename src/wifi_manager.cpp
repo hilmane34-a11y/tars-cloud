@@ -3,6 +3,7 @@
 #include <WebServer.h>
 #include <DNSServer.h>
 #include <Preferences.h>
+#include <esp_system.h>
 #include "wifi_manager.h"
 
 static Preferences prefs;
@@ -21,11 +22,6 @@ static String savedPassword;
 static bool portalRunning = false;
 static bool wifiReady = false;
 static bool routesRegistered = false;
-
-// Flag hanya untuk restart setelah SIMPAN konfigurasi.
-RTC_DATA_ATTR static uint32_t setupBootMagic = 0;
-
-static const uint32_t SETUP_MAGIC = 0x54415253; // "TARS"
 
 // ============================================================
 // HTML WIFI SETUP
@@ -68,6 +64,7 @@ static void registerPortalRoutes() {
   });
 
   server.on("/save", HTTP_POST, []() {
+
     String ssid = server.arg("ssid");
     String password = server.arg("password");
 
@@ -81,19 +78,20 @@ static void registerPortalRoutes() {
 
     Serial.println("TARS: SAVING WIFI CREDENTIALS");
 
+    // Simpan credential.
     prefs.begin("wifi", false);
 
     prefs.putString("ssid", ssid);
     prefs.putString("pass", password);
 
+    // Tandai bahwa boot berikutnya harus langsung
+    // mencoba credential yang baru disimpan.
+    prefs.putBool("pending", true);
+
     prefs.end();
 
     savedSSID = ssid;
     savedPassword = password;
-
-    // Tandai bahwa restart berikutnya adalah
-    // restart setelah konfigurasi WiFi.
-    setupBootMagic = SETUP_MAGIC;
 
     server.send(
       200,
@@ -123,6 +121,7 @@ static void registerPortalRoutes() {
 // ============================================================
 
 static void startPortal() {
+
   if (portalRunning) return;
 
   Serial.println();
@@ -141,7 +140,10 @@ static void startPortal() {
 
   WiFi.mode(WIFI_AP_STA);
 
-  bool apOK = WiFi.softAP(AP_NAME, AP_PASSWORD);
+  bool apOK = WiFi.softAP(
+    AP_NAME,
+    AP_PASSWORD
+  );
 
   if (!apOK) {
     Serial.println("TARS: AP START FAILED");
@@ -153,7 +155,11 @@ static void startPortal() {
   Serial.print("TARS: AP IP = ");
   Serial.println(apIP);
 
-  dnsServer.start(PORTAL_DNS_PORT, "*", apIP);
+  dnsServer.start(
+    PORTAL_DNS_PORT,
+    "*",
+    apIP
+  );
 
   registerPortalRoutes();
 
@@ -167,6 +173,7 @@ static void startPortal() {
 // ============================================================
 
 static void handlePortal() {
+
   if (!portalRunning) return;
 
   dnsServer.processNextRequest();
@@ -178,12 +185,17 @@ static void handlePortal() {
 // ============================================================
 
 static void portalWaitLoop() {
+
   if (!portalRunning) return;
 
-  Serial.println("TARS: WAITING FOR WIFI CONFIGURATION...");
+  Serial.println(
+    "TARS: WAITING FOR WIFI CONFIGURATION..."
+  );
 
   while (portalRunning) {
+
     handlePortal();
+
     delay(2);
     yield();
   }
@@ -197,54 +209,75 @@ bool wifiManagerBegin() {
 
   WiFi.persistent(false);
 
+  esp_reset_reason_t reason = esp_reset_reason();
+
+  bool powerBoot =
+    reason == ESP_RST_POWERON;
+
   // ----------------------------------------------------------
-  // Jika ini adalah restart langsung setelah SIMPAN,
-  // gunakan credential yang baru saja disimpan.
+  // POWER ON BARU
   // ----------------------------------------------------------
 
-  bool afterSetupRestart = (setupBootMagic == SETUP_MAGIC);
+  if (powerBoot) {
 
-  if (afterSetupRestart) {
+    Serial.println();
+    Serial.println("TARS: POWER ON BOOT");
+    Serial.println("TARS: WIFI SETUP REQUIRED");
 
-    Serial.println("TARS: SETUP RESTART DETECTED");
+    // Jangan gunakan credential lama sebagai credential runtime.
+    savedSSID = "";
+    savedPassword = "";
 
-    // Konsumsi flag SEKARANG supaya setelah boot ini selesai
-    // flag tidak dipakai lagi.
-    setupBootMagic = 0;
-
-    prefs.begin("wifi", true);
-
-    savedSSID = prefs.getString("ssid", "");
-    savedPassword = prefs.getString("pass", "");
-
+    // Pending lama tidak boleh dipakai setelah power-on baru.
+    prefs.begin("wifi", false);
+    prefs.putBool("pending", false);
     prefs.end();
 
-    if (!savedSSID.length()) {
+    startPortal();
+    portalWaitLoop();
 
-      Serial.println("TARS: SAVED WIFI NOT FOUND");
+    return false;
+  }
 
-      startPortal();
-      portalWaitLoop();
+  // ----------------------------------------------------------
+  // BOOT SETELAH ESP.RESTART()
+  // ----------------------------------------------------------
 
-      return false;
-    }
+  prefs.begin("wifi", false);
 
-    Serial.print("TARS: NEW WIFI READY = ");
+  bool pending =
+    prefs.getBool("pending", false);
+
+  savedSSID =
+    prefs.getString("ssid", "");
+
+  savedPassword =
+    prefs.getString("pass", "");
+
+  prefs.end();
+
+  if (pending && savedSSID.length()) {
+
+    Serial.println(
+      "TARS: WIFI SETUP RESTART DETECTED"
+    );
+
+    Serial.print(
+      "TARS: SAVED WIFI = "
+    );
+
     Serial.println(savedSSID);
 
     return true;
   }
 
   // ----------------------------------------------------------
-  // Boot normal / power-on:
-  // SELALU minta konfigurasi baru.
+  // RESET LAIN TANPA KONFIGURASI PENDING
   // ----------------------------------------------------------
 
   Serial.println();
-  Serial.println("TARS: NEW POWER BOOT");
   Serial.println("TARS: WIFI SETUP REQUIRED");
 
-  // Hapus credential runtime.
   savedSSID = "";
   savedPassword = "";
 
@@ -259,28 +292,38 @@ bool wifiManagerBegin() {
 // ============================================================
 
 bool wifiManagerConnect(bool requireTime) {
+
   (void)requireTime;
 
   if (WiFi.status() == WL_CONNECTED) {
+
     wifiReady = true;
+
     return true;
   }
 
-  // Jika belum ada credential di RAM,
-  // ambil credential yang baru disimpan.
+  // ----------------------------------------------------------
+  // Load credential kalau belum ada di RAM.
+  // ----------------------------------------------------------
+
   if (!savedSSID.length()) {
 
     prefs.begin("wifi", true);
 
-    savedSSID = prefs.getString("ssid", "");
-    savedPassword = prefs.getString("pass", "");
+    savedSSID =
+      prefs.getString("ssid", "");
+
+    savedPassword =
+      prefs.getString("pass", "");
 
     prefs.end();
   }
 
   if (!savedSSID.length()) {
 
-    Serial.println("TARS: NO WIFI CREDENTIALS");
+    Serial.println(
+      "TARS: NO WIFI CREDENTIALS"
+    );
 
     startPortal();
     portalWaitLoop();
@@ -288,12 +331,16 @@ bool wifiManagerConnect(bool requireTime) {
     return false;
   }
 
-  Serial.print("TARS: WiFi connecting to ");
+  Serial.print(
+    "TARS: WiFi connecting to "
+  );
+
   Serial.println(savedSSID);
 
   WiFi.persistent(false);
 
   WiFi.mode(WIFI_STA);
+
   WiFi.setAutoReconnect(false);
 
   WiFi.begin(
@@ -317,30 +364,55 @@ bool wifiManagerConnect(bool requireTime) {
 
   Serial.println();
 
+  // ----------------------------------------------------------
+  // BERHASIL
+  // ----------------------------------------------------------
+
   if (WiFi.status() == WL_CONNECTED) {
 
     wifiReady = true;
 
-    Serial.println("TARS: WIFI CONNECTED");
+    // Konfigurasi sudah berhasil dipakai.
+    // Hapus status pending supaya tidak dianggap
+    // sebagai restart setelah setup lagi.
+    prefs.begin("wifi", false);
 
-    Serial.print("TARS: IP = ");
+    prefs.putBool("pending", false);
+
+    prefs.end();
+
+    Serial.println(
+      "TARS: WIFI CONNECTED"
+    );
+
+    Serial.print(
+      "TARS: IP = "
+    );
+
     Serial.println(WiFi.localIP());
 
-    Serial.print("TARS: RSSI = ");
+    Serial.print(
+      "TARS: RSSI = "
+    );
+
     Serial.println(WiFi.RSSI());
 
     return true;
   }
 
   // ----------------------------------------------------------
-  // Credential gagal / WiFi tidak ditemukan.
-  // Buka setup lagi.
+  // GAGAL CONNECT
   // ----------------------------------------------------------
 
   wifiReady = false;
 
-  Serial.println("TARS: WIFI FAILED");
-  Serial.println("TARS: STARTING WIFI SETUP PORTAL");
+  Serial.println(
+    "TARS: WIFI FAILED"
+  );
+
+  Serial.println(
+    "TARS: STARTING WIFI SETUP PORTAL"
+  );
 
   WiFi.disconnect(true);
 
@@ -358,11 +430,14 @@ bool wifiManagerConnect(bool requireTime) {
 
 void wifiManagerDisconnect() {
 
-  Serial.println("TARS: WiFi OFF");
+  Serial.println(
+    "TARS: WiFi OFF"
+  );
 
   if (portalRunning) {
 
     server.stop();
+
     dnsServer.stop();
 
     WiFi.softAPdisconnect(true);
