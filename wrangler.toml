@@ -9,6 +9,6 @@ binding = "AI"
 name = "TARS_STT"
 class_name = "TARSSTT"
 
-[exports.TARSSTT]
-type = "durable-object"
-storage = "sqlite"
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["TARSSTT"]
