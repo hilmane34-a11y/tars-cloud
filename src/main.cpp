@@ -134,6 +134,45 @@ bool initDAC(){
 }
 
 // ============================================================
+// DAC DIRECT TEST
+// ============================================================
+
+void testDAC(){
+  Serial.println("TARS: DAC DIRECT TEST");
+
+  const int sampleRate=22050;
+  const int freq=1000;
+  const int samples=256;
+
+  uint16_t buf[samples*2];
+
+  for(int i=0;i<samples;i++){
+    float s=sin(2.0f*PI*freq*i/sampleRate);
+    uint8_t u=(uint8_t)(128.0f+100.0f*s);
+    uint16_t v=(uint16_t)u<<8;
+
+    buf[i*2]=v;       // GPIO25
+    buf[i*2+1]=v;     // GPIO26
+  }
+
+  for(int n=0;n<100;n++){
+    size_t written=0;
+
+    i2s_write(
+      DAC_PORT,
+      buf,
+      sizeof(buf),
+      &written,
+      portMAX_DELAY
+    );
+  }
+
+  i2s_zero_dma_buffer(DAC_PORT);
+
+  Serial.println("TARS: DAC DIRECT TEST DONE");
+}
+
+// ============================================================
 // INMP441
 // ============================================================
 
@@ -820,17 +859,13 @@ public:
       int32_t av=abs(v);
       if(av>peak)peak=av;
 
-      // Signed 16-bit PCM -> unsigned 8-bit DAC.
-      // Tidak menggunakan gain tambahan.
       int32_t u=(v+32768)>>8;
 
       if(u<0)u=0;
       if(u>255)u=255;
 
-      // Internal DAC ESP32 membaca 8-bit pada MSB.
       uint16_t sample=(uint16_t)(u<<8);
 
-      // DAC1 GPIO25, DAC2 GPIO26.
       buffer[i*2]=sample;
       buffer[i*2+1]=sample;
     }
@@ -992,6 +1027,10 @@ void setup(){
   LittleFS.begin(true);
 
   dacOK=initDAC();
+
+  if(dacOK)
+    testDAC();
+
   micOK=initMic();
 
   Serial.printf(
