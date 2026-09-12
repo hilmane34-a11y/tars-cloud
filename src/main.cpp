@@ -80,19 +80,25 @@ bool initDAC(){
   c.mode=(i2s_mode_t)(I2S_MODE_MASTER|I2S_MODE_TX|I2S_MODE_DAC_BUILT_IN);
   c.sample_rate=PLAY_RATE;
   c.bits_per_sample=I2S_BITS_PER_SAMPLE_16BIT;
-  c.channel_format=I2S_CHANNEL_FMT_RIGHT_LEFT;
+
+  // Hanya RIGHT channel -> DAC GPIO26
+  c.channel_format=I2S_CHANNEL_FMT_ONLY_RIGHT;
+
   c.communication_format=I2S_COMM_FORMAT_I2S_MSB;
   c.dma_buf_count=4;
   c.dma_buf_len=256;
   c.tx_desc_auto_clear=true;
 
   esp_err_t e=i2s_driver_install(DAC_PORT,&c,0,nullptr);
+
   if(e!=ESP_OK){
     Serial.printf("TARS: DAC DRIVER ERROR=%d\r\n",(int)e);
     return false;
   }
 
-  e=i2s_set_dac_mode(I2S_DAC_CHANNEL_BOTH_EN);
+  // Internal DAC RIGHT = GPIO26
+  e=i2s_set_dac_mode(I2S_DAC_CHANNEL_RIGHT_EN);
+
   if(e!=ESP_OK){
     Serial.printf("TARS: DAC MODE ERROR=%d\r\n",(int)e);
     i2s_driver_uninstall(DAC_PORT);
@@ -100,8 +106,64 @@ bool initDAC(){
   }
 
   i2s_zero_dma_buffer(DAC_PORT);
-  Serial.println("TARS: DAC GPIO25/26 READY");
+
+  Serial.println("TARS: I2S INTERNAL DAC RIGHT GPIO26 READY");
   return true;
+}
+
+// ================= I2S DAC BEEP TEST =================
+
+void testI2SDAC(){
+  if(!dacOK)return;
+
+  Serial.println("TARS: I2S DAC BEEP TEST 3 SECONDS");
+
+  // 3 detik beep 1000 Hz
+  const uint32_t totalSamples=PLAY_RATE*3;
+  uint16_t buf[256];
+
+  uint32_t pos=0;
+
+  while(pos<totalSamples){
+    uint32_t count=min((uint32_t)256,totalSamples-pos);
+
+    for(uint32_t i=0;i<count;i++){
+      float t=(float)(pos+i)/(float)PLAY_RATE;
+
+      // Sine wave 1000 Hz
+      float s=sinf(2.0f*PI*1000.0f*t);
+
+      // Amplitudo 120 dari range DAC 0..255
+      int v=(int)(s*120.0f);
+
+      // Signed -> unsigned 8-bit DAC
+      uint8_t dac8=(uint8_t)(v+128);
+
+      // Internal ESP32 DAC menggunakan high byte
+      buf[i]=(uint16_t)dac8<<8;
+    }
+
+    size_t written=0;
+
+    esp_err_t e=i2s_write(
+      DAC_PORT,
+      buf,
+      count*2,
+      &written,
+      portMAX_DELAY
+    );
+
+    if(e!=ESP_OK){
+      Serial.printf("TARS: I2S BEEP ERROR=%d\r\n",(int)e);
+      return;
+    }
+
+    pos+=count;
+  }
+
+  i2s_zero_dma_buffer(DAC_PORT);
+
+  Serial.println("TARS: I2S DAC BEEP DONE");
 }
 
 // ================= INMP441 =================
@@ -601,7 +663,11 @@ bool downloadMP3(const String &url,const String &text){
 
 class DACOut:public AudioStream{
   AudioInfo info;
-  uint16_t buffer[BUF];
+
+  // Karena hanya RIGHT/GPIO26 yang dipakai,
+  // satu 16-bit sample per frame sudah cukup.
+  uint16_t buffer[BUF/2];
+
   uint32_t calls=0,pcmBytes=0,outBytes=0,errors=0;
   int32_t peak=0;
 
@@ -652,19 +718,21 @@ public:
     size_t frames=n/(info.channels*2);
     size_t maxFrames=BUF/2;
 
-    if(frames>maxFrames)frames=maxFrames;
+    if(frames>maxFrames)
+      frames=maxFrames;
 
     for(size_t i=0;i<frames;i++){
+
       int16_t sample;
 
       if(info.channels==1){
+        // PCM mono 16-bit little endian
         sample=(int16_t)(
           d[i*2]|
           ((uint16_t)d[i*2+1]<<8)
         );
       }else{
-        // Speaker berada di RIGHT/GPIO26.
-        // Gunakan RIGHT channel langsung.
+        // Ambil RIGHT channel
         sample=(int16_t)(
           d[i*4+2]|
           ((uint16_t)d[i*4+3]<<8)
@@ -674,17 +742,14 @@ public:
       int32_t v=sample;
       int32_t av=abs(v);
 
-      if(av>peak)peak=av;
+      if(av>peak)
+        peak=av;
 
-      // Signed 16-bit -> unsigned 8-bit DAC.
+      // Signed 16-bit -> unsigned 8-bit DAC
       uint8_t dac8=(uint8_t)((v+32768)>>8);
 
-      // Internal DAC ESP32 memakai high byte.
-      // LEFT + RIGHT diisi sama agar RIGHT/GPIO26 pasti mendapat audio.
-      uint16_t out=(uint16_t)dac8<<8;
-
-      buffer[i*2]=out;
-      buffer[i*2+1]=out;
+      // Internal DAC ESP32 menggunakan high byte
+      buffer[i]=(uint16_t)dac8<<8;
     }
 
     size_t written=0;
@@ -692,7 +757,7 @@ public:
     esp_err_t e=i2s_write(
       DAC_PORT,
       buffer,
-      frames*4,
+      frames*2,
       &written,
       portMAX_DELAY
     );
@@ -757,7 +822,10 @@ bool playMP3(){
 
   while(f.available()&&millis()-start<120000){
     size_t copied=copy.copy();
-    if(!copied)delay(1);
+
+    if(!copied)
+      delay(1);
+
     oledType();
     yield();
   }
@@ -779,6 +847,7 @@ bool playMP3(){
 
 bool singRequest(String s){
   s.toLowerCase();
+
   return s.indexOf("nyanyi")>=0||
          s.indexOf("bernyanyi")>=0||
          s.indexOf("nyanyikan")>=0;
@@ -817,16 +886,33 @@ void setup(){
   Wire.begin(OLED_SDA,OLED_SCL);
 
   oledOK=oled.begin(SSD1306_SWITCHCAPVCC,OLED_ADDR);
-  if(oledOK)oledBase("BOOT");
+
+  if(oledOK)
+    oledBase("BOOT");
 
   LittleFS.begin(true);
 
+  // Init I2S internal DAC
   dacOK=initDAC();
+
+  // Init INMP441
   micOK=initMic();
 
   Serial.printf("TARS: DAC %s\r\n",dacOK?"READY":"ERROR");
   Serial.printf("TARS: MIC %s\r\n",micOK?"READY":"ERROR");
   Serial.println("TARS: BLUETOOTH DISABLED");
+
+  // ==================================================
+  // TES SUARA I2S INTERNAL DAC
+  // GPIO26 -> PAM8403 RIGHT -> SPEAKER
+  // DURASI 3 DETIK
+  // ==================================================
+
+  if(dacOK){
+    delay(500);
+    testI2SDAC();
+    delay(500);
+  }
 
   // Power-on pertama: WiFi Manager meminta konfigurasi.
   // Setelah tersimpan, restart dan langsung memakai konfigurasi baru.
@@ -860,12 +946,14 @@ void loop(){
 
   if(recordMic()){
     String q=stt();
+
     LittleFS.remove(STT_FILE);
 
     if(q.length())
       processQuestion(q);
     else
       oledBase("READY","NO INPUT");
+
   }else{
     oledListening();
   }
