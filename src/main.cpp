@@ -40,9 +40,9 @@ void oledBase(const char *title,const String &text=""){
   oled.clearDisplay();
   oled.setTextColor(SSD1306_WHITE);
   oled.setTextSize(1);
-  oled.setCursor(42,0); oled.print("T A R S");
+  oled.setCursor(42,0);oled.print("T A R S");
   oled.drawLine(0,9,127,9,SSD1306_WHITE);
-  oled.setCursor(3,14); oled.print(title);
+  oled.setCursor(3,14);oled.print(title);
   if(text.length()){oled.setCursor(3,27);oled.print(text);}
   oled.display();
 }
@@ -60,11 +60,10 @@ void oledType(){
   if(!oledOK||!oledText.length()||millis()-oledTick<65)return;
   oledTick=millis();
   if(oledPos<oledText.length())oledPos++;
-
   oled.clearDisplay();
   oled.setTextColor(SSD1306_WHITE);
   oled.setTextSize(1);
-  oled.setCursor(42,0); oled.print("T A R S");
+  oled.setCursor(42,0);oled.print("T A R S");
   oled.drawLine(0,9,127,9,SSD1306_WHITE);
   oled.setCursor(3,14);
   oled.print(playing?(singMode?"SINGING":"SPEAKING"):"READY");
@@ -73,32 +72,26 @@ void oledType(){
   oled.display();
 }
 
-// ================= DAC =================
+// ================= I2S INTERNAL DAC =================
 
 bool initDAC(){
   i2s_config_t c={};
   c.mode=(i2s_mode_t)(I2S_MODE_MASTER|I2S_MODE_TX|I2S_MODE_DAC_BUILT_IN);
   c.sample_rate=PLAY_RATE;
   c.bits_per_sample=I2S_BITS_PER_SAMPLE_16BIT;
-
-  // Hanya RIGHT channel -> DAC GPIO26
-  c.channel_format=I2S_CHANNEL_FMT_ONLY_RIGHT;
-
+  c.channel_format=I2S_CHANNEL_FMT_RIGHT_LEFT;
   c.communication_format=I2S_COMM_FORMAT_I2S_MSB;
   c.dma_buf_count=4;
   c.dma_buf_len=256;
   c.tx_desc_auto_clear=true;
 
   esp_err_t e=i2s_driver_install(DAC_PORT,&c,0,nullptr);
-
   if(e!=ESP_OK){
     Serial.printf("TARS: DAC DRIVER ERROR=%d\r\n",(int)e);
     return false;
   }
 
-  // Internal DAC RIGHT = GPIO26
-  e=i2s_set_dac_mode(I2S_DAC_CHANNEL_RIGHT_EN);
-
+  e=i2s_set_dac_mode(I2S_DAC_CHANNEL_BOTH_EN);
   if(e!=ESP_OK){
     Serial.printf("TARS: DAC MODE ERROR=%d\r\n",(int)e);
     i2s_driver_uninstall(DAC_PORT);
@@ -106,45 +99,38 @@ bool initDAC(){
   }
 
   i2s_zero_dma_buffer(DAC_PORT);
-
-  Serial.println("TARS: I2S INTERNAL DAC RIGHT GPIO26 READY");
+  Serial.println("TARS: I2S INTERNAL DAC GPIO25/26 READY");
   return true;
 }
 
-// ================= I2S DAC BEEP TEST =================
+// ================= I2S DAC BEEP 3 SEC =================
 
 void testI2SDAC(){
   if(!dacOK)return;
 
   Serial.println("TARS: I2S DAC BEEP TEST 3 SECONDS");
 
-  // 3 detik beep 1000 Hz
-  const uint32_t totalSamples=PLAY_RATE*3;
+  const uint32_t total=PLAY_RATE*3;
   uint16_t buf[256];
 
   uint32_t pos=0;
 
-  while(pos<totalSamples){
-    uint32_t count=min((uint32_t)256,totalSamples-pos);
+  while(pos<total){
+    uint32_t count=min((uint32_t)256,total-pos);
 
     for(uint32_t i=0;i<count;i++){
       float t=(float)(pos+i)/(float)PLAY_RATE;
-
-      // Sine wave 1000 Hz
-      float s=sinf(2.0f*PI*1000.0f*t);
-
-      // Amplitudo 120 dari range DAC 0..255
-      int v=(int)(s*120.0f);
-
-      // Signed -> unsigned 8-bit DAC
+      int v=(int)(sinf(2.0f*PI*1000.0f*t)*120.0f);
       uint8_t dac8=(uint8_t)(v+128);
 
-      // Internal ESP32 DAC menggunakan high byte
-      buf[i]=(uint16_t)dac8<<8;
+      // DAC internal ESP32:
+      // high byte = nilai DAC.
+      // Dua slot dibuat identik agar GPIO25 DAN GPIO26 aktif.
+      uint16_t sample=(uint16_t)dac8<<8;
+      buf[i]=sample;
     }
 
     size_t written=0;
-
     esp_err_t e=i2s_write(
       DAC_PORT,
       buf,
@@ -162,7 +148,6 @@ void testI2SDAC(){
   }
 
   i2s_zero_dma_buffer(DAC_PORT);
-
   Serial.println("TARS: I2S DAC BEEP DONE");
 }
 
@@ -197,13 +182,13 @@ void put32(uint8_t *p,uint32_t v){p[0]=v;p[1]=v>>8;p[2]=v>>16;p[3]=v>>24;}
 
 void wavHeader(File &f,uint32_t n){
   uint8_t h[44]={};
-  memcpy(h,"RIFF",4); put32(h+4,n+36);
-  memcpy(h+8,"WAVEfmt ",8); put32(h+16,16);
-  put16(h+20,1); put16(h+22,1);
-  put32(h+24,MIC_RATE); put32(h+28,MIC_RATE*2);
-  put16(h+32,2); put16(h+34,16);
-  memcpy(h+36,"data",4); put32(h+40,n);
-  f.seek(0); f.write(h,44);
+  memcpy(h,"RIFF",4);put32(h+4,n+36);
+  memcpy(h+8,"WAVEfmt ",8);put32(h+16,16);
+  put16(h+20,1);put16(h+22,1);
+  put32(h+24,MIC_RATE);put32(h+28,MIC_RATE*2);
+  put16(h+32,2);put16(h+34,16);
+  memcpy(h+36,"data",4);put32(h+40,n);
+  f.seek(0);f.write(h,44);
 }
 
 // ================= RECORD =================
@@ -214,7 +199,7 @@ bool recordMic(){
     return false;
   }
 
-  dotState=1; dotTick=millis();
+  dotState=1;dotTick=millis();
   oledBase("LISTENING",".");
   Serial.println("TARS: RECORDING");
 
@@ -231,7 +216,6 @@ bool recordMic(){
 
   int32_t raw[BUF/4];
   int16_t pcm[BUF/4];
-
   uint32_t samples=0,reads=0,errors=0,start=millis();
   int32_t peak=0,minV=32767,maxV=-32768;
 
@@ -239,7 +223,9 @@ bool recordMic(){
     oledListening();
 
     size_t n=0;
-    esp_err_t err=i2s_read(MIC_PORT,raw,sizeof(raw),&n,pdMS_TO_TICKS(100));
+    esp_err_t err=i2s_read(
+      MIC_PORT,raw,sizeof(raw),&n,pdMS_TO_TICKS(100)
+    );
 
     if(err!=ESP_OK){errors++;continue;}
     reads++;
@@ -268,14 +254,23 @@ bool recordMic(){
   wavHeader(f,samples*2);
   f.close();
 
-  Serial.printf("TARS: MIC READ=%lu ERROR=%lu SAMPLES=%lu\r\n",
-    (unsigned long)reads,(unsigned long)errors,(unsigned long)samples);
+  Serial.printf(
+    "TARS: MIC READ=%lu ERROR=%lu SAMPLES=%lu\r\n",
+    (unsigned long)reads,
+    (unsigned long)errors,
+    (unsigned long)samples
+  );
 
-  Serial.printf("TARS: MIC MIN=%ld MAX=%ld PEAK=%ld\r\n",
-    (long)minV,(long)maxV,(long)peak);
+  Serial.printf(
+    "TARS: MIC MIN=%ld MAX=%ld PEAK=%ld\r\n",
+    (long)minV,(long)maxV,(long)peak
+  );
 
   if(peak<MIC_THRESHOLD){
-    Serial.printf("TARS: MIC AUDIO TOO LOW (<%ld)\r\n",(long)MIC_THRESHOLD);
+    Serial.printf(
+      "TARS: MIC AUDIO TOO LOW (<%ld)\r\n",
+      (long)MIC_THRESHOLD
+    );
     return false;
   }
 
@@ -286,7 +281,12 @@ bool recordMic(){
 // ================= NTP =================
 
 bool syncTime(){
-  configTime(7*3600,0,"pool.ntp.org","time.nist.gov","time.google.com");
+  configTime(
+    7*3600,0,
+    "pool.ntp.org",
+    "time.nist.gov",
+    "time.google.com"
+  );
 
   for(int attempt=1;attempt<=4;attempt++){
     Serial.printf("TARS: NTP SYNC %d/4\r\n",attempt);
@@ -298,9 +298,11 @@ bool syncTime(){
         struct tm t;
         localtime_r(&now,&t);
 
-        Serial.printf("TARS: NTP VALID = %04d-%02d-%02d %02d:%02d:%02d\r\n",
+        Serial.printf(
+          "TARS: NTP VALID = %04d-%02d-%02d %02d:%02d:%02d\r\n",
           t.tm_year+1900,t.tm_mon+1,t.tm_mday,
-          t.tm_hour,t.tm_min,t.tm_sec);
+          t.tm_hour,t.tm_min,t.tm_sec
+        );
 
         ntpOK=true;
         return true;
@@ -309,7 +311,8 @@ bool syncTime(){
       delay(500);
     }
 
-    if(attempt<4)Serial.println("TARS: NTP INVALID, RETRY");
+    if(attempt<4)
+      Serial.println("TARS: NTP INVALID, RETRY");
   }
 
   ntpOK=false;
@@ -346,7 +349,8 @@ String readHTTPBody(WiFiClientSecure &c){
     if(low.startsWith("content-length:"))
       contentLength=low.substring(15).toInt();
 
-    if(low.indexOf("transfer-encoding:")>=0&&low.indexOf("chunked")>=0)
+    if(low.indexOf("transfer-encoding:")>=0&&
+       low.indexOf("chunked")>=0)
       chunked=true;
   }
 
@@ -357,6 +361,7 @@ String readHTTPBody(WiFiClientSecure &c){
       if(!line.length())continue;
 
       int size=(int)strtol(line.c_str(),nullptr,16);
+
       if(size<=0){
         c.readStringUntil('\n');
         break;
@@ -384,7 +389,9 @@ String readHTTPBody(WiFiClientSecure &c){
       body.concat((const char*)buf,n);
     }
   }
-  else body=c.readString();
+  else{
+    body=c.readString();
+  }
 
   return body;
 }
@@ -395,6 +402,7 @@ String stt(){
   if(!wifiOK())return "";
 
   File f=LittleFS.open(STT_FILE,FILE_READ);
+
   if(!f){
     Serial.println("TARS: STT WAV OPEN ERROR");
     return "";
@@ -402,7 +410,8 @@ String stt(){
 
   const char *b="----TARSSTT";
 
-  String a="--"+String(b)+
+  String a=
+    "--"+String(b)+
     "\r\nContent-Disposition: form-data; name=\"file\"; filename=\"stt.wav\""
     "\r\nContent-Type: audio/wav\r\n\r\n";
 
@@ -582,7 +591,9 @@ String ask(const String &q){
 bool downloadMP3(const String &url,const String &text){
   if(!wifiOK())return false;
 
-  Serial.println(url.endsWith("/sing")?"TARS: SING":"TARS: TTS");
+  Serial.println(
+    url.endsWith("/sing")?"TARS: SING":"TARS: TTS"
+  );
 
   WiFiClientSecure c;
   c.setInsecure();
@@ -654,7 +665,10 @@ bool downloadMP3(const String &url,const String &text){
   f.close();
   h.end();
 
-  Serial.printf("TARS: MP3 BYTES = %lu\r\n",(unsigned long)total);
+  Serial.printf(
+    "TARS: MP3 BYTES = %lu\r\n",
+    (unsigned long)total
+  );
 
   return total>0;
 }
@@ -663,11 +677,7 @@ bool downloadMP3(const String &url,const String &text){
 
 class DACOut:public AudioStream{
   AudioInfo info;
-
-  // Karena hanya RIGHT/GPIO26 yang dipakai,
-  // satu 16-bit sample per frame sudah cukup.
-  uint16_t buffer[BUF/2];
-
+  uint16_t buffer[BUF];
   uint32_t calls=0,pcmBytes=0,outBytes=0,errors=0;
   int32_t peak=0;
 
@@ -722,17 +732,14 @@ public:
       frames=maxFrames;
 
     for(size_t i=0;i<frames;i++){
-
       int16_t sample;
 
       if(info.channels==1){
-        // PCM mono 16-bit little endian
         sample=(int16_t)(
           d[i*2]|
           ((uint16_t)d[i*2+1]<<8)
         );
       }else{
-        // Ambil RIGHT channel
         sample=(int16_t)(
           d[i*4+2]|
           ((uint16_t)d[i*4+3]<<8)
@@ -742,14 +749,18 @@ public:
       int32_t v=sample;
       int32_t av=abs(v);
 
-      if(av>peak)
-        peak=av;
+      if(av>peak)peak=av;
 
       // Signed 16-bit -> unsigned 8-bit DAC
       uint8_t dac8=(uint8_t)((v+32768)>>8);
 
-      // Internal DAC ESP32 menggunakan high byte
-      buffer[i]=(uint16_t)dac8<<8;
+      // I2S internal DAC memakai high byte.
+      // Karena konfigurasi stereo, sample yang sama
+      // dikirim ke LEFT(GPIO25) dan RIGHT(GPIO26).
+      uint16_t out=(uint16_t)dac8<<8;
+
+      buffer[i*2]=out;
+      buffer[i*2+1]=out;
     }
 
     size_t written=0;
@@ -757,14 +768,17 @@ public:
     esp_err_t e=i2s_write(
       DAC_PORT,
       buffer,
-      frames*2,
+      frames*4,
       &written,
       portMAX_DELAY
     );
 
     if(e!=ESP_OK){
       errors++;
-      Serial.printf("TARS: DAC I2S ERROR=%d\r\n",(int)e);
+      Serial.printf(
+        "TARS: DAC I2S ERROR=%d\r\n",
+        (int)e
+      );
       return 0;
     }
 
@@ -790,7 +804,10 @@ bool playMP3(){
     return false;
   }
 
-  Serial.printf("TARS: PLAY MP3 SIZE=%u\r\n",(unsigned)f.size());
+  Serial.printf(
+    "TARS: PLAY MP3 SIZE=%u\r\n",
+    (unsigned)f.size()
+  );
 
   dacOut.resetStats();
   playing=true;
@@ -867,13 +884,14 @@ void processQuestion(const String &q){
   oledPos=0;
   singMode=singRequest(q);
 
-  String url=String(TARS_CLOUD_URL)+(singMode?"/sing":"/tts");
+  String url=
+    String(TARS_CLOUD_URL)+
+    (singMode?"/sing":"/tts");
 
-  if(downloadMP3(url,singMode?q:answer)){
+  if(downloadMP3(url,singMode?q:answer))
     playMP3();
-  }else{
+  else
     oledBase("READY","AUDIO ERROR");
-  }
 
   singMode=false;
 }
@@ -885,28 +903,36 @@ void setup(){
 
   Wire.begin(OLED_SDA,OLED_SCL);
 
-  oledOK=oled.begin(SSD1306_SWITCHCAPVCC,OLED_ADDR);
+  oledOK=oled.begin(
+    SSD1306_SWITCHCAPVCC,
+    OLED_ADDR
+  );
 
   if(oledOK)
     oledBase("BOOT");
 
   LittleFS.begin(true);
 
-  // Init I2S internal DAC
   dacOK=initDAC();
-
-  // Init INMP441
   micOK=initMic();
 
-  Serial.printf("TARS: DAC %s\r\n",dacOK?"READY":"ERROR");
-  Serial.printf("TARS: MIC %s\r\n",micOK?"READY":"ERROR");
+  Serial.printf(
+    "TARS: DAC %s\r\n",
+    dacOK?"READY":"ERROR"
+  );
+
+  Serial.printf(
+    "TARS: MIC %s\r\n",
+    micOK?"READY":"ERROR"
+  );
+
   Serial.println("TARS: BLUETOOTH DISABLED");
 
-  // ==================================================
-  // TES SUARA I2S INTERNAL DAC
-  // GPIO26 -> PAM8403 RIGHT -> SPEAKER
+  // ==========================================
+  // I2S INTERNAL DAC TEST
+  // GPIO25 + GPIO26
   // DURASI 3 DETIK
-  // ==================================================
+  // ==========================================
 
   if(dacOK){
     delay(500);
@@ -914,11 +940,10 @@ void setup(){
     delay(500);
   }
 
-  // Power-on pertama: WiFi Manager meminta konfigurasi.
-  // Setelah tersimpan, restart dan langsung memakai konfigurasi baru.
+  // WiFi Manager
   wifiManagerBegin();
 
-  // WiFi TETAP ON.
+  // WiFi tetap ON
   if(wifiOK())
     Serial.println("TARS: WIFI READY");
 
@@ -933,7 +958,7 @@ void loop(){
     return;
   }
 
-  // WiFi sengaja tetap hidup.
+  // WiFi tetap hidup
   if(WiFi.status()!=WL_CONNECTED){
     ntpOK=false;
 
@@ -953,7 +978,6 @@ void loop(){
       processQuestion(q);
     else
       oledBase("READY","NO INPUT");
-
   }else{
     oledListening();
   }
