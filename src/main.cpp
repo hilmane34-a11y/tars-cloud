@@ -86,7 +86,7 @@ bool initDAC(){
   pinMode(AUDIO_DAC_PIN,OUTPUT);
 
   // IDLE = MUTE.
-  // Jangan terus menerus mengeluarkan titik tengah DAC 128.
+  // DAC tidak diberi midpoint 128 terus-menerus.
   dacWrite(AUDIO_DAC_PIN,0);
 
   Serial.println("TARS: DIRECT DAC GPIO26 READY");
@@ -948,24 +948,51 @@ class DACOut:public AudioStream{
     return DAC_BUF-1-count();
   }
 
+  // ================= DAC TASK =================
   void run(){
 
-    uint32_t next=micros();
+    /*
+     * Timing fractional:
+     *
+     * 1,000,000 / 22050 =
+     * 45.351927 us
+     *
+     * Kita tidak boleh hanya memakai 45 us
+     * karena akan membuat playback sedikit terlalu cepat.
+     */
+    uint32_t rate=
+      sampleRate?
+      sampleRate:
+      PLAY_RATE;
 
     uint32_t basePeriod=
-      1000000UL/sampleRate;
+      1000000UL/rate;
 
     uint32_t remainder=
-      1000000UL%sampleRate;
+      1000000UL%rate;
 
     uint32_t fraction=0;
 
+    uint32_t next=micros();
+
+    bool started=false;
+
     while(active){
 
+      /*
+       * Jangan menghabiskan CPU ketika buffer kosong.
+       */
       if(head==tail){
 
-        delayMicroseconds(50);
+        /*
+         * Reset timing supaya ketika data berikutnya
+         * datang DAC tidak mengejar waktu lama
+         * dengan burst.
+         */
+        next=micros();
+        fraction=0;
 
+        vTaskDelay(1);
         continue;
       }
 
@@ -983,19 +1010,36 @@ class DACOut:public AudioStream{
         peak=av;
 
       /*
-       * Software noise gate.
+       * DAC idle = 0.
        *
-       * Hanya sangat dekat dengan titik tengah
-       * yang ditekan. Suara utama tetap lewat.
+       * Saat audio pertama masuk, pindah ke midpoint
+       * melalui sampel audio. Tidak memakai noise gate
+       * agar suara TTS tetap natural.
        */
-      if(abs(v)<180)
-        v=0;
+      if(!started){
+
+        /*
+         * Beri DAC midpoint tepat sebelum audio.
+         * Hanya dilakukan sekali setiap playback.
+         */
+        dacCenter();
+
+        next=micros();
+        fraction=0;
+        started=true;
+      }
 
       uint8_t out=
         (uint8_t)(
-          (v+32768)>>8
+          ((int32_t)v+32768)>>8
         );
 
+      /*
+       * Tunggu sampai waktu sample berikutnya.
+       *
+       * Kita pecah waktu tunggu supaya task tidak
+       * mengunci CPU terus-menerus.
+       */
       while(
         (int32_t)(
           next-micros()
@@ -1003,6 +1047,19 @@ class DACOut:public AudioStream{
       ){
 
         delayMicroseconds(1);
+
+        /*
+         * Beri kesempatan scheduler.
+         * Tidak dilakukan setiap loop secara agresif,
+         * hanya saat menunggu timing.
+         */
+        if(
+          (int32_t)(
+            next-micros()
+          )>200
+        ){
+          taskYIELD();
+        }
       }
 
       dacWrite(
@@ -1013,24 +1070,21 @@ class DACOut:public AudioStream{
       dacSamples++;
 
       /*
-       * Fractional 22.05 kHz timing.
-       *
-       * 1,000,000 / 22,050 =
-       * 45.351927 us
+       * Fractional sample clock.
        */
       next+=basePeriod;
 
       fraction+=remainder;
 
-      if(fraction>=sampleRate){
+      if(fraction>=rate){
 
         next++;
-        fraction-=sampleRate;
+        fraction-=rate;
       }
 
       /*
-       * Jangan mengejar waktu lama jika terjadi
-       * gangguan scheduler/WiFi.
+       * Jika scheduler tertinggal terlalu jauh,
+       * jangan memainkan burst untuk mengejar.
        */
       if(
         (int32_t)(
@@ -1041,17 +1095,33 @@ class DACOut:public AudioStream{
         next=micros();
         fraction=0;
       }
+
+      /*
+       * Sangat penting:
+       * beri scheduler kesempatan secara berkala.
+       *
+       * Ini mencegah IDLE0/IDLE1 kelaparan dan
+       * menghindari Task Watchdog reset.
+       */
+      if(
+        (dacSamples&0x3F)==0
+      ){
+
+        taskYIELD();
+      }
     }
 
-    // Setelah playback selesai:
-    // langsung mute DAC.
+    /*
+     * Jangan memotong task sebelum caller memastikan
+     * buffer sudah drain.
+     */
     dacMute();
 
     active=false;
 
-    // Penting:
-    // task handle harus dikosongkan agar
-    // playback berikutnya dapat membuat task baru.
+    /*
+     * Task handle dikosongkan sebelum task mati.
+     */
     task=nullptr;
 
     vTaskDelete(nullptr);
@@ -1063,6 +1133,12 @@ class DACOut:public AudioStream{
       (DACOut*)arg;
 
     self->run();
+
+    /*
+     * run() seharusnya tidak kembali karena
+     * vTaskDelete dipanggil di dalamnya.
+     */
+    vTaskDelete(nullptr);
   }
 
 public:
@@ -1114,8 +1190,17 @@ public:
 
   void startDAC(){
 
+    /*
+     * Pastikan buffer kosong sebelum playback.
+     */
     head=0;
     tail=0;
+
+    /*
+     * DAC tetap mute sampai task benar-benar
+     * menerima sample pertama.
+     */
+    dacMute();
 
     active=true;
 
@@ -1128,9 +1213,9 @@ public:
         "TARS_DAC",
         4096,
         this,
-        3,
+        2,
         &task,
-        0
+        1
       );
 
     if(result!=pdPASS){
@@ -1144,13 +1229,70 @@ public:
     }
   }
 
-  void stopDAC(){
-
-    active=false;
+  /*
+   * Menunggu sampai seluruh sample PCM telah
+   * dikonsumsi oleh DAC task.
+   *
+   * Tambahan grace period diperlukan karena
+   * sample terakhir baru saja diambil task,
+   * sedangkan dacWrite berikutnya masih harus
+   * mengikuti clock sample.
+   */
+  bool waitDrain(){
 
     uint32_t start=millis();
 
+    while(
+      !empty() &&
+      millis()-start<10000
+    ){
+
+      oledType();
+
+      delay(1);
+      yield();
+    }
+
+    if(!empty()){
+
+      Serial.println(
+        "TARS: DAC DRAIN TIMEOUT"
+      );
+
+      return false;
+    }
+
+    /*
+     * Ring sudah kosong, tetapi beri waktu
+     * satu sample terakhir agar task benar-benar
+     * menyelesaikan dacWrite().
+     *
+     * 22050 Hz ~= 45 us/sample.
+     */
+    delay(5);
+    yield();
+
+    return true;
+  }
+
+  void stopDAC(){
+
+    /*
+     * Jangan langsung mematikan DAC ketika
+     * masih ada data.
+     */
+    waitDrain();
+
+    active=false;
+
+    /*
+     * Tunggu task berhenti dengan timeout.
+     */
+    uint32_t start=millis();
+
     while(task){
+
+      vTaskDelay(1);
 
       if(millis()-start>2000){
 
@@ -1160,8 +1302,6 @@ public:
 
         break;
       }
-
-      vTaskDelay(1);
     }
 
     dacMute();
@@ -1174,21 +1314,6 @@ public:
   void resetBuffer(){
     head=0;
     tail=0;
-  }
-
-  void waitDrain(){
-
-    uint32_t start=millis();
-
-    while(
-      !empty() &&
-      millis()-start<5000
-    ){
-
-      oledType();
-
-      delay(1);
-    }
   }
 
   void printStats(){
@@ -1238,14 +1363,11 @@ public:
     size_t done=0;
 
     /*
-     * PENTING:
+     * BLOCKING WRITE
      *
-     * Tidak boleh memotong PCM ketika buffer penuh.
-     *
-     * Jika buffer penuh, tunggu DAC mengeluarkan
-     * sample kemudian lanjutkan memasukkan sisa PCM.
-     *
-     * Dengan cara ini Helix tidak kehilangan audio.
+     * Tidak boleh membuang PCM ketika ring buffer
+     * penuh. Helix harus selalu mendapatkan seluruh
+     * chunk yang diminta.
      */
     while(done<frames){
 
@@ -1261,6 +1383,11 @@ public:
 
       if(!space){
 
+        /*
+         * DAC task berjalan di Core 1.
+         * Jadi decoder dapat tidur sementara DAC
+         * mengosongkan ring buffer.
+         */
         vTaskDelay(1);
         continue;
       }
@@ -1294,7 +1421,7 @@ public:
 
           /*
            * Speaker berada pada RIGHT PAM8403.
-           * Jadi gunakan RIGHT channel.
+           * Gunakan RIGHT channel.
            */
           sample=
             (int16_t)(
@@ -1314,8 +1441,18 @@ public:
       }
 
       done+=chunk;
+
+      /*
+       * Beri scheduler kesempatan setelah
+       * memasukkan chunk besar.
+       */
+      taskYIELD();
     }
 
+    /*
+     * Selalu kembalikan seluruh byte.
+     * Tidak ada PCM yang dibuang.
+     */
     return n;
   }
 
@@ -1393,16 +1530,10 @@ bool playMP3(){
   );
 
   /*
-   * Bangunkan DAC hanya ketika audio akan
-   * benar-benar diputar.
-   *
-   * GPIO26 sebelumnya idle di 128 sehingga
-   * PAM8403 terus menerima noise DAC.
+   * DAC idle sebelumnya = 0.
+   * startDAC() akan membangunkan output ketika
+   * sample PCM pertama tersedia.
    */
-  dacCenter();
-
-  delay(3);
-
   dacOut.startDAC();
 
   StreamCopy copy(
@@ -1429,21 +1560,22 @@ bool playMP3(){
     yield();
   }
 
+  /*
+   * Beri decoder kesempatan menyelesaikan
+   * frame MP3 terakhir.
+   */
   mp3.end();
 
   f.close();
 
   /*
-   * Semua PCM yang sudah masuk ring buffer
-   * harus selesai dimainkan.
+   * Tunggu SELURUH PCM hasil decoder keluar
+   * dari ring buffer sebelum DAC dimatikan.
    */
   dacOut.waitDrain();
 
   /*
-   * Fade/mute singkat.
-   *
-   * Setelah PCM habis, DAC langsung dimatikan
-   * agar mode normal kembali hening.
+   * Sekarang baru stop DAC.
    */
   dacOut.stopDAC();
 
