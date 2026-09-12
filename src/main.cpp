@@ -135,12 +135,14 @@ bool recordMic(){
 
   if(LittleFS.exists(STT_FILE))LittleFS.remove(STT_FILE);
   File f=LittleFS.open(STT_FILE,FILE_WRITE);
+
   if(!f){
     Serial.println("TARS: WAV OPEN ERROR");
     return false;
   }
 
-  uint8_t z[44]={};f.write(z,44);
+  uint8_t z[44]={};
+  f.write(z,44);
 
   int32_t raw[BUF/4];
   int16_t pcm[BUF/4];
@@ -151,7 +153,10 @@ bool recordMic(){
     oledListening();
 
     size_t n=0;
-    esp_err_t err=i2s_read(MIC_PORT,raw,sizeof(raw),&n,pdMS_TO_TICKS(100));
+    esp_err_t err=i2s_read(
+      MIC_PORT,raw,sizeof(raw),&n,pdMS_TO_TICKS(100)
+    );
+
     if(err!=ESP_OK){errors++;continue;}
     reads++;
 
@@ -178,13 +183,23 @@ bool recordMic(){
   wavHeader(f,samples*2);
   f.close();
 
-  Serial.printf("TARS: MIC READ=%lu ERROR=%lu SAMPLES=%lu\r\n",
-    (unsigned long)reads,(unsigned long)errors,(unsigned long)samples);
-  Serial.printf("TARS: MIC MIN=%ld MAX=%ld PEAK=%ld\r\n",
-    (long)minV,(long)maxV,(long)peak);
+  Serial.printf(
+    "TARS: MIC READ=%lu ERROR=%lu SAMPLES=%lu\r\n",
+    (unsigned long)reads,
+    (unsigned long)errors,
+    (unsigned long)samples
+  );
+
+  Serial.printf(
+    "TARS: MIC MIN=%ld MAX=%ld PEAK=%ld\r\n",
+    (long)minV,(long)maxV,(long)peak
+  );
 
   if(peak<MIC_THRESHOLD){
-    Serial.printf("TARS: MIC AUDIO TOO LOW (<%ld)\r\n",(long)MIC_THRESHOLD);
+    Serial.printf(
+      "TARS: MIC AUDIO TOO LOW (<%ld)\r\n",
+      (long)MIC_THRESHOLD
+    );
     return false;
   }
 
@@ -194,7 +209,12 @@ bool recordMic(){
 
 // ================= NTP =================
 bool syncTime(){
-  configTime(7*3600,0,"pool.ntp.org","time.nist.gov","time.google.com");
+  configTime(
+    7*3600,0,
+    "pool.ntp.org",
+    "time.nist.gov",
+    "time.google.com"
+  );
 
   for(int attempt=1;attempt<=4;attempt++){
     Serial.printf("TARS: NTP SYNC %d/4\r\n",attempt);
@@ -206,9 +226,11 @@ bool syncTime(){
         struct tm t;
         localtime_r(&now,&t);
 
-        Serial.printf("TARS: NTP VALID = %04d-%02d-%02d %02d:%02d:%02d\r\n",
+        Serial.printf(
+          "TARS: NTP VALID = %04d-%02d-%02d %02d:%02d:%02d\r\n",
           t.tm_year+1900,t.tm_mon+1,t.tm_mday,
-          t.tm_hour,t.tm_min,t.tm_sec);
+          t.tm_hour,t.tm_min,t.tm_sec
+        );
 
         ntpOK=true;
         return true;
@@ -217,7 +239,8 @@ bool syncTime(){
       delay(500);
     }
 
-    if(attempt<4)Serial.println("TARS: NTP INVALID, RETRY");
+    if(attempt<4)
+      Serial.println("TARS: NTP INVALID, RETRY");
   }
 
   ntpOK=false;
@@ -227,8 +250,12 @@ bool syncTime(){
 
 // ================= WIFI =================
 bool wifiOK(){
-  if(WiFi.status()!=WL_CONNECTED&&!wifiManagerConnect(false))return false;
-  if(!ntpOK&&!syncTime())return false;
+  if(WiFi.status()!=WL_CONNECTED&&!wifiManagerConnect(false))
+    return false;
+
+  if(!ntpOK&&!syncTime())
+    return false;
+
   return true;
 }
 
@@ -249,7 +276,8 @@ String readHTTPBody(WiFiClientSecure &c){
     if(low.startsWith("content-length:"))
       contentLength=low.substring(15).toInt();
 
-    if(low.indexOf("transfer-encoding:")>=0&&low.indexOf("chunked")>=0)
+    if(low.indexOf("transfer-encoding:")>=0&&
+       low.indexOf("chunked")>=0)
       chunked=true;
   }
 
@@ -260,6 +288,7 @@ String readHTTPBody(WiFiClientSecure &c){
       if(!line.length())continue;
 
       int size=strtol(line.c_str(),nullptr,16);
+
       if(size<=0){
         c.readStringUntil('\n');
         break;
@@ -284,6 +313,7 @@ String readHTTPBody(WiFiClientSecure &c){
       size_t want=min((int)sizeof(buf),remain);
       size_t n=c.readBytes(buf,want);
       if(!n)break;
+
       body.concat((const char*)buf,n);
     }
   }else{
@@ -298,15 +328,19 @@ String stt(){
   if(!wifiOK())return "";
 
   File f=LittleFS.open(STT_FILE,FILE_READ);
+
   if(!f){
     Serial.println("TARS: STT WAV OPEN ERROR");
     return "";
   }
 
   const char *b="----TARSSTT";
-  String a="--"+String(b)+
+
+  String a=
+    "--"+String(b)+
     "\r\nContent-Disposition: form-data; name=\"file\"; filename=\"stt.wav\""
     "\r\nContent-Type: audio/wav\r\n\r\n";
+
   String e="\r\n--"+String(b)+"--\r\n";
 
   WiFiClientSecure c;
@@ -315,8 +349,10 @@ String stt(){
 
   String host=TARS_CLOUD_URL;
   int p=host.indexOf("://");
+
   if(p>=0)host=host.substring(p+3);
   p=host.indexOf('/');
+
   if(p>=0)host=host.substring(0,p);
 
   Serial.println("TARS: STT CONNECTING");
@@ -478,7 +514,9 @@ String ask(const String &q){
 bool downloadMP3(const String &url,const String &text){
   if(!wifiOK())return false;
 
-  Serial.println(url.endsWith("/sing")?"TARS: SING":"TARS: TTS");
+  Serial.println(
+    url.endsWith("/sing")?"TARS: SING":"TARS: TTS"
+  );
 
   WiFiClientSecure c;
   c.setInsecure();
@@ -521,7 +559,6 @@ bool downloadMP3(const String &url,const String &text){
 
   WiFiClient *s=h.getStreamPtr();
   uint8_t buf[BUF];
-
   int len=h.getSize();
   size_t total=0;
   uint32_t t=millis();
@@ -536,7 +573,6 @@ bool downloadMP3(const String &url,const String &text){
       if(r>0){
         f.write(buf,r);
         total+=r;
-
         if(len>0)len-=r;
         t=millis();
       }
@@ -551,7 +587,10 @@ bool downloadMP3(const String &url,const String &text){
   f.close();
   h.end();
 
-  Serial.printf("TARS: MP3 BYTES = %lu\r\n",(unsigned long)total);
+  Serial.printf(
+    "TARS: MP3 BYTES = %lu\r\n",
+    (unsigned long)total
+  );
 
   return total>0;
 }
@@ -584,7 +623,6 @@ class DACOut:public AudioStream{
 
     uint32_t frac=0,next=micros();
     bool started=false;
-    int32_t smooth=0;
 
     while(active){
       if(head==tail){
@@ -597,23 +635,21 @@ class DACOut:public AudioStream{
       int16_t sample=buffer[tail];
       tail=(tail+1)%DAC_BUF;
 
-      int32_t v=sample;
+      // Turunkan level PCM menjadi sekitar 67%.
+      int32_t v=((int32_t)sample*2)/3;
+
       int32_t av=abs(v);
       if(av>peak)peak=av;
 
       if(!started){
         dacCenter();
-        smooth=v;
         next=micros();
         frac=0;
         started=true;
       }
 
-      // Smoothing suara: low-pass ringan sebelum DAC 8-bit.
-      smooth+=(v-smooth)>>2;
-
-      // Rounding 16-bit PCM -> DAC 8-bit.
-      uint8_t out=(uint8_t)((smooth+32768+128)>>8);
+      // 16-bit PCM -> DAC 8-bit dengan rounding.
+      uint8_t out=(uint8_t)((v+32768+128)>>8);
 
       while((int32_t)(next-micros())>0){
         delayMicroseconds(1);
@@ -632,7 +668,7 @@ class DACOut:public AudioStream{
         frac-=rate;
       }
 
-      // Hindari burst jika task tertinggal terlalu jauh.
+      // Hindari burst jika task tertinggal.
       if((int32_t)(micros()-next)>50000){
         next=micros();
         frac=0;
@@ -687,7 +723,8 @@ public:
     if(task)return;
 
     if(xTaskCreatePinnedToCore(
-      taskFunc,"TARS_DAC",4096,this,2,&task,1)!=pdPASS){
+      taskFunc,"TARS_DAC",4096,this,2,&task,1
+    )!=pdPASS){
       task=nullptr;
       active=false;
       Serial.println("TARS: DAC TASK ERROR");
@@ -824,7 +861,6 @@ bool playMP3(){
 
   dacOut.resetStats();
   playing=true;
-
   oledPos=0;
   oledTick=millis();
 
@@ -871,8 +907,8 @@ bool playMP3(){
 
   LittleFS.remove(MP3_FILE);
   oledBase("READY","WAITING...");
-
   Serial.println("TARS: PLAYBACK DONE");
+
   return true;
 }
 
@@ -924,7 +960,11 @@ void setup(){
 
   Serial.printf("TARS: DAC %s\r\n",dacOK?"READY":"ERROR");
   Serial.printf("TARS: MIC %s\r\n",micOK?"READY":"ERROR");
-  Serial.printf("TARS: MIC THRESHOLD=%ld\r\n",(long)MIC_THRESHOLD);
+  Serial.printf(
+    "TARS: MIC THRESHOLD=%ld\r\n",
+    (long)MIC_THRESHOLD
+  );
+
   Serial.println("TARS: DIRECT AUDIO GPIO26");
   Serial.println("TARS: BLUETOOTH DISABLED");
   Serial.println("TARS: POWER ON BOOT");
