@@ -1,0 +1,14 @@
+name = "tars-cloud-v1"
+main = "worker.js"
+compatibility_date = "2026-09-12"
+
+[ai]
+binding = "AI"
+
+[[durable_objects.bindings]]
+name = "TARS_STT"
+class_name = "TARSSTT"
+
+[exports.TARSSTT]
+type = "durable-object"
+storage = "sqlite"
