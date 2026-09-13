@@ -77,7 +77,7 @@ void oledType(){
 
 bool readMic(int16_t*p,size_t maxN,size_t&n,int32_t&peak){
   int32_t raw[IO_BUF/4];size_t bytes=0;
-  if(i2s_read(I2S_PORT,raw,sizeof(raw),&bytes)!=ESP_OK)return false;
+  if(i2s_read(I2S_PORT,raw,sizeof(raw),&bytes,pdMS_TO_TICKS(50))!=ESP_OK)return false;
   n=min(bytes/4,maxN);peak=0;
   for(size_t i=0;i<n;i++){
     p[i]=constrain(raw[i]>>16,-32768,32767);
@@ -223,7 +223,6 @@ String stt(){
 
   String q=v.as<String>();
   q.trim();
-
   if(!q.length()||q=="null"||q=="NULL")return "";
   return q;
 }
@@ -307,8 +306,7 @@ public:
   }
 };
 
-DACOut dacOut;
-MP3DecoderHelix decoder;
+DACOut dacOut;MP3DecoderHelix decoder;
 EncodedAudioStream mp3(&dacOut,&decoder);
 
 bool playMP3(){
@@ -321,7 +319,6 @@ bool playMP3(){
   StreamCopy cp(mp3,f,IO_BUF);uint32_t t=millis();
   while(f.available()&&millis()-t<120000){cp.copy();oledType();yield();}
   mp3.end();f.close();
-
   while(!dacOut.empty()){oledType();delay(1);}
   dacOut.stop();playing=false;LittleFS.remove(PLAY_FILE);
   oledBase("STANDBY","LISTENING...");
@@ -378,21 +375,30 @@ bool isSing(const String&q){
   return s.indexOf("nyanyi")>=0||s.indexOf("bernyanyi")>=0||s.indexOf("nyanyikan")>=0;
 }
 
-bool hasTARSEnd(const String&q){
-  String s=q;s.trim();s.toLowerCase();
-  if(s=="tars")return true;
-  return s.endsWith(" tars")||s.endsWith("tars?")||s.endsWith("tars.")||
-         s.endsWith("tars!")||s.endsWith("tars,");
-}
-
 bool hasTARSStart(const String&q){
   String s=q;s.trim();s.toLowerCase();
-  return s=="tars"||s.startsWith("tars ")||s.startsWith("tars?")||
-         s.startsWith("tars.")||s.startsWith("tars!")||s.startsWith("tars,");
+  return s=="tars"||s.startsWith("tars ")||s.startsWith("tars,")||
+         s.startsWith("tars?")||s.startsWith("tars.")||s.startsWith("tars!");
+}
+
+bool hasTARSEnd(const String&q){
+  String s=q;s.trim();s.toLowerCase();
+  return s=="tars"||s.endsWith(" tars")||s.endsWith(" tars?")||
+         s.endsWith(" tars.")||s.endsWith(" tars!")||s.endsWith(" tars,");
 }
 
 bool calledTARS(const String&q){
   return hasTARSStart(q)||hasTARSEnd(q);
+}
+
+String cleanTARS(String q){
+  q.trim();
+  if(hasTARSStart(q))q=q.substring(4);
+  else if(hasTARSEnd(q))q=q.substring(0,q.length()-4);
+  q.trim();
+  while(q.length()&&strchr(" ,.!?",q[0]))q.remove(0,1);
+  q.trim();
+  return q;
 }
 
 String localTimeText(){
@@ -409,7 +415,7 @@ String localTimeText(){
 void answer(const String&q){
   String l=q;l.toLowerCase();l.trim();
 
-  // ================= OFFLINE KHUSUS =================
+  // OFFLINE KHUSUS
   if(l.indexOf("hidup jokowi")>=0){
     Serial.println("TARS: HIDUP JOKOWI -> OFFLINE");
     Serial.println("TARS: Saya akan lawan.");
@@ -419,7 +425,7 @@ void answer(const String&q){
     return;
   }
 
-  // ================= UNKNOWN / BLOKIR =================
+  // SEMUA UCAPAN LAIN WAJIB MEMANGGIL TARS
   if(!calledTARS(q)){
     Serial.println("TARS: UNKNOWN -> BLOCKED");
     oledBase("UNKNOWN","BLOCKED");
@@ -428,22 +434,17 @@ void answer(const String&q){
     return;
   }
 
-  // Hilangkan kata TARS dari awal/akhir sebelum dikirim AI.
-  String clean=q;
-  clean.trim();
-  if(hasTARSStart(clean))clean=clean.substring(4);
-  else if(hasTARSEnd(clean))clean=clean.substring(0,clean.length()-4);
-  clean.trim();
-
+  String clean=cleanTARS(q);
   if(!clean.length()){
     Serial.println("TARS: ONLINE BUT EMPTY");
     oledBase("UNKNOWN","SAY SOMETHING");
     return;
   }
 
-  // ================= TIME LOCAL =================
-  if(clean.indexOf("jam")>=0||clean.indexOf("waktu")>=0||
-     clean.indexOf("tanggal")>=0||clean.indexOf("hari")>=0){
+  // WAKTU/TANGGAL LOKAL
+  String lq=clean;lq.toLowerCase();
+  if(lq.indexOf("jam")>=0||lq.indexOf("waktu")>=0||
+     lq.indexOf("tanggal")>=0||lq.indexOf("hari")>=0){
     Serial.println("TARS: TIME -> LOCAL");
     if(!ntpOK){oledBase("STANDBY","TIME ERROR");return;}
     singMode=false;oledText=localTimeText();oledPos=oledPage=0;
@@ -451,7 +452,7 @@ void answer(const String&q){
     return;
   }
 
-  // ================= ONLINE =================
+  // ONLINE
   singMode=isSing(clean);
 
   if(singMode){
@@ -467,10 +468,8 @@ void answer(const String&q){
   if(!a.length()){oledBase("STANDBY","ASK ERROR");return;}
 
   oledText=a;oledPos=oledPage=0;
-
   if(downloadMP3(String(TARS_CLOUD_URL)+"/tts",a))playMP3();
   else oledBase("STANDBY","AUDIO ERROR");
-
   singMode=false;
 }
 
@@ -481,8 +480,7 @@ void setup(){
   if(oledOK)oledBase("BOOT");
 
   LittleFS.begin(true);
-  dacOK=initDAC();
-  micOK=initMic();
+  dacOK=initDAC();micOK=initMic();
 
   Serial.println("TARS: BLUETOOTH DISABLED");
   Serial.println("TARS: DIRECT STT MODE");
@@ -491,13 +489,11 @@ void setup(){
   Serial.println("TARS: HIDUP JOKOWI = OFFLINE");
   Serial.println("TARS: OTHER SPEECH = BLOCKED");
 
-  wifiManagerBegin();
-  ensureWiFi();
+  wifiManagerBegin();ensureWiFi();
 
   while(!syncTime()){
     oledBase("BOOT","NTP RETRY...");
-    delay(2000);
-    ensureWiFi();
+    delay(2000);ensureWiFi();
   }
 
   ntpOK=true;
