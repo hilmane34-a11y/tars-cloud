@@ -20,14 +20,21 @@
 #define MIC_SD 34
 #define AUDIO_DAC_PIN 26
 
-const uint32_t MIC_RATE=16000,PLAY_RATE=22050,REC_MAX=5000,REC_MIN=700,
-  SILENCE=600,LISTEN_MAX=15000,PREROLL_MS=500,OLED_MS=15;
+const uint32_t MIC_RATE=16000,PLAY_RATE=22050,REC_MAX=5000,REC_MIN=700;
+const uint32_t SILENCE=600,LISTEN_MAX=15000,PREROLL_MS=500,OLED_MS=15;
 const int32_t MIC_TH=14000,MIC_SIL=12000;
 const size_t BUF=1024,DAC_BUF=16384,PRE=MIC_RATE*PREROLL_MS/1000;
 
 const char *STT_FILE="/stt.wav",*PLAY_FILE="/tars.mp3";
 const char *OFFLINE_JOKOWI="/offline_jokowi.mp3";
 const char *OFFLINE_EXP="/offline_experience.mp3";
+
+/* =========================================================
+   VOICE TEMPLATES
+   2 = HIDUP JOKOWI
+   3 = CERITAKAN PENGALAMANMU
+   4 = TARS
+   ========================================================= */
 
 const uint8_t TEMPLATE_TARS[64]={
   0,18,105,209,248,253,255,255,255,253,242,229,233,228,225,228,
@@ -45,15 +52,25 @@ const uint8_t TEMPLATE_JOKOWI[64]={
 
 const uint8_t TEMPLATE_EXP[64]={
   3,17,186,237,255,229,59,150,120,106,41,1,0,2,175,255,
-  229,58,4,1,30,39,206,249,227,84,57,41,10,0,0,47,
-  180,73,92,101,197,213,219,215,211,248,219,201,157,69,72,157,
-  184,162,67,51,65,70,75,95,132,139,137,119,83,40,30,12
+  229,58,4,1,30,39,40,1,30,39,206,249,227,84,57,41,10,
+  0,0,47,180,73,92,101,197,213,219,215,211,248,219,201,157,
+  69,72,157,184,162,67,51,65,70,75,95,132,139,137,119,83,40,30,12
 };
 
-const float WAKE_TH=.16f;
-const float OFFLINE_JOKOWI_TH=.21f;
-const float OFFLINE_EXP_TH=.29f;
-const float MATCH_MARGIN=.02f;
+/*
+   Durasi aktif dari tiga rekaman asli:
+   TARS     ~0.70 s  -> ~70 frame
+   JOKOWI   ~1.21 s  -> ~121 frame
+   EXP      ~1.79 s  -> ~179 frame
+*/
+const uint16_t DUR_TARS=70;
+const uint16_t DUR_JOKOWI=121;
+const uint16_t DUR_EXP=179;
+
+const float WAKE_TH=.24f;
+const float OFFLINE_JOKOWI_TH=.27f;
+const float OFFLINE_EXP_TH=.30f;
+const float MATCH_MARGIN=.025f;
 
 Adafruit_SSD1306 oled(OLED_WIDTH,OLED_HEIGHT,&Wire,-1);
 
@@ -62,6 +79,10 @@ String oledText;
 size_t oledPos,oledPage;
 uint32_t oledTick,dotTick;
 uint8_t dots=1;
+
+/* =========================================================
+   OLED
+   ========================================================= */
 
 void oledHeader(const char *s){
   oled.clearDisplay();
@@ -104,8 +125,10 @@ void oledType(){
 
   while(i<oledPos){
     char c=oledText[i++];
+
     if(c=='\n'||x>121){
-      x=3;y+=8;
+      x=3;
+      y+=8;
       if(c=='\n')continue;
     }
 
@@ -128,7 +151,8 @@ void oledType(){
     char c=oledText[oledPos++];
 
     if(c=='\n'||x>121){
-      x=3;y+=8;
+      x=3;
+      y+=8;
       if(c=='\n')continue;
     }
 
@@ -148,15 +172,17 @@ void oledType(){
   oled.display();
 }
 
+/* =========================================================
+   MIC / DAC
+   ========================================================= */
+
 bool initDAC(){
   pinMode(AUDIO_DAC_PIN,OUTPUT);
   dacWrite(AUDIO_DAC_PIN,0);
   return true;
 }
 
-inline void dacMute(){
-  dacWrite(AUDIO_DAC_PIN,0);
-}
+inline void dacMute(){dacWrite(AUDIO_DAC_PIN,0);}
 
 bool initMic(){
   i2s_config_t c={};
@@ -177,6 +203,10 @@ bool initMic(){
 
   return i2s_set_pin(MIC_PORT,&p)==ESP_OK;
 }
+
+/* =========================================================
+   WAV
+   ========================================================= */
 
 void put16(uint8_t *p,uint16_t v){
   p[0]=v;p[1]=v>>8;
@@ -204,6 +234,10 @@ void wavHeader(File &f,uint32_t n){
   f.write(h,44);
 }
 
+/* =========================================================
+   ENVELOPE
+   ========================================================= */
+
 uint16_t envelope(uint8_t *e,uint16_t max){
   File f=LittleFS.open(STT_FILE);
   if(!f||f.size()<=44){
@@ -212,6 +246,7 @@ uint16_t envelope(uint8_t *e,uint16_t max){
   }
 
   f.seek(44);
+
   int16_t p[BUF/2];
   uint16_t bins=0,n=0;
   uint32_t sum=0;
@@ -238,49 +273,95 @@ uint16_t envelope(uint8_t *e,uint16_t max){
   return bins;
 }
 
-float templateScore(const uint8_t *e,uint16_t total,const uint8_t *t,
-                    uint16_t minLen,uint16_t maxLen,
-                    uint16_t *bestStart=nullptr,uint16_t *bestLen=nullptr){
-  if(total<minLen)return 1.0f;
+/* =========================================================
+   WHOLE-UTTERANCE TEMPLATE MATCH
+   Tidak lagi mencari potongan kecil.
+   ========================================================= */
 
-  maxLen=min(maxLen,total);
-  float best=1.0f;
+float wholeTemplateScore(
+  const uint8_t *e,
+  uint16_t n,
+  const uint8_t *t,
+  uint16_t expectedDur
+){
+  if(n<20)return 1.0f;
 
-  for(uint16_t len=minLen;len<=maxLen;len+=5){
-    for(uint16_t s=0;s+len<=total;s++){
-      uint8_t lo=255,hi=0;
+  /*
+     Cari bagian aktif berdasarkan level relatif terhadap
+     puncak suara. Ini menghilangkan silence sebelum/sesudah.
+  */
+  uint8_t peak=0;
 
-      for(uint16_t i=0;i<len;i++){
-        lo=min(lo,e[s+i]);
-        hi=max(hi,e[s+i]);
-      }
+  for(uint16_t i=0;i<n;i++)
+    if(e[i]>peak)peak=e[i];
 
-      if(hi<=lo+4)continue;
+  if(peak<20)return 1.0f;
 
-      float d=0;
+  uint8_t gate=max((uint8_t)8,(uint8_t)(peak*0.10f));
 
-      for(uint8_t j=0;j<64;j++){
-        float q=(float)j*(len-1)/63.0f;
-        uint16_t j0=(uint16_t)q;
-        uint16_t j1=j0+1<len?j0+1:j0;
+  int first=-1,last=-1;
 
-        float v=e[s+j0]+(e[s+j1]-e[s+j0])*(q-j0);
-        v=constrain((v-lo)*255.0f/(hi-lo),0.0f,255.0f);
-        d+=fabsf(v-t[j])/255.0f;
-      }
-
-      d/=64.0f;
-
-      if(d<best){
-        best=d;
-        if(bestStart)*bestStart=s;
-        if(bestLen)*bestLen=len;
-      }
+  for(uint16_t i=0;i<n;i++){
+    if(e[i]>=gate){
+      if(first<0)first=i;
+      last=i;
     }
   }
 
-  return best;
+  if(first<0||last<=first)return 1.0f;
+
+  uint16_t len=last-first+1;
+
+  if(len<20)return 1.0f;
+
+  /* Bentuk suara seluruh utterance -> 64 titik */
+  uint8_t lo=255,hi=0;
+
+  for(uint16_t i=first;i<=last;i++){
+    lo=min(lo,e[i]);
+    hi=max(hi,e[i]);
+  }
+
+  if(hi<=lo+4)return 1.0f;
+
+  float shape=0;
+
+  for(uint8_t j=0;j<64;j++){
+    float q=(float)j*(len-1)/63.0f;
+    uint16_t a=(uint16_t)q;
+    uint16_t b=(a+1<len)?a+1:a;
+
+    float v=e[first+a]+
+      (e[first+b]-e[first+a])*(q-a);
+
+    v=constrain(
+      (v-lo)*255.0f/(hi-lo),
+      0.0f,255.0f
+    );
+
+    shape+=fabsf(v-t[j])/255.0f;
+  }
+
+  shape/=64.0f;
+
+  /*
+     Penalti durasi.
+     Rekaman "TARS" jauh lebih pendek daripada
+     "hidup Jokowi" dan "ceritakan pengalamanmu".
+  */
+  float ratio=(float)len/(float)expectedDur;
+  float duration=fabsf(logf(max(ratio,0.05f)));
+
+  /*
+     Shape lebih dominan, tetapi durasi cukup kuat
+     untuk mencegah Jokowi masuk sebagai TARS.
+  */
+  return shape*0.72f+min(duration,1.0f)*0.28f;
 }
+
+/* =========================================================
+   CLASSIFIER
+   ========================================================= */
 
 enum InputType{
   INPUT_BLOCKED,
@@ -293,55 +374,91 @@ InputType classifyInput(){
   uint8_t e[600];
   uint16_t n=envelope(e,600);
 
-  if(n<40){
+  if(n<30){
     Serial.println("TARS: AUDIO TOO SHORT");
     return INPUT_BLOCKED;
   }
 
   float score[3];
 
-  score[0]=templateScore(e,n,TEMPLATE_TARS,45,110);
-  score[1]=templateScore(e,n,TEMPLATE_JOKOWI,90,170);
-  score[2]=templateScore(e,n,TEMPLATE_EXP,130,230);
+  score[0]=wholeTemplateScore(
+    e,n,TEMPLATE_TARS,DUR_TARS
+  );
+
+  score[1]=wholeTemplateScore(
+    e,n,TEMPLATE_JOKOWI,DUR_JOKOWI
+  );
+
+  score[2]=wholeTemplateScore(
+    e,n,TEMPLATE_EXP,DUR_EXP
+  );
 
   Serial.printf(
-    "TARS: WAKE %.3f | JOKOWI %.3f | EXP %.3f\r\n",
+    "TARS: WHOLE WAKE %.3f | JOKOWI %.3f | EXP %.3f\r\n",
     score[0],score[1],score[2]
   );
 
-  uint8_t best=0,second=1;
+  uint8_t best=0;
 
-  if(score[1]<score[best])best=1;
-  if(score[2]<score[best])best=2;
+  for(uint8_t i=1;i<3;i++)
+    if(score[i]<score[best])best=i;
 
-  if(best==0)second=score[1]<score[2]?1:2;
-  else if(best==1)second=score[0]<score[2]?0:2;
-  else second=score[0]<score[1]?0:1;
+  uint8_t second=best==0?1:0;
+
+  for(uint8_t i=0;i<3;i++){
+    if(i!=best&&score[i]<score[second])
+      second=i;
+  }
 
   float margin=score[second]-score[best];
 
-  if(best==0&&score[0]<=WAKE_TH&&margin>=MATCH_MARGIN){
-    Serial.println("TARS: WAKE -> STT ONLINE");
+  if(
+    best==0&&
+    score[0]<=WAKE_TH&&
+    margin>=MATCH_MARGIN
+  ){
+    Serial.printf(
+      "TARS: WAKE TARS | SCORE %.3f | MARGIN %.3f\r\n",
+      score[0],margin
+    );
     return INPUT_WAKE_TARS;
   }
 
-  if(best==1&&score[1]<=OFFLINE_JOKOWI_TH&&margin>=MATCH_MARGIN){
-    Serial.println("TARS: OFFLINE -> HIDUP JOKOWI");
+  if(
+    best==1&&
+    score[1]<=OFFLINE_JOKOWI_TH&&
+    margin>=MATCH_MARGIN
+  ){
+    Serial.printf(
+      "TARS: OFFLINE JOKOWI | SCORE %.3f\r\n",
+      score[1]
+    );
     return INPUT_OFFLINE_JOKOWI;
   }
 
-  if(best==2&&score[2]<=OFFLINE_EXP_TH&&margin>=MATCH_MARGIN){
-    Serial.println("TARS: OFFLINE -> PENGALAMAN");
+  if(
+    best==2&&
+    score[2]<=OFFLINE_EXP_TH&&
+    margin>=MATCH_MARGIN
+  ){
+    Serial.printf(
+      "TARS: OFFLINE EXPERIENCE | SCORE %.3f\r\n",
+      score[2]
+    );
     return INPUT_OFFLINE_EXP;
   }
 
   Serial.printf(
-    "TARS: UNKNOWN -> BLOCKED (BEST %.3f / MARGIN %.3f)\r\n",
+    "TARS: UNKNOWN -> BLOCKED | BEST %.3f | MARGIN %.3f\r\n",
     score[best],margin
   );
 
   return INPUT_BLOCKED;
 }
+
+/* =========================================================
+   RECORD MIC
+   ========================================================= */
 
 bool recordMic(){
   if(!micOK)return false;
@@ -373,15 +490,21 @@ bool recordMic(){
 
     size_t n=0;
 
-    if(i2s_read(
-      MIC_PORT,raw,sizeof(raw),&n,pdMS_TO_TICKS(50)
-    )!=ESP_OK)continue;
+    if(
+      i2s_read(
+        MIC_PORT,raw,sizeof(raw),&n,
+        pdMS_TO_TICKS(50)
+      )!=ESP_OK
+    )continue;
 
     size_t c=n/4;
     int32_t bp=0;
 
     for(size_t i=0;i<c;i++){
-      int32_t v=constrain(raw[i]>>16,-32768,32767);
+      int32_t v=constrain(
+        raw[i]>>16,-32768,32767
+      );
+
       pcm[i]=v;
       bp=max(bp,abs(v));
     }
@@ -439,6 +562,10 @@ bool recordMic(){
   return true;
 }
 
+/* =========================================================
+   WIFI / NTP
+   ========================================================= */
+
 bool syncTime(){
   configTime(
     7*3600,0,
@@ -476,7 +603,8 @@ bool syncTime(){
 }
 
 bool wifiOK(){
-  return WiFi.status()==WL_CONNECTED||wifiManagerConnect(false);
+  return WiFi.status()==WL_CONNECTED||
+         wifiManagerConnect(false);
 }
 
 bool ensureWiFi(){
@@ -492,6 +620,10 @@ bool ensureWiFi(){
   return true;
 }
 
+/* =========================================================
+   HTTP BODY
+   ========================================================= */
+
 String body(WiFiClientSecure &c){
   String l,b;
   bool chunk=false;
@@ -500,6 +632,7 @@ String body(WiFiClientSecure &c){
   while(c.connected()){
     l=c.readStringUntil('\n');
     l.trim();
+
     if(!l.length())break;
 
     String x=l;
@@ -518,6 +651,7 @@ String body(WiFiClientSecure &c){
     while(c.connected()){
       l=c.readStringUntil('\n');
       l.trim();
+
       if(!l.length())continue;
 
       int n=strtol(l.c_str(),0,16);
@@ -527,7 +661,9 @@ String body(WiFiClientSecure &c){
         uint8_t z[BUF];
         size_t w=min((int)sizeof(z),n);
         size_t r=c.readBytes(z,w);
+
         if(!r)break;
+
         b.concat((char*)z,r);
         n-=r;
       }
@@ -541,7 +677,9 @@ String body(WiFiClientSecure &c){
       int rl=len-b.length();
       size_t w=min((int)sizeof(z),rl);
       size_t r=c.readBytes(z,w);
+
       if(!r)break;
+
       b.concat((char*)z,r);
     }
 
@@ -551,6 +689,10 @@ String body(WiFiClientSecure &c){
 
   return b;
 }
+
+/* =========================================================
+   STT
+   ========================================================= */
 
 String stt(){
   if(!wifiOK())return "";
@@ -562,7 +704,8 @@ String stt(){
 
   String a=
     "--"+String(bd)+
-    "\r\nContent-Disposition: form-data; name=\"file\"; filename=\"stt.wav\""
+    "\r\nContent-Disposition: form-data; "
+    "name=\"file\"; filename=\"stt.wav\""
     "\r\nContent-Type: audio/wav\r\n\r\n";
 
   String e="\r\n--"+String(bd)+"--\r\n";
@@ -575,6 +718,7 @@ String stt(){
   int p=host.indexOf("://");
 
   if(p>=0)host=host.substring(p+3);
+
   p=host.indexOf('/');
 
   if(p>=0)host=host.substring(0,p);
@@ -614,8 +758,11 @@ String stt(){
 
   uint32_t t=millis();
 
-  while(!c.available()&&c.connected()&&millis()-t<20000)
-    delay(5);
+  while(
+    !c.available()&&
+    c.connected()&&
+    millis()-t<20000
+  )delay(5);
 
   if(!c.available()){
     c.stop();
@@ -631,14 +778,21 @@ String stt(){
   if(!r.length()||status.indexOf(" 200 ")<0)return "";
 
   JsonDocument j;
+
   if(deserializeJson(j,r))return "";
 
   String q=j["text"].as<String>();
-  if(!q.length())q=j["transcript"].as<String>();
+
+  if(!q.length())
+    q=j["transcript"].as<String>();
 
   q.trim();
   return q;
 }
+
+/* =========================================================
+   ASK
+   ========================================================= */
 
 String ask(const String &q){
   if(!wifiOK())return "";
@@ -671,10 +825,15 @@ String ask(const String &q){
   h.end();
 
   JsonDocument x;
+
   if(deserializeJson(x,r))return "";
 
   return x["response"].as<String>();
 }
+
+/* =========================================================
+   OFFLINE
+   ========================================================= */
 
 String offlineAnswer(String q){
   q.toLowerCase();
@@ -709,7 +868,8 @@ String offlineAnswer(String q){
 
     snprintf(
       s,sizeof(s),
-      "Pukul %02d lewat %02d menit WIB. %s, %02d %s tahun %04d.",
+      "Pukul %02d lewat %02d menit WIB. %s, "
+      "%02d %s tahun %04d.",
       t.tm_hour,t.tm_min,d[t.tm_wday],
       t.tm_mday,m[t.tm_mon],t.tm_year+1900
     );
@@ -722,9 +882,11 @@ String offlineAnswer(String q){
     q.indexOf("ceritakan pengalaman")>=0||
     q.indexOf("pengalaman kamu")>=0
   )
-    return "Selama menjadi robot Interstellar, saya telah melewati banyak hal. "
-           "Saya belajar tentang perjalanan antarbintang, menghadapi bahaya, "
-           "dan menemani manusia dalam misi yang jauh dari Bumi.";
+    return
+      "Selama menjadi robot Interstellar, saya telah "
+      "melewati banyak hal. Saya belajar tentang "
+      "perjalanan antarbintang, menghadapi bahaya, "
+      "dan menemani manusia dalam misi yang jauh dari Bumi.";
 
   return "";
 }
@@ -750,6 +912,10 @@ const char *offlineFile(const String &q){
   return nullptr;
 }
 
+/* =========================================================
+   MP3 / AUDIO
+   ========================================================= */
+
 bool playMP3();
 
 bool playOffline(const char *src,const String &text){
@@ -759,6 +925,7 @@ bool playOffline(const char *src,const String &text){
   if(!a)return false;
 
   LittleFS.remove(PLAY_FILE);
+
   File b=LittleFS.open(PLAY_FILE,FILE_WRITE);
 
   if(!b){
@@ -829,17 +996,23 @@ bool downloadMP3(const String &url,const String &text){
   size_t total=0;
   uint32_t t=millis();
 
-  while(h.connected()&&(len>0||len==-1)){
+  while(
+    h.connected()&&
+    (len>0||len==-1)
+  ){
     size_t n=s->available();
 
     if(n){
       n=min(n,sizeof(z));
+
       int r=s->readBytes(z,n);
 
       if(r>0){
         f.write(z,r);
         total+=r;
+
         if(len>0)len-=r;
+
         t=millis();
       }
 
@@ -856,6 +1029,10 @@ bool downloadMP3(const String &url,const String &text){
 
   return total>0;
 }
+
+/* =========================================================
+   DAC OUTPUT
+   ========================================================= */
 
 class DACOut:public AudioStream{
   AudioInfo info;
@@ -931,12 +1108,11 @@ public:
       );
   }
 
-  bool empty(){
-    return h==t;
-  }
+  bool empty(){return h==t;}
 
   void stop(){
     active=false;
+
     uint32_t z=millis();
 
     while(task&&millis()-z<2000)
@@ -946,7 +1122,8 @@ public:
   }
 
   size_t write(const uint8_t *d,size_t n)override{
-    if(!d||!active||info.bits_per_sample!=16)return 0;
+    if(!d||!active||info.bits_per_sample!=16)
+      return 0;
 
     size_t ch=info.channels;
     size_t bpf=ch*2;
@@ -968,10 +1145,15 @@ public:
         int16_t s;
 
         if(ch==1){
-          s=d[k*2]|((uint16_t)d[k*2+1]<<8);
+          s=d[k*2]|
+            ((uint16_t)d[k*2+1]<<8);
         }else{
-          int16_t l=d[k*4]|((uint16_t)d[k*4+1]<<8);
-          int16_t r=d[k*4+2]|((uint16_t)d[k*4+3]<<8);
+          int16_t l=d[k*4]|
+            ((uint16_t)d[k*4+1]<<8);
+
+          int16_t r=d[k*4+2]|
+            ((uint16_t)d[k*4+3]<<8);
+
           s=(l+r)/2;
         }
 
@@ -989,6 +1171,10 @@ public:
 
 MP3DecoderHelix decoder;
 EncodedAudioStream mp3(&dacOut,&decoder);
+
+/* =========================================================
+   PLAY MP3
+   ========================================================= */
 
 bool playMP3(){
   File f=LittleFS.open(PLAY_FILE);
@@ -1018,8 +1204,12 @@ bool playMP3(){
   StreamCopy cp(mp3,f,BUF);
   uint32_t st=millis();
 
-  while(f.available()&&millis()-st<120000){
+  while(
+    f.available()&&
+    millis()-st<120000
+  ){
     if(!cp.copy())delay(1);
+
     oledType();
     yield();
   }
@@ -1034,18 +1224,24 @@ bool playMP3(){
 
   dacOut.stop();
   playing=false;
+
   LittleFS.remove(PLAY_FILE);
 
   oledBase("STANDBY","LISTENING...");
   return true;
 }
 
+/* =========================================================
+   QUESTION PROCESSING
+   ========================================================= */
+
 bool singRequest(String q){
   q.toLowerCase();
 
-  return q.indexOf("nyanyi")>=0||
-         q.indexOf("bernyanyi")>=0||
-         q.indexOf("nyanyikan")>=0;
+  return
+    q.indexOf("nyanyi")>=0||
+    q.indexOf("bernyanyi")>=0||
+    q.indexOf("nyanyikan")>=0;
 }
 
 void processQuestion(const String &q){
@@ -1073,7 +1269,9 @@ void processQuestion(const String &q){
   oledText=answer;
   oledPos=oledPage=0;
 
-  String url=String(TARS_CLOUD_URL)+(singMode?"/sing":"/tts");
+  String url=
+    String(TARS_CLOUD_URL)+
+    (singMode?"/sing":"/tts");
 
   if(downloadMP3(url,singMode?q:answer))
     playMP3();
@@ -1083,16 +1281,25 @@ void processQuestion(const String &q){
   singMode=false;
 }
 
+/* =========================================================
+   SETUP
+   ========================================================= */
+
 void setup(){
   Serial.begin(SERIAL_BAUD);
 
   Wire.begin(OLED_SDA,OLED_SCL);
   Wire.setClock(400000);
 
-  oledOK=oled.begin(SSD1306_SWITCHCAPVCC,OLED_ADDR);
+  oledOK=oled.begin(
+    SSD1306_SWITCHCAPVCC,
+    OLED_ADDR
+  );
+
   if(oledOK)oledBase("BOOT");
 
   LittleFS.begin(true);
+
   dacOK=initDAC();
   micOK=initMic();
 
@@ -1106,6 +1313,10 @@ void setup(){
   wifiManagerBegin();
   ensureWiFi();
 
+  /*
+     NTP hanya dilakukan saat boot.
+     Setelah berhasil tidak diulang ketika WiFi reconnect.
+  */
   while(!syncTime()){
     oledBase("BOOT","NTP RETRY...");
     delay(2000);
@@ -1121,6 +1332,10 @@ void setup(){
 
   oledBase("STANDBY","LISTENING...");
 }
+
+/* =========================================================
+   LOOP
+   ========================================================= */
 
 void loop(){
   if(playing)return;
@@ -1141,39 +1356,55 @@ void loop(){
     InputType type=classifyInput();
 
     switch(type){
+
       case INPUT_WAKE_TARS:{
-        Serial.println("TARS: TARS DETECTED -> STT ONLINE");
+        Serial.println(
+          "TARS: TARS DETECTED -> STT ONLINE"
+        );
 
         String q=stt();
         LittleFS.remove(STT_FILE);
 
         if(q.length()){
-          Serial.printf("TARS: STT = %s\r\n",q.c_str());
+          Serial.printf(
+            "TARS: STT = %s\r\n",
+            q.c_str()
+          );
+
           processQuestion(q);
+
         }else{
           oledBase("STANDBY","NO INPUT");
         }
+
         break;
       }
 
       case INPUT_OFFLINE_JOKOWI:
-        Serial.println("TARS: OFFLINE COMMAND -> HIDUP JOKOWI");
+        Serial.println(
+          "TARS: OFFLINE COMMAND -> HIDUP JOKOWI"
+        );
         LittleFS.remove(STT_FILE);
         processQuestion("hidup Jokowi");
         break;
 
       case INPUT_OFFLINE_EXP:
-        Serial.println("TARS: OFFLINE COMMAND -> EXPERIENCE");
+        Serial.println(
+          "TARS: OFFLINE COMMAND -> EXPERIENCE"
+        );
         LittleFS.remove(STT_FILE);
         processQuestion("ceritakan pengalamanmu");
         break;
 
       default:
-        Serial.println("TARS: BLOCKED -> NO STT");
+        Serial.println(
+          "TARS: BLOCKED -> NO STT"
+        );
         LittleFS.remove(STT_FILE);
         oledBase("STANDBY","LISTENING...");
         break;
     }
+
   }else{
     oledListen();
   }
