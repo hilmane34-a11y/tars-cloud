@@ -178,7 +178,7 @@ bool recordSTT(){
  }
 
  Serial.printf("TARS: RECORDED %u samples\r\n",(unsigned)samples);
- Serial.printf("TARS: WAV SIZE %u bytes\r\n",(unsigned)(samples*2+44);
+ Serial.printf("TARS: WAV SIZE %u bytes\r\n",(unsigned)(samples*2+44));
  return true;
 }
 
