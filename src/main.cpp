@@ -29,10 +29,10 @@
 #define PREROLL_MS 500
 #define REC_MAX 5000
 #define REC_MIN 900
-#define SILENCE 1400
-#define LISTEN_MAX 15000
-#define MIC_TH 12000
-#define MIC_SIL 9000
+#define SILENCE 900
+#define LISTEN_MAX 8000
+#define MIC_TH 8000
+#define MIC_SIL 6000
 
 Adafruit_SSD1306 oled(OLED_WIDTH,OLED_HEIGHT,&Wire,-1);
 bool oledOK=false,micOK=false,dacOK=false,playing=false,singMode=false,ntpOK=false;
