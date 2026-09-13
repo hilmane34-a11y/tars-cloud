@@ -107,17 +107,14 @@ void wavHeader(File&f,uint32_t n){
   memcpy(h,"RIFF",4);put32(h+4,n+36);memcpy(h+8,"WAVEfmt ",8);
   put32(h+16,16);put16(h+20,1);put16(h+22,1);put32(h+24,MIC_RATE);
   put32(h+28,MIC_RATE*2);put16(h+32,2);put16(h+34,16);
-  memcpy(h+36,"data",4);put32(h+40,n);
-  f.seek(0);f.write(h,44);
+  memcpy(h+36,"data",4);put32(h+40,n);f.seek(0);f.write(h,44);
 }
 
 uint16_t envelope(uint8_t*e,uint16_t max){
   File f=LittleFS.open(STT_FILE);
   if(!f||f.size()<=44){if(f)f.close();return 0;}
   f.seek(44);
-  int16_t p[BUF/2];
-  uint16_t bins=0,n=0;
-  uint32_t sum=0;
+  int16_t p[BUF/2];uint16_t bins=0,n=0;uint32_t sum=0;
   while(f.available()&&bins<max){
     size_t z=f.read((uint8_t*)p,sizeof(p));if(!z)break;
     for(size_t i=0;i<z/2;i++){
@@ -215,8 +212,7 @@ bool syncTime(){
       if(n>=1704067200){
         struct tm t;localtime_r(&n,&t);
         Serial.printf("TARS: WIB %04d-%02d-%02d %02d:%02d:%02d\r\n",
-          t.tm_year+1900,t.tm_mon+1,t.tm_mday,
-          t.tm_hour,t.tm_min,t.tm_sec);
+          t.tm_year+1900,t.tm_mon+1,t.tm_mday,t.tm_hour,t.tm_min,t.tm_sec);
         ntpOK=true;return true;
       }
       delay(500);
@@ -225,8 +221,27 @@ bool syncTime(){
   ntpOK=false;return false;
 }
 
+/* ============================================================
+   WIFI
+   Mengikuti wifi_manager.cpp:
+   begin -> connect -> NTP.
+   WiFi tidak pernah sengaja dimatikan.
+   ============================================================ */
+
 bool wifiOK(){
-  return WiFi.status()==WL_CONNECTED||wifiManagerConnect(false);
+  if(WiFi.status()==WL_CONNECTED)return true;
+  return wifiManagerConnect(false);
+}
+
+bool ensureWiFi(){
+  while(WiFi.status()!=WL_CONNECTED){
+    oledBase("BOOT","WAITING WIFI...");
+    if(!wifiManagerConnect(false)){
+      oledBase("BOOT","WIFI RETRY...");
+      delay(1000);
+    }
+  }
+  return true;
 }
 
 String body(WiFiClientSecure&c){
@@ -389,8 +404,6 @@ bool downloadMP3(const String&url,const String&text){
 
   WiFiClientSecure c;c.setInsecure();HTTPClient h;
   if(!h.begin(c,url))return false;
-
-  // HTTPClient timeout memakai uint16_t, jadi jangan gunakan 90000.
   h.setTimeout(60000);
   h.addHeader("Content-Type","application/json");
 
@@ -443,9 +456,8 @@ class DACOut:public AudioStream{
     size_t x=h,y=t;
     return x>=y?x-y:DAC_BUF-y+x;
   }
-  size_t free(){
-    return DAC_BUF-1-cnt();
-  }
+  size_t free(){return DAC_BUF-1-cnt();}
+
   void run(){
     uint32_t us=1000000UL/(rate?rate:PLAY_RATE),next=micros();
     while(active){
@@ -459,6 +471,7 @@ class DACOut:public AudioStream{
     }
     dacMute();active=false;task=nullptr;vTaskDelete(nullptr);
   }
+
   static void fn(void*x){((DACOut*)x)->run();}
 
 public:
@@ -466,12 +479,14 @@ public:
     info=i;AudioStream::setAudioInfo(i);
     rate=i.sample_rate?i.sample_rate:PLAY_RATE;
   }
+
   int availableForWrite()override{return free()*2;}
 
   void start(){
     h=t=0;dacMute();active=true;
     if(!task)xTaskCreatePinnedToCore(fn,"TARS_DAC",4096,this,2,&task,1);
   }
+
   bool empty(){return h==t;}
 
   void stop(){
@@ -498,6 +513,7 @@ public:
              (int16_t)(d[k*4+2]|((uint16_t)d[k*4+3]<<8)))/2;
         b[h]=s;h=(h+1)%DAC_BUF;
       }
+
       done+=c;taskYIELD();
     }
     return n;
@@ -591,22 +607,21 @@ void setup(){
   Serial.println("TARS: LOCAL WAKE WORD = TARS");
   Serial.println("TARS: OFFLINE STANDBY ENABLED");
 
+  /* WiFi Manager menangani konfigurasi/credential. */
   wifiManagerBegin();
 
-  while(WiFi.status()!=WL_CONNECTED){
-    oledBase("BOOT","WAITING WIFI...");
-    delay(1000);
-  }
+  /* Gunakan fungsi connect milik WiFi Manager. */
+  ensureWiFi();
 
+  /* NTP wajib valid sebelum standby. */
   while(!syncTime()){
     oledBase("BOOT","NTP RETRY...");
     delay(2000);
 
+    /* Jika WiFi putus, reconnect saja.
+       NTP tidak diulang setelah sebelumnya valid. */
     if(WiFi.status()!=WL_CONNECTED)
-      while(!wifiOK()){
-        oledBase("BOOT","WIFI RETRY...");
-        delay(1000);
-      }
+      ensureWiFi();
   }
 
   ntpOK=true;
@@ -640,7 +655,9 @@ void loop(){
 
     if(q.length())processQuestion(q);
     else oledBase("STANDBY","NO INPUT");
-  }else oledListen();
+  }else{
+    oledListen();
+  }
 
   delay(1);
 }
