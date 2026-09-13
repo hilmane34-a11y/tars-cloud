@@ -26,7 +26,7 @@
 #define PLAY_FILE "/tars.mp3"
 #define IO_BUF 1024
 #define DAC_BUF 1024
-#define PREROLL_MS 500
+#define PREROLL_MS 800
 #define REC_MAX 5000
 #define REC_MIN 900
 #define SILENCE 900
