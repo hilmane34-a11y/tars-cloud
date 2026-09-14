@@ -18,14 +18,14 @@
 #define MIC_SCK 18
 #define MIC_WS 19
 #define MIC_SD 34
-#define AUDIO_DAC_PIN 26 // PAM RIGHT
+#define AUDIO_DAC_PIN 26
 
 const uint32_t MIC_RATE=16000,RECORD_MAX_MS=5000,RECORD_MIN_MS=500;
 const uint32_t SILENCE_MS=900,LISTEN_MAX_MS=8000,PREROLL_MS=500;
 const int32_t MIC_THRESHOLD=14000,MIC_SILENCE=12000;
 const uint32_t OLED_TYPE_MS=4;
 const size_t BUF=2048,PREROLL_SAMPLES=MIC_RATE*PREROLL_MS/1000;
-const char* STT_FILE="/stt.wav";
+const char*STT_FILE="/stt.wav";
 
 Adafruit_SSD1306 oled(OLED_WIDTH,OLED_HEIGHT,&Wire,-1);
 AnalogAudioStream analog;
@@ -40,9 +40,7 @@ uint32_t oledTick=0,dotTick=0;
 uint8_t dotState=1;
 
 void oledHeader(const char*t){
-  oled.clearDisplay();
-  oled.setTextColor(SSD1306_WHITE);
-  oled.setTextSize(1);
+  oled.clearDisplay();oled.setTextColor(SSD1306_WHITE);oled.setTextSize(1);
   oled.setCursor(42,0);oled.print("T A R S");
   oled.drawLine(0,9,127,9,SSD1306_WHITE);
   oled.setCursor(3,14);oled.print(t);
@@ -57,21 +55,17 @@ void oledBase(const char*t,const String&s=""){
 
 void oledListening(){
   if(!oledOK||millis()-dotTick<300)return;
-  dotTick=millis();
-  dotState=dotState>=4?1:dotState+1;
-  String s;
-  for(uint8_t i=0;i<dotState;i++)s+='.';
+  dotTick=millis();dotState=dotState>=4?1:dotState+1;
+  String s;for(uint8_t i=0;i<dotState;i++)s+='.';
   oledBase("LISTENING",s);
 }
 
 void oledType(){
   if(!oledOK||!oledText.length()||millis()-oledTick<OLED_TYPE_MS||
      oledPos>=oledText.length())return;
-
   oledTick=millis();
   const char*title=singMode?"SINGING":"SPEAKING";
   oledHeader(title);
-
   int x=3,y=27;
   for(size_t i=0;i<=oledPos;i++){
     char ch=oledText[i];
@@ -80,8 +74,7 @@ void oledType(){
       if(y>59){oledHeader(title);x=3;y=27;}
       if(ch=='\n')continue;
     }
-    oled.setCursor(x,y);oled.write(ch);
-    x=oled.getCursorX();
+    oled.setCursor(x,y);oled.write(ch);x=oled.getCursorX();
   }
   oledPos++;oled.display();
 }
@@ -90,7 +83,7 @@ bool initDAC(){
   auto cfg=analog.defaultConfig(TX_MODE);
   cfg.channels=2;
   if(!analog.begin(cfg))return false;
-  Serial.printf("TARS: PAM RIGHT GPIO%d READY\n",AUDIO_DAC_PIN);
+  Serial.println("TARS: PAM RIGHT GPIO26 READY");
   return true;
 }
 
@@ -101,12 +94,25 @@ bool initMic(){
   c.bits_per_sample=I2S_BITS_PER_SAMPLE_32BIT;
   c.channel_format=I2S_CHANNEL_FMT_ONLY_RIGHT;
   c.communication_format=I2S_COMM_FORMAT_STAND_I2S;
-  c.dma_buf_count=2;c.dma_buf_len=256;
+  c.intr_alloc_flags=ESP_INTR_FLAG_LEVEL1;
+  c.dma_buf_count=2;
+  c.dma_buf_len=256;
+  c.use_apll=false;
+  c.tx_desc_auto_clear=false;
+  c.fixed_mclk=0;
 
   if(i2s_driver_install(MIC_PORT,&c,0,nullptr)!=ESP_OK)return false;
 
-  i2s_pin_config_t p={MIC_SCK,MIC_WS,I2S_PIN_NO_CHANGE,MIC_SD};
-  return i2s_set_pin(MIC_PORT,&p)==ESP_OK;
+  i2s_pin_config_t p={};
+  p.bck_io_num=MIC_SCK;
+  p.ws_io_num=MIC_WS;
+  p.data_out_num=I2S_PIN_NO_CHANGE;
+  p.data_in_num=MIC_SD;
+
+  if(i2s_set_pin(MIC_PORT,&p)!=ESP_OK)return false;
+  i2s_zero_dma_buffer(MIC_PORT);
+  Serial.println("TARS: INMP441 RIGHT READY");
+  return true;
 }
 
 void put16(uint8_t*p,uint16_t v){p[0]=v;p[1]=v>>8;}
@@ -136,8 +142,7 @@ bool recordMic(){
   int32_t raw[BUF/4];
   int16_t pcm[BUF/4];
 
-  uint32_t listenStart=millis(),voiceStart=0,lastVoice=0;
-  uint32_t samples=0;
+  uint32_t listenStart=millis(),voiceStart=0,lastVoice=0,samples=0;
   bool voice=false;
 
   oledBase("LISTENING",".");
@@ -233,7 +238,6 @@ bool syncTime(){
   }
 
   Serial.println("TARS: NTP FAILED 4/4");
-  ntpOK=false;
   return false;
 }
 
@@ -241,6 +245,30 @@ bool wifiOK(){
   if(WiFi.status()==WL_CONNECTED)return true;
   if(!wifiManagerConnect(false))return false;
   return WiFi.status()==WL_CONNECTED;
+}
+
+bool bootWiFi(){
+  Serial.println("TARS: WIFI CONNECTING...");
+
+  uint32_t start=millis();
+
+  while(WiFi.status()!=WL_CONNECTED&&millis()-start<30000){
+    wifiManagerConnect(false);
+    delay(200);
+    Serial.print(".");
+    yield();
+  }
+
+  Serial.println();
+
+  if(WiFi.status()!=WL_CONNECTED){
+    Serial.println("TARS: WIFI BOOT FAILED");
+    return false;
+  }
+
+  Serial.print("TARS: WIFI CONNECTED IP=");
+  Serial.println(WiFi.localIP());
+  return true;
 }
 
 String readHTTPBody(WiFiClientSecure&c){
@@ -254,7 +282,8 @@ String readHTTPBody(WiFiClientSecure&c){
 
     String x=line;x.toLowerCase();
     if(x.startsWith("content-length:"))len=x.substring(15).toInt();
-    if(x.indexOf("transfer-encoding:")>=0&&x.indexOf("chunked")>=0)chunked=true;
+    if(x.indexOf("transfer-encoding:")>=0&&
+       x.indexOf("chunked")>=0)chunked=true;
   }
 
   if(chunked){
@@ -270,7 +299,8 @@ String readHTTPBody(WiFiClientSecure&c){
         size_t w=min((int)sizeof(b),n);
         size_t r=c.readBytes(b,w);
         if(!r)break;
-        body.concat((char*)b,r);n-=r;
+        body.concat((char*)b,r);
+        n-=r;
       }
       c.readStringUntil('\n');
     }
@@ -355,7 +385,8 @@ String stt(){
   s.trim();
 
   if(s.length()){
-    Serial.print("TARS: YOU SAID = ");Serial.println(s);
+    Serial.print("TARS: YOU SAID = ");
+    Serial.println(s);
   }
   return s;
 }
@@ -379,6 +410,7 @@ String ask(const String&q){
 
   uint32_t t=millis();
   int code=h.POST(b);
+
   Serial.printf("TARS: ASK HTTP=%d TIME=%lu ms\n",
                 code,(unsigned long)(millis()-t));
 
@@ -428,7 +460,6 @@ bool streamAudio(const String&url,const String&text){
   if(!dacOK)dacOK=initDAC();
   if(!dacOK){h.end();return false;}
 
-  // Mulai decoder setiap sesi agar playback berikutnya tetap normal.
   dec.begin();
   copier.begin(dec,*stream);
 
@@ -489,7 +520,6 @@ void processQuestion(const String&q){
 
 void setup(){
   Serial.begin(SERIAL_BAUD);
-
   Wire.begin(OLED_SDA,OLED_SCL);
   Wire.setClock(400000);
 
@@ -504,20 +534,18 @@ void setup(){
   Serial.printf("TARS: DAC=%s MIC=%s\n",
                 dacOK?"READY":"ERROR",
                 micOK?"READY":"ERROR");
-  Serial.println("TARS: PAM RIGHT = GPIO26");
-  Serial.println("TARS: INMP441 RIGHT = GPIO34");
+  Serial.println("TARS: PAM RIGHT GPIO26");
+  Serial.println("TARS: INMP441 RIGHT GPIO34");
   Serial.println("TARS: BLUETOOTH DISABLED");
   Serial.println("TARS: MP3 STREAMING ENABLED");
 
   wifiManagerBegin();
 
-  // NTP HANYA DI BOOT.
-  // Maksimal 4 percobaan dan berhenti langsung ketika valid.
-  if(WiFi.status()==WL_CONNECTED){
-    Serial.println("TARS: WIFI CONNECTED");
+  // WAJIB: tunggu WiFi benar-benar CONNECTED dahulu.
+  if(bootWiFi()){
+    // NTP HANYA SEKALI SAAT BOOT.
+    // Maksimal 4 percobaan.
     syncTime();
-  }else{
-    Serial.println("TARS: WIFI NOT CONNECTED");
   }
 
   oledBase("READY","WAITING...");
@@ -526,7 +554,7 @@ void setup(){
 void loop(){
   if(playing){delay(1);return;}
 
-  // Reconnect WiFi bila putus, TANPA NTP ULANG.
+  // Reconnect WiFi tanpa NTP ulang.
   if(WiFi.status()!=WL_CONNECTED){
     if(!wifiOK()){
       oledBase("READY","WIFI ERROR");
