@@ -23,7 +23,7 @@
 const uint32_t MIC_RATE=16000,RECORD_MAX_MS=5000,RECORD_MIN_MS=500;
 const uint32_t SILENCE_MS=900,LISTEN_MAX_MS=8000,PREROLL_MS=500;
 const int32_t MIC_THRESHOLD=14000,MIC_SILENCE=12000;
-const uint32_t OLED_TYPE_MS=4;
+const uint32_t OLED_TYPE_MS=1,OLED_WAVE_MS=70;
 const size_t BUF=2048,PREROLL_SAMPLES=MIC_RATE*PREROLL_MS/1000;
 const char*STT_FILE="/stt.wav";
 
@@ -34,10 +34,11 @@ EncodedAudioStream dec(&analog,&codec);
 StreamCopy copier;
 
 bool oledOK=false,micOK=false,dacOK=false,playing=false,ntpOK=false,singMode=false;
+bool oledSpeaking=false;
 String oledText;
 size_t oledPos=0;
-uint32_t oledTick=0,dotTick=0;
-uint8_t dotState=1;
+uint32_t oledTick=0,dotTick=0,waveTick=0;
+uint8_t dotState=1,wavePhase=0;
 
 void oledHeader(const char*t){
   oled.clearDisplay();oled.setTextColor(SSD1306_WHITE);oled.setTextSize(1);
@@ -54,29 +55,74 @@ void oledBase(const char*t,const String&s=""){
 }
 
 void oledListening(){
-  if(!oledOK||millis()-dotTick<300)return;
+  if(!oledOK||oledSpeaking||millis()-dotTick<300)return;
   dotTick=millis();dotState=dotState>=4?1:dotState+1;
   String s;for(uint8_t i=0;i<dotState;i++)s+='.';
   oledBase("LISTENING",s);
 }
 
-void oledType(){
-  if(!oledOK||!oledText.length()||millis()-oledTick<OLED_TYPE_MS||
-     oledPos>=oledText.length())return;
-  oledTick=millis();
-  const char*title=singMode?"SINGING":"SPEAKING";
-  oledHeader(title);
-  int x=3,y=27;
-  for(size_t i=0;i<=oledPos;i++){
-    char ch=oledText[i];
-    if(ch=='\n'||x>121){
-      x=3;y+=8;
-      if(y>59){oledHeader(title);x=3;y=27;}
-      if(ch=='\n')continue;
-    }
-    oled.setCursor(x,y);oled.write(ch);x=oled.getCursorX();
+void oledWave(){
+  if(!oledOK||!oledSpeaking||millis()-waveTick<OLED_WAVE_MS)return;
+  waveTick=millis();wavePhase++;
+
+  const int base=57,step=6;
+  oled.fillRect(0,39,128,25,SSD1306_BLACK);
+
+  for(int x=3,i=0;x<125;x+=step,i++){
+    int h=3+((i*7+wavePhase*3)%12);
+    oled.drawLine(x,base-h,x,base+h,SSD1306_WHITE);
   }
-  oledPos++;oled.display();
+}
+
+void oledSpeak(){
+  if(!oledOK||!oledSpeaking)return;
+
+  uint32_t now=millis();
+  if(now-oledTick<OLED_TYPE_MS)return;
+  oledTick=now;
+
+  const char*title=singMode?"SINGING":"SPEAKING";
+
+  if(oledPos<oledText.length()){
+    oledHeader(title);
+    int x=3,y=27;
+
+    for(size_t i=0;i<oledPos;i++){
+      char ch=oledText[i];
+      if(ch=='\n'||x>121){
+        x=3;y+=8;
+        if(y>35)break;
+        if(ch=='\n')continue;
+      }
+      oled.setCursor(x,y);
+      oled.write(ch);
+      x=oled.getCursorX();
+    }
+
+    oledPos++;
+  }
+
+  oledWave();
+  oled.display();
+}
+
+void oledStartSpeak(const String&t){
+  if(!oledOK)return;
+  oledSpeaking=true;
+  oledText=t;
+  oledPos=0;
+  oledTick=0;
+  waveTick=0;
+  wavePhase=0;
+  oledHeader(singMode?"SINGING":"SPEAKING");
+  oled.display();
+}
+
+void oledStopSpeak(){
+  oledSpeaking=false;
+  oledText="";
+  oledPos=0;
+  oledBase("LISTENING",".");
 }
 
 bool initDAC(){
@@ -442,24 +488,37 @@ bool streamAudio(const String&url,const String&text){
 
   dec.begin();
   copier.begin(dec,*stream);
-
   playing=true;
-  oledText=text;oledPos=0;oledTick=millis();
-  oledBase(singing?"SINGING":"SPEAKING");
 
+  bool audioStarted=false;
   uint32_t start=millis(),lastData=start;
 
   while(h.connected()&&millis()-start<120000){
-    if(copier.copy())lastData=millis();
+    bool copied=copier.copy();
+
+    if(copied){
+      lastData=millis();
+
+      // OLED baru aktif ketika audio TARS benar-benar mulai mengalir.
+      if(!audioStarted){
+        audioStarted=true;
+        oledStartSpeak(text);
+      }
+    }
+
+    // OLED hanya visual; tidak mengontrol timing audio.
+    if(audioStarted)oledSpeak();
+
     if(millis()-lastData>10000)break;
-    oledType();
     yield();
   }
 
-  // CLEANUP TETAP ADA — hanya transisi dipercepat.
   dec.end();
   h.end();
   playing=false;
+
+  // Bersihkan tampilan tanpa menunggu teks selesai.
+  oledStopSpeak();
 
   return true;
 }
@@ -481,7 +540,6 @@ void processQuestion(const String&q){
   }
 
   singMode=singRequest(q);
-  oledText=answer;oledPos=0;
 
   String url=String(TARS_CLOUD_URL)+(singMode?"/sing":"/tts");
   String payload=singMode?q:answer;
