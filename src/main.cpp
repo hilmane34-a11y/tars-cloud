@@ -1297,4 +1297,95 @@ void setup(){
   wifiManagerBegin();
   ensureWiFi();
 
-  while(!
+  while(!syncTime()){
+
+    oledBase(
+      "BOOT",
+      "NTP RETRY..."
+    );
+
+    delay(2000);
+    ensureWiFi();
+  }
+
+  ntpOK=true;
+
+  Serial.println(
+    "TARS: NTP READY WIB"
+  );
+
+  Serial.println(
+    "TARS: STT READY"
+  );
+
+  oledBase(
+    "STANDBY",
+    "LISTENING..."
+  );
+}
+
+/* LOOP */
+void loop(){
+
+  if(playing)return;
+
+  if(WiFi.status()!=WL_CONNECTED)
+    ensureWiFi();
+
+  if(!recordSTT()){
+    oledListen();
+    return;
+  }
+
+  Serial.println(
+    "TARS: SENDING AUDIO TO STT..."
+  );
+
+  oledBase(
+    "STT",
+    "PROCESSING..."
+  );
+
+  uint32_t st=millis();
+
+  String q=stt();
+
+  Serial.printf(
+    "TARS: STT DONE %lums\r\n",
+    (unsigned long)(millis()-st)
+  );
+
+  LittleFS.remove(STT_FILE);
+
+  if(!q.length()){
+
+    Serial.println(
+      "STT: [NO TEXT]"
+    );
+
+    oledBase(
+      "STANDBY",
+      "NO TEXT"
+    );
+
+    delay(300);
+    return;
+  }
+
+  Serial.println(
+    "================================"
+  );
+
+  Serial.printf(
+    "STT: %s\r\n",
+    q.c_str()
+  );
+
+  Serial.println(
+    "================================"
+  );
+
+  answer(q);
+
+  delay(1);
+}
