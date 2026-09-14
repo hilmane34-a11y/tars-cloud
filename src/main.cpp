@@ -95,19 +95,14 @@ bool initMic(){
   c.channel_format=I2S_CHANNEL_FMT_ONLY_RIGHT;
   c.communication_format=I2S_COMM_FORMAT_STAND_I2S;
   c.intr_alloc_flags=ESP_INTR_FLAG_LEVEL1;
-  c.dma_buf_count=2;
-  c.dma_buf_len=256;
-  c.use_apll=false;
-  c.tx_desc_auto_clear=false;
-  c.fixed_mclk=0;
+  c.dma_buf_count=2;c.dma_buf_len=256;
+  c.use_apll=false;c.tx_desc_auto_clear=false;c.fixed_mclk=0;
 
   if(i2s_driver_install(MIC_PORT,&c,0,nullptr)!=ESP_OK)return false;
 
   i2s_pin_config_t p={};
-  p.bck_io_num=MIC_SCK;
-  p.ws_io_num=MIC_WS;
-  p.data_out_num=I2S_PIN_NO_CHANGE;
-  p.data_in_num=MIC_SD;
+  p.bck_io_num=MIC_SCK;p.ws_io_num=MIC_WS;
+  p.data_out_num=I2S_PIN_NO_CHANGE;p.data_in_num=MIC_SD;
 
   if(i2s_set_pin(MIC_PORT,&p)!=ESP_OK)return false;
   i2s_zero_dma_buffer(MIC_PORT);
@@ -134,7 +129,6 @@ bool recordMic(){
 
   File f=LittleFS.open(STT_FILE,FILE_WRITE);
   if(!f)return false;
-
   uint8_t z[44]={};f.write(z,44);
 
   static int16_t pre[PREROLL_SAMPLES];
@@ -149,7 +143,6 @@ bool recordMic(){
 
   while((!voice&&millis()-listenStart<LISTEN_MAX_MS)||
         (voice&&millis()-voiceStart<RECORD_MAX_MS)){
-
     oledListening();
 
     size_t n=0;
@@ -191,7 +184,6 @@ bool recordMic(){
       samples+=count;
 
       if(peak>=MIC_SILENCE)lastVoice=millis();
-
       if(millis()-voiceStart>=RECORD_MIN_MS&&
          millis()-lastVoice>=SILENCE_MS)break;
     }
@@ -215,7 +207,6 @@ bool recordMic(){
 
 bool syncTime(){
   if(ntpOK)return true;
-
   configTime(7*3600,0,"pool.ntp.org","time.nist.gov","time.google.com");
 
   for(int a=1;a<=4;a++){
@@ -223,10 +214,8 @@ bool syncTime(){
 
     for(int i=0;i<20;i++){
       time_t now=time(nullptr);
-
       if(now>=1704067200){
-        struct tm t;
-        localtime_r(&now,&t);
+        struct tm t;localtime_r(&now,&t);
         Serial.printf("TARS: NTP VALID %04d-%02d-%02d %02d:%02d:%02d\n",
           t.tm_year+1900,t.tm_mon+1,t.tm_mday,
           t.tm_hour,t.tm_min,t.tm_sec);
@@ -249,14 +238,11 @@ bool wifiOK(){
 
 bool bootWiFi(){
   Serial.println("TARS: WIFI CONNECTING...");
-
   uint32_t start=millis();
 
   while(WiFi.status()!=WL_CONNECTED&&millis()-start<30000){
     wifiManagerConnect(false);
-    delay(200);
-    Serial.print(".");
-    yield();
+    delay(200);Serial.print(".");yield();
   }
 
   Serial.println();
@@ -282,8 +268,8 @@ String readHTTPBody(WiFiClientSecure&c){
 
     String x=line;x.toLowerCase();
     if(x.startsWith("content-length:"))len=x.substring(15).toInt();
-    if(x.indexOf("transfer-encoding:")>=0&&
-       x.indexOf("chunked")>=0)chunked=true;
+    if(x.indexOf("transfer-encoding:")>=0&&x.indexOf("chunked")>=0)
+      chunked=true;
   }
 
   if(chunked){
@@ -299,8 +285,7 @@ String readHTTPBody(WiFiClientSecure&c){
         size_t w=min((int)sizeof(b),n);
         size_t r=c.readBytes(b,w);
         if(!r)break;
-        body.concat((char*)b,r);
-        n-=r;
+        body.concat((char*)b,r);n-=r;
       }
       c.readStringUntil('\n');
     }
@@ -403,9 +388,7 @@ String ask(const String&q){
   h.setTimeout(12000);
   h.addHeader("Content-Type","application/json");
 
-  JsonDocument j;
-  j["question"]=q;
-
+  JsonDocument j;j["question"]=q;
   String b;serializeJson(j,b);
 
   uint32_t t=millis();
@@ -430,13 +413,10 @@ bool streamAudio(const String&url,const String&text){
   if(!wifiOK())return false;
 
   bool singing=url.endsWith("/sing");
-
-  WiFiClientSecure c;
-  c.setInsecure();
-
+  WiFiClientSecure c;c.setInsecure();
   HTTPClient h;
-  if(!h.begin(c,url))return false;
 
+  if(!h.begin(c,url))return false;
   h.setTimeout(60000);
   h.addHeader("Content-Type","application/json");
 
@@ -476,11 +456,11 @@ bool streamAudio(const String&url,const String&text){
     yield();
   }
 
+  // CLEANUP TETAP ADA — hanya transisi dipercepat.
   dec.end();
   h.end();
   playing=false;
 
-  oledBase("READY","WAITING...");
   return true;
 }
 
@@ -532,8 +512,7 @@ void setup(){
   micOK=initMic();
 
   Serial.printf("TARS: DAC=%s MIC=%s\n",
-                dacOK?"READY":"ERROR",
-                micOK?"READY":"ERROR");
+                dacOK?"READY":"ERROR",micOK?"READY":"ERROR");
   Serial.println("TARS: PAM RIGHT GPIO26");
   Serial.println("TARS: INMP441 RIGHT GPIO34");
   Serial.println("TARS: BLUETOOTH DISABLED");
@@ -541,12 +520,7 @@ void setup(){
 
   wifiManagerBegin();
 
-  // WAJIB: tunggu WiFi benar-benar CONNECTED dahulu.
-  if(bootWiFi()){
-    // NTP HANYA SEKALI SAAT BOOT.
-    // Maksimal 4 percobaan.
-    syncTime();
-  }
+  if(bootWiFi())syncTime();
 
   oledBase("READY","WAITING...");
 }
@@ -554,7 +528,6 @@ void setup(){
 void loop(){
   if(playing){delay(1);return;}
 
-  // Reconnect WiFi tanpa NTP ulang.
   if(WiFi.status()!=WL_CONNECTED){
     if(!wifiOK()){
       oledBase("READY","WIFI ERROR");
@@ -569,9 +542,7 @@ void loop(){
 
     if(q.length())processQuestion(q);
     else oledBase("READY","NO INPUT");
-  }else{
-    oledListening();
-  }
+  }else oledListening();
 
   delay(1);
 }
