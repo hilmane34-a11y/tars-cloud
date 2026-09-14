@@ -17,207 +17,286 @@ static const uint32_t WIFI_TIMEOUT_MS=15000;
 static String savedSSID,savedPassword;
 static bool portalRunning=false,wifiReady=false,routesRegistered=false;
 
+/* ================= HTML ================= */
+
 static String htmlPage(){
-return "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'><title>TARS WiFi</title><style>body{font-family:Arial;text-align:center;padding:30px;background:#111;color:#fff}input{box-sizing:border-box;width:90%;max-width:360px;padding:12px;margin:8px 0;font-size:16px}button{padding:12px 30px;font-size:16px}</style></head><body><h1>TARS</h1><p>WiFi Setup</p><form action='/save' method='POST'><input name='ssid' placeholder='Nama WiFi' required><input name='password' type='password' placeholder='Password WiFi'><br><button type='submit'>SIMPAN</button></form><p>Hubungkan HP ke <b>TARS-SETUP</b></p><p>Password: <b>12345678</b></p><p>Buka <b>192.168.4.1</b></p></body></html>";
+  return "<!DOCTYPE html><html><head>"
+         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+         "<title>TARS WiFi</title>"
+         "<style>"
+         "body{font-family:Arial;text-align:center;padding:30px;background:#111;color:#fff}"
+         "input{box-sizing:border-box;width:90%;max-width:360px;padding:12px;margin:8px 0;font-size:16px}"
+         "button{padding:12px 30px;font-size:16px}"
+         "</style></head><body>"
+         "<h1>TARS</h1><p>WiFi Setup</p>"
+         "<form action='/save' method='POST'>"
+         "<input name='ssid' placeholder='Nama WiFi' required>"
+         "<input name='password' type='password' placeholder='Password WiFi'>"
+         "<br><button type='submit'>SIMPAN</button></form>"
+         "<p>Hubungkan HP ke <b>TARS-SETUP</b></p>"
+         "<p>Password: <b>12345678</b></p>"
+         "<p>Buka <b>192.168.4.1</b></p>"
+         "</body></html>";
 }
 
+/* ================= PORTAL ================= */
+
 static void registerPortalRoutes(){
-if(routesRegistered)return;
+  if(routesRegistered)return;
 
-server.on("/",HTTP_GET,[](){server.send(200,"text/html",htmlPage());});
+  server.on("/",HTTP_GET,[](){
+    server.send(200,"text/html",htmlPage());
+  });
 
-server.on("/save",HTTP_POST,[](){
-String ssid=server.arg("ssid"),pass=server.arg("password");
-ssid.trim();pass.trim();
-if(!ssid.length()){server.send(400,"text/plain","SSID kosong");return;}
+  server.on("/save",HTTP_POST,[](){
 
-Serial.println("TARS: SAVING WIFI CREDENTIALS");
+    String ssid=server.arg("ssid");
+    String pass=server.arg("password");
 
-prefs.begin("wifi",false);
-prefs.putString("ssid",ssid);
-prefs.putString("pass",pass);
-prefs.putBool("pending",true);
-prefs.end();
+    ssid.trim();
+    pass.trim();
 
-savedSSID=ssid;
-savedPassword=pass;
+    if(!ssid.length()){
+      server.send(400,"text/plain","SSID kosong");
+      return;
+    }
 
-server.send(200,"text/html",
-"<!DOCTYPE html><html><body style='font-family:Arial;text-align:center;padding:30px'><h2>TARS</h2><p>WiFi tersimpan.</p><p>TARS sedang restart...</p></body></html>");
+    Serial.println("TARS: SAVING WIFI CREDENTIALS");
 
-delay(700);
-ESP.restart();
-});
+    prefs.begin("wifi",false);
+    prefs.putString("ssid",ssid);
+    prefs.putString("pass",pass);
 
-server.onNotFound([](){server.send(200,"text/html",htmlPage());});
-routesRegistered=true;
+    /*
+       setupDone menandakan TARS sudah pernah
+       mendapatkan konfigurasi WiFi yang valid.
+    */
+    prefs.putBool("setupDone",true);
+    prefs.putBool("pending",true);
+    prefs.end();
+
+    savedSSID=ssid;
+    savedPassword=pass;
+
+    server.send(
+      200,
+      "text/html",
+      "<!DOCTYPE html><html><body style='font-family:Arial;text-align:center;padding:30px'>"
+      "<h2>TARS</h2><p>WiFi tersimpan.</p>"
+      "<p>TARS sedang restart...</p></body></html>"
+    );
+
+    delay(700);
+    ESP.restart();
+  });
+
+  server.onNotFound([](){
+    server.send(200,"text/html",htmlPage());
+  });
+
+  routesRegistered=true;
 }
 
 static void startPortal(){
-if(portalRunning)return;
 
-Serial.println();
-Serial.println("========================================");
-Serial.println("       TARS WIFI SETUP MODE");
-Serial.println("========================================");
-Serial.println("TARS: Connect HP to TARS-SETUP");
-Serial.println("TARS: Password = 12345678");
-Serial.println("TARS: Open http://192.168.4.1");
-Serial.println("========================================");
+  if(portalRunning)return;
 
-WiFi.persistent(false);
-WiFi.mode(WIFI_AP_STA);
-WiFi.softAP(AP_NAME,AP_PASSWORD);
+  Serial.println();
+  Serial.println("========================================");
+  Serial.println("       TARS WIFI SETUP MODE");
+  Serial.println("========================================");
+  Serial.println("TARS: Connect HP to TARS-SETUP");
+  Serial.println("TARS: Password = 12345678");
+  Serial.println("TARS: Open http://192.168.4.1");
+  Serial.println("========================================");
 
-IPAddress ip=WiFi.softAPIP();
-Serial.print("TARS: AP IP = ");
-Serial.println(ip);
+  WiFi.persistent(false);
+  WiFi.mode(WIFI_AP_STA);
+  WiFi.softAP(AP_NAME,AP_PASSWORD);
 
-dnsServer.start(53,"*",ip);
-registerPortalRoutes();
-server.begin();
-portalRunning=true;
+  IPAddress ip=WiFi.softAPIP();
+
+  Serial.print("TARS: AP IP = ");
+  Serial.println(ip);
+
+  dnsServer.start(53,"*",ip);
+  registerPortalRoutes();
+  server.begin();
+
+  portalRunning=true;
 }
 
 static void handlePortal(){
-if(!portalRunning)return;
-dnsServer.processNextRequest();
-server.handleClient();
+  if(!portalRunning)return;
+
+  dnsServer.processNextRequest();
+  server.handleClient();
 }
 
 static void portalWaitLoop(){
-if(!portalRunning)return;
-Serial.println("TARS: WAITING FOR WIFI CONFIGURATION...");
-while(portalRunning){
-handlePortal();
-delay(2);
-yield();
+  if(!portalRunning)return;
+
+  Serial.println("TARS: WAITING FOR WIFI CONFIGURATION...");
+
+  while(portalRunning){
+    handlePortal();
+    delay(2);
+    yield();
+  }
 }
-}
+
+/* ================= BEGIN ================= */
 
 bool wifiManagerBegin(){
-WiFi.persistent(false);
 
-esp_reset_reason_t reason=esp_reset_reason();
-bool powerBoot=reason==ESP_RST_POWERON;
+  WiFi.persistent(false);
 
-prefs.begin("wifi",false);
+  esp_reset_reason_t reason=esp_reset_reason();
 
-savedSSID=prefs.getString("ssid","");
-savedPassword=prefs.getString("pass","");
-bool pending=prefs.getBool("pending",false);
+  prefs.begin("wifi",false);
 
-if(powerBoot){
-prefs.putBool("pending",false);
-prefs.end();
+  savedSSID=prefs.getString("ssid","");
+  savedPassword=prefs.getString("pass","");
+  bool setupDone=prefs.getBool("setupDone",false);
+  bool pending=prefs.getBool("pending",false);
 
-savedSSID="";
-savedPassword="";
+  prefs.end();
 
-Serial.println();
-Serial.println("TARS: POWER ON BOOT");
-Serial.println("TARS: WIFI SETUP REQUIRED");
+  /*
+     Hanya power-on pertama TANPA konfigurasi WiFi
+     yang masuk TARS-SETUP.
 
-startPortal();
-portalWaitLoop();
-return false;
+     Reboot biasa tidak menghapus credential.
+  */
+  if(!setupDone||!savedSSID.length()){
+
+    Serial.println();
+    Serial.println("TARS: WIFI SETUP REQUIRED");
+
+    startPortal();
+    portalWaitLoop();
+
+    return false;
+  }
+
+  if(reason!=ESP_RST_POWERON&&pending){
+
+    Serial.println("TARS: WIFI SETUP RESTART DETECTED");
+    Serial.print("TARS: SAVED WIFI = ");
+    Serial.println(savedSSID);
+
+  }else{
+
+    Serial.print("TARS: SAVED WIFI = ");
+    Serial.println(savedSSID);
+  }
+
+  return true;
 }
 
-prefs.end();
-
-if(pending&&savedSSID.length()){
-Serial.println("TARS: WIFI SETUP RESTART DETECTED");
-Serial.print("TARS: SAVED WIFI = ");
-Serial.println(savedSSID);
-return true;
-}
-
-if(savedSSID.length()){
-Serial.print("TARS: SAVED WIFI = ");
-Serial.println(savedSSID);
-return true;
-}
-
-Serial.println();
-Serial.println("TARS: WIFI SETUP REQUIRED");
-
-startPortal();
-portalWaitLoop();
-return false;
-}
+/* ================= CONNECT ================= */
 
 bool wifiManagerConnect(bool requireTime){
-(void)requireTime;
+  (void)requireTime;
 
-if(WiFi.status()==WL_CONNECTED){
-wifiReady=true;
-return true;
+  if(WiFi.status()==WL_CONNECTED){
+    wifiReady=true;
+    return true;
+  }
+
+  if(!savedSSID.length()){
+
+    prefs.begin("wifi",true);
+    savedSSID=prefs.getString("ssid","");
+    savedPassword=prefs.getString("pass","");
+    prefs.end();
+  }
+
+  if(!savedSSID.length()){
+
+    Serial.println("TARS: NO WIFI CREDENTIALS");
+
+    startPortal();
+    portalWaitLoop();
+
+    return false;
+  }
+
+  Serial.print("TARS: WiFi connecting to ");
+  Serial.println(savedSSID);
+
+  WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);
+  WiFi.setSleep(false);
+
+  if(WiFi.status()!=WL_CONNECTED)
+    WiFi.begin(
+      savedSSID.c_str(),
+      savedPassword.c_str()
+    );
+
+  uint32_t start=millis();
+
+  while(
+    WiFi.status()!=WL_CONNECTED&&
+    millis()-start<WIFI_TIMEOUT_MS
+  ){
+    delay(100);
+    yield();
+  }
+
+  if(WiFi.status()==WL_CONNECTED){
+
+    wifiReady=true;
+
+    prefs.begin("wifi",false);
+    prefs.putBool("pending",false);
+    prefs.putBool("setupDone",true);
+    prefs.end();
+
+    Serial.println();
+    Serial.println("TARS: WIFI CONNECTED");
+    Serial.print("TARS: IP = ");
+    Serial.println(WiFi.localIP());
+    Serial.print("TARS: RSSI = ");
+    Serial.println(WiFi.RSSI());
+
+    return true;
+  }
+
+  wifiReady=false;
+
+  Serial.println();
+  Serial.println("TARS: WIFI FAILED");
+
+  /*
+     Jangan hapus credential.
+     Jangan langsung masuk portal.
+     Main.cpp dapat mencoba reconnect lagi.
+  */
+
+  return false;
 }
 
-if(!savedSSID.length()){
-prefs.begin("wifi",true);
-savedSSID=prefs.getString("ssid","");
-savedPassword=prefs.getString("pass","");
-prefs.end();
-}
-
-if(!savedSSID.length()){
-Serial.println("TARS: NO WIFI CREDENTIALS");
-startPortal();
-portalWaitLoop();
-return false;
-}
-
-Serial.print("TARS: WiFi connecting to ");
-Serial.println(savedSSID);
-
-WiFi.mode(WIFI_STA);
-WiFi.setAutoReconnect(true);
-WiFi.setSleep(false);
-
-if(WiFi.status()!=WL_CONNECTED)
-WiFi.begin(savedSSID.c_str(),savedPassword.c_str());
-
-uint32_t start=millis();
-
-while(WiFi.status()!=WL_CONNECTED&&millis()-start<WIFI_TIMEOUT_MS){
-delay(100);
-yield();
-}
-
-if(WiFi.status()==WL_CONNECTED){
-wifiReady=true;
-
-prefs.begin("wifi",false);
-prefs.putBool("pending",false);
-prefs.end();
-
-Serial.println();
-Serial.println("TARS: WIFI CONNECTED");
-Serial.print("TARS: IP = ");
-Serial.println(WiFi.localIP());
-Serial.print("TARS: RSSI = ");
-Serial.println(WiFi.RSSI());
-
-return true;
-}
-
-wifiReady=false;
-Serial.println();
-Serial.println("TARS: WIFI FAILED");
-return false;
-}
+/* ================= DISCONNECT ================= */
 
 void wifiManagerDisconnect(){
-Serial.println("TARS: WiFi OFF");
 
-if(portalRunning){
-server.stop();
-dnsServer.stop();
-WiFi.softAPdisconnect(true);
-portalRunning=false;
-}
+  Serial.println("TARS: WiFi OFF");
 
-WiFi.disconnect(false);
-wifiReady=false;
+  if(portalRunning){
+
+    server.stop();
+    dnsServer.stop();
+    WiFi.softAPdisconnect(true);
+
+    portalRunning=false;
+  }
+
+  /*
+     false = jangan hapus konfigurasi WiFi.
+  */
+  WiFi.disconnect(false);
+
+  wifiReady=false;
 }
