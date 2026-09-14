@@ -34,97 +34,143 @@ EncodedAudioStream dec(&analog,&codec);
 StreamCopy copier;
 
 bool oledOK=false,micOK=false,dacOK=false,playing=false,ntpOK=false,singMode=false;
-bool oledSpeaking=false;
-String oledText;
-size_t oledPos=0;
-uint32_t oledTick=0,dotTick=0,waveTick=0;
-uint8_t dotState=1,wavePhase=0;
 
-void oledHeader(const char*t){
-  oled.clearDisplay();oled.setTextColor(SSD1306_WHITE);oled.setTextSize(1);
-  oled.setCursor(42,0);oled.print("T A R S");
-  oled.drawLine(0,9,127,9,SSD1306_WHITE);
-  oled.setCursor(3,14);oled.print(t);
-}
+/* ================= OLED FREE RTOS ================= */
+enum OledMode:uint8_t{OLED_LISTENING,OLED_SPEAKING,OLED_STATUS};
+volatile OledMode oledMode=OLED_LISTENING;
+volatile bool oledSing=false;
+char oledMsg[256]="";
+portMUX_TYPE oledMux=portMUX_INITIALIZER_UNLOCKED;
 
-void oledBase(const char*t,const String&s=""){
+void oledSetStatus(const char*t){
   if(!oledOK)return;
-  oledHeader(t);
-  if(s.length()){oled.setCursor(3,27);oled.print(s);}
-  oled.display();
+  portENTER_CRITICAL(&oledMux);
+  oledMode=OLED_STATUS;
+  strncpy(oledMsg,t,sizeof(oledMsg)-1);
+  oledMsg[sizeof(oledMsg)-1]=0;
+  portEXIT_CRITICAL(&oledMux);
 }
 
-void oledListening(){
-  if(!oledOK||oledSpeaking||millis()-dotTick<300)return;
-  dotTick=millis();dotState=dotState>=4?1:dotState+1;
-  String s;for(uint8_t i=0;i<dotState;i++)s+='.';
-  oledBase("LISTENING",s);
-}
-
-void oledWave(){
-  if(!oledOK||!oledSpeaking||millis()-waveTick<OLED_WAVE_MS)return;
-  waveTick=millis();wavePhase++;
-
-  const int base=57,step=6;
-  oled.fillRect(0,39,128,25,SSD1306_BLACK);
-
-  for(int x=3,i=0;x<125;x+=step,i++){
-    int h=3+((i*7+wavePhase*3)%12);
-    oled.drawLine(x,base-h,x,base+h,SSD1306_WHITE);
-  }
-}
-
-void oledSpeak(){
-  if(!oledOK||!oledSpeaking)return;
-
-  uint32_t now=millis();
-  if(now-oledTick<OLED_TYPE_MS)return;
-  oledTick=now;
-
-  const char*title=singMode?"SINGING":"SPEAKING";
-
-  if(oledPos<oledText.length()){
-    oledHeader(title);
-    int x=3,y=27;
-
-    for(size_t i=0;i<oledPos;i++){
-      char ch=oledText[i];
-      if(ch=='\n'||x>121){
-        x=3;y+=8;
-        if(y>35)break;
-        if(ch=='\n')continue;
-      }
-      oled.setCursor(x,y);
-      oled.write(ch);
-      x=oled.getCursorX();
-    }
-
-    oledPos++;
-  }
-
-  oledWave();
-  oled.display();
+void oledSetListening(){
+  if(!oledOK)return;
+  portENTER_CRITICAL(&oledMux);
+  oledMode=OLED_LISTENING;
+  oledSing=false;
+  oledMsg[0]=0;
+  portEXIT_CRITICAL(&oledMux);
 }
 
 void oledStartSpeak(const String&t){
   if(!oledOK)return;
-  oledSpeaking=true;
-  oledText=t;
-  oledPos=0;
-  oledTick=0;
-  waveTick=0;
-  wavePhase=0;
-  oledHeader(singMode?"SINGING":"SPEAKING");
-  oled.display();
+  portENTER_CRITICAL(&oledMux);
+  oledMode=OLED_SPEAKING;
+  oledSing=singMode;
+  strncpy(oledMsg,t.c_str(),sizeof(oledMsg)-1);
+  oledMsg[sizeof(oledMsg)-1]=0;
+  portEXIT_CRITICAL(&oledMux);
 }
 
-void oledStopSpeak(){
-  oledSpeaking=false;
-  oledText="";
-  oledPos=0;
-  oledBase("LISTENING",".");
+void oledHeader(){
+  oled.clearDisplay();
+  oled.setTextColor(SSD1306_WHITE);
+  oled.setTextSize(1);
+  oled.setCursor(42,0);
+  oled.print("T A R S");
+  oled.drawLine(0,9,127,9,SSD1306_WHITE);
 }
 
+void oledTask(void*){
+  uint32_t typeTick=0,waveTick=0,dotTick=0;
+  size_t pos=0;
+  uint8_t dots=1,phase=0;
+  char text[256];
+
+  for(;;){
+    if(!oledOK){vTaskDelay(pdMS_TO_TICKS(100));continue;}
+
+    OledMode mode;
+    bool singing;
+    portENTER_CRITICAL(&oledMux);
+    mode=oledMode;
+    singing=oledSing;
+    strncpy(text,oledMsg,sizeof(text)-1);
+    text[sizeof(text)-1]=0;
+    portEXIT_CRITICAL(&oledMux);
+
+    if(mode==OLED_LISTENING){
+      pos=0;
+      if(millis()-dotTick>=300){
+        dotTick=millis();
+        dots=dots>=4?1:dots+1;
+      }
+
+      oledHeader();
+      oled.setCursor(3,14);
+      oled.print("LISTENING");
+      oled.setCursor(3,27);
+      for(uint8_t i=0;i<dots;i++)oled.print('.');
+      oled.display();
+    }
+
+    else if(mode==OLED_STATUS){
+      oledHeader();
+      oled.setCursor(3,27);
+      oled.print(text);
+      oled.display();
+    }
+
+    else{
+      if(millis()-typeTick>=OLED_TYPE_MS){
+        uint32_t now=millis();
+        size_t add=now-typeTick;
+        if(typeTick==0)add=1;
+        typeTick=now;
+
+        size_t len=strlen(text);
+        if(pos<len)pos=min(len,pos+add);
+      }
+
+      if(millis()-waveTick>=OLED_WAVE_MS){
+        waveTick=millis();
+        phase++;
+      }
+
+      oledHeader();
+
+      if(singing){
+        oled.setCursor(3,14);
+        oled.print("SINGING");
+      }
+
+      int x=3,y=27;
+      for(size_t i=0;i<pos;i++){
+        char ch=text[i];
+        if(ch=='\n'||x>121){
+          x=3;
+          y+=8;
+          if(y>43)break;
+          if(ch=='\n')continue;
+        }
+        oled.setCursor(x,y);
+        oled.write(ch);
+        x=oled.getCursorX();
+      }
+
+      /* waveform ±1/8 OLED, hanya bagian bawah */
+      oled.fillRect(0,55,128,9,SSD1306_BLACK);
+      for(int x=3,i=0;x<125;x+=6,i++){
+        int h=1+((i*7+phase*3)%4);
+        oled.drawLine(x,63-h,x,63,SSD1306_WHITE);
+      }
+
+      oled.display();
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(25));
+  }
+}
+
+/* ================= DAC ================= */
 bool initDAC(){
   auto cfg=analog.defaultConfig(TX_MODE);
   cfg.channels=2;
@@ -133,6 +179,7 @@ bool initDAC(){
   return true;
 }
 
+/* ================= MIC ================= */
 bool initMic(){
   i2s_config_t c={};
   c.mode=(i2s_mode_t)(I2S_MODE_MASTER|I2S_MODE_RX);
@@ -141,14 +188,19 @@ bool initMic(){
   c.channel_format=I2S_CHANNEL_FMT_ONLY_RIGHT;
   c.communication_format=I2S_COMM_FORMAT_STAND_I2S;
   c.intr_alloc_flags=ESP_INTR_FLAG_LEVEL1;
-  c.dma_buf_count=2;c.dma_buf_len=256;
-  c.use_apll=false;c.tx_desc_auto_clear=false;c.fixed_mclk=0;
+  c.dma_buf_count=2;
+  c.dma_buf_len=256;
+  c.use_apll=false;
+  c.tx_desc_auto_clear=false;
+  c.fixed_mclk=0;
 
   if(i2s_driver_install(MIC_PORT,&c,0,nullptr)!=ESP_OK)return false;
 
   i2s_pin_config_t p={};
-  p.bck_io_num=MIC_SCK;p.ws_io_num=MIC_WS;
-  p.data_out_num=I2S_PIN_NO_CHANGE;p.data_in_num=MIC_SD;
+  p.bck_io_num=MIC_SCK;
+  p.ws_io_num=MIC_WS;
+  p.data_out_num=I2S_PIN_NO_CHANGE;
+  p.data_in_num=MIC_SD;
 
   if(i2s_set_pin(MIC_PORT,&p)!=ESP_OK)return false;
   i2s_zero_dma_buffer(MIC_PORT);
@@ -156,6 +208,7 @@ bool initMic(){
   return true;
 }
 
+/* ================= WAV ================= */
 void put16(uint8_t*p,uint16_t v){p[0]=v;p[1]=v>>8;}
 void put32(uint8_t*p,uint32_t v){p[0]=v;p[1]=v>>8;p[2]=v>>16;p[3]=v>>24;}
 
@@ -169,13 +222,17 @@ void wavHeader(File&f,uint32_t n){
   f.seek(0);f.write(h,44);
 }
 
+/* ================= RECORD ================= */
 bool recordMic(){
   if(!micOK)return false;
+  oledSetListening();
+
   if(LittleFS.exists(STT_FILE))LittleFS.remove(STT_FILE);
 
   File f=LittleFS.open(STT_FILE,FILE_WRITE);
   if(!f)return false;
-  uint8_t z[44]={};f.write(z,44);
+  uint8_t z[44]={};
+  f.write(z,44);
 
   static int16_t pre[PREROLL_SAMPLES];
   size_t prePos=0,preCount=0;
@@ -185,11 +242,8 @@ bool recordMic(){
   uint32_t listenStart=millis(),voiceStart=0,lastVoice=0,samples=0;
   bool voice=false;
 
-  oledBase("LISTENING",".");
-
   while((!voice&&millis()-listenStart<LISTEN_MAX_MS)||
         (voice&&millis()-voiceStart<RECORD_MAX_MS)){
-    oledListening();
 
     size_t n=0;
     if(i2s_read(MIC_PORT,raw,sizeof(raw),&n,pdMS_TO_TICKS(50))!=ESP_OK)continue;
@@ -233,10 +287,12 @@ bool recordMic(){
       if(millis()-voiceStart>=RECORD_MIN_MS&&
          millis()-lastVoice>=SILENCE_MS)break;
     }
+
     yield();
   }
 
-  wavHeader(f,samples*2);f.close();
+  wavHeader(f,samples*2);
+  f.close();
 
   Serial.printf("TARS: RECORD TIME=%lu ms\n",
                 (unsigned long)(millis()-listenStart));
@@ -251,8 +307,10 @@ bool recordMic(){
   return true;
 }
 
+/* ================= NTP ================= */
 bool syncTime(){
   if(ntpOK)return true;
+
   configTime(7*3600,0,"pool.ntp.org","time.nist.gov","time.google.com");
 
   for(int a=1;a<=4;a++){
@@ -261,10 +319,13 @@ bool syncTime(){
     for(int i=0;i<20;i++){
       time_t now=time(nullptr);
       if(now>=1704067200){
-        struct tm t;localtime_r(&now,&t);
-        Serial.printf("TARS: NTP VALID %04d-%02d-%02d %02d:%02d:%02d\n",
+        struct tm t;
+        localtime_r(&now,&t);
+        Serial.printf(
+          "TARS: NTP VALID %04d-%02d-%02d %02d:%02d:%02d\n",
           t.tm_year+1900,t.tm_mon+1,t.tm_mday,
-          t.tm_hour,t.tm_min,t.tm_sec);
+          t.tm_hour,t.tm_min,t.tm_sec
+        );
         ntpOK=true;
         return true;
       }
@@ -276,6 +337,7 @@ bool syncTime(){
   return false;
 }
 
+/* ================= WIFI ================= */
 bool wifiOK(){
   if(WiFi.status()==WL_CONNECTED)return true;
   if(!wifiManagerConnect(false))return false;
@@ -288,7 +350,9 @@ bool bootWiFi(){
 
   while(WiFi.status()!=WL_CONNECTED&&millis()-start<30000){
     wifiManagerConnect(false);
-    delay(200);Serial.print(".");yield();
+    delay(200);
+    Serial.print(".");
+    yield();
   }
 
   Serial.println();
@@ -303,35 +367,47 @@ bool bootWiFi(){
   return true;
 }
 
+/* ================= HTTP BODY ================= */
 String readHTTPBody(WiFiClientSecure&c){
   String line,body;
   bool chunked=false;
   int len=-1;
 
   while(c.connected()){
-    line=c.readStringUntil('\n');line.trim();
+    line=c.readStringUntil('\n');
+    line.trim();
     if(!line.length())break;
 
-    String x=line;x.toLowerCase();
-    if(x.startsWith("content-length:"))len=x.substring(15).toInt();
-    if(x.indexOf("transfer-encoding:")>=0&&x.indexOf("chunked")>=0)
+    String x=line;
+    x.toLowerCase();
+
+    if(x.startsWith("content-length:"))
+      len=x.substring(15).toInt();
+
+    if(x.indexOf("transfer-encoding:")>=0&&
+       x.indexOf("chunked")>=0)
       chunked=true;
   }
 
   if(chunked){
     while(c.connected()){
-      line=c.readStringUntil('\n');line.trim();
+      line=c.readStringUntil('\n');
+      line.trim();
       if(!line.length())continue;
 
       int n=strtol(line.c_str(),nullptr,16);
-      if(n<=0){c.readStringUntil('\n');break;}
+      if(n<=0){
+        c.readStringUntil('\n');
+        break;
+      }
 
       while(n>0){
         uint8_t b[BUF];
         size_t w=min((int)sizeof(b),n);
         size_t r=c.readBytes(b,w);
         if(!r)break;
-        body.concat((char*)b,r);n-=r;
+        body.concat((char*)b,r);
+        n-=r;
       }
       c.readStringUntil('\n');
     }
@@ -349,6 +425,7 @@ String readHTTPBody(WiFiClientSecure&c){
   return body;
 }
 
+/* ================= STT ================= */
 String stt(){
   if(!wifiOK())return "";
 
@@ -356,13 +433,16 @@ String stt(){
   if(!f)return "";
 
   const char*b="----TARSSTT";
+
   String head="--"+String(b)+
     "\r\nContent-Disposition: form-data; name=\"file\"; filename=\"stt.wav\""+
     "\r\nContent-Type: audio/wav\r\n\r\n";
+
   String tail="\r\n--"+String(b)+"--\r\n";
 
   WiFiClientSecure c;
-  c.setInsecure();c.setTimeout(15000);
+  c.setInsecure();
+  c.setTimeout(15000);
 
   String host=TARS_CLOUD_URL;
   int p=host.indexOf("://");
@@ -371,41 +451,60 @@ String stt(){
   if(p>=0)host=host.substring(0,p);
 
   if(!c.connect(host.c_str(),443)){
-    f.close();return "";
+    f.close();
+    return "";
   }
 
   size_t total=head.length()+f.size()+tail.length();
 
-  c.printf("POST /stt HTTP/1.1\r\nHost: %s\r\n"
-           "Content-Type: multipart/form-data; boundary=%s\r\n"
-           "Content-Length: %u\r\nConnection: close\r\n\r\n",
-           host.c_str(),b,(unsigned)total);
+  c.printf(
+    "POST /stt HTTP/1.1\r\nHost: %s\r\n"
+    "Content-Type: multipart/form-data; boundary=%s\r\n"
+    "Content-Length: %u\r\nConnection: close\r\n\r\n",
+    host.c_str(),b,(unsigned)total
+  );
 
   c.print(head);
 
   uint8_t buf[BUF];
+
   while(f.available()){
     size_t n=f.read(buf,sizeof(buf));
     if(!n)break;
+
     if(c.write(buf,n)!=n){
-      f.close();c.stop();return "";
+      f.close();
+      c.stop();
+      return "";
     }
+
     yield();
   }
 
-  f.close();c.print(tail);
+  f.close();
+  c.print(tail);
 
   uint32_t t=millis();
+
   while(!c.available()&&c.connected()&&millis()-t<20000){
-    delay(2);yield();
+    delay(2);
+    yield();
   }
 
-  if(!c.available()){c.stop();return "";}
+  if(!c.available()){
+    c.stop();
+    return "";
+  }
 
-  String status=c.readStringUntil('\n');status.trim();
-  Serial.print("TARS: STT HTTP = ");Serial.println(status);
+  String status=c.readStringUntil('\n');
+  status.trim();
 
-  String body=readHTTPBody(c);c.stop();
+  Serial.print("TARS: STT HTTP = ");
+  Serial.println(status);
+
+  String body=readHTTPBody(c);
+  c.stop();
+
   if(!body.length()||status.indexOf(" 200 ")<0)return "";
 
   JsonDocument j;
@@ -419,33 +518,44 @@ String stt(){
     Serial.print("TARS: YOU SAID = ");
     Serial.println(s);
   }
+
   return s;
 }
 
+/* ================= ASK ================= */
 String ask(const String&q){
   if(!wifiOK())return "";
 
   WiFiClientSecure c;
   c.setInsecure();
-  HTTPClient h;
 
+  HTTPClient h;
   if(!h.begin(c,String(TARS_CLOUD_URL)+"/ask"))return "";
 
   h.setTimeout(12000);
   h.addHeader("Content-Type","application/json");
 
-  JsonDocument j;j["question"]=q;
-  String b;serializeJson(j,b);
+  JsonDocument j;
+  j["question"]=q;
+
+  String b;
+  serializeJson(j,b);
 
   uint32_t t=millis();
   int code=h.POST(b);
 
-  Serial.printf("TARS: ASK HTTP=%d TIME=%lu ms\n",
-                code,(unsigned long)(millis()-t));
+  Serial.printf(
+    "TARS: ASK HTTP=%d TIME=%lu ms\n",
+    code,(unsigned long)(millis()-t)
+  );
 
-  if(code<200||code>=300){h.end();return "";}
+  if(code<200||code>=300){
+    h.end();
+    return "";
+  }
 
-  String r=h.getString();h.end();
+  String r=h.getString();
+  h.end();
 
   JsonDocument x;
   if(deserializeJson(x,r))return "";
@@ -455,36 +565,55 @@ String ask(const String&q){
   return s;
 }
 
+/* ================= AUDIO STREAM ================= */
 bool streamAudio(const String&url,const String&text){
   if(!wifiOK())return false;
 
   bool singing=url.endsWith("/sing");
-  WiFiClientSecure c;c.setInsecure();
+
+  WiFiClientSecure c;
+  c.setInsecure();
+
   HTTPClient h;
 
   if(!h.begin(c,url))return false;
+
   h.setTimeout(60000);
   h.addHeader("Content-Type","application/json");
 
   JsonDocument j;
+
   if(singing)j["prompt"]=text;
   else j["text"]=text;
 
-  String body;serializeJson(j,body);
+  String body;
+  serializeJson(j,body);
 
   uint32_t t=millis();
   int code=h.POST(body);
 
-  Serial.printf("TARS: AUDIO HTTP=%d TIME=%lu ms\n",
-                code,(unsigned long)(millis()-t));
+  Serial.printf(
+    "TARS: AUDIO HTTP=%d TIME=%lu ms\n",
+    code,(unsigned long)(millis()-t)
+  );
 
-  if(code<200||code>=300){h.end();return false;}
+  if(code<200||code>=300){
+    h.end();
+    return false;
+  }
 
   WiFiClient*stream=h.getStreamPtr();
-  if(!stream){h.end();return false;}
+  if(!stream){
+    h.end();
+    return false;
+  }
 
   if(!dacOK)dacOK=initDAC();
-  if(!dacOK){h.end();return false;}
+
+  if(!dacOK){
+    h.end();
+    return false;
+  }
 
   dec.begin();
   copier.begin(dec,*stream);
@@ -499,15 +628,12 @@ bool streamAudio(const String&url,const String&text){
     if(copied){
       lastData=millis();
 
-      // OLED baru aktif ketika audio TARS benar-benar mulai mengalir.
+      /* Hanya flag; OLED task yang mengurus tampilan */
       if(!audioStarted){
         audioStarted=true;
         oledStartSpeak(text);
       }
     }
-
-    // OLED hanya visual; tidak mengontrol timing audio.
-    if(audioStarted)oledSpeak();
 
     if(millis()-lastData>10000)break;
     yield();
@@ -517,25 +643,29 @@ bool streamAudio(const String&url,const String&text){
   h.end();
   playing=false;
 
-  // Bersihkan tampilan tanpa menunggu teks selesai.
-  oledStopSpeak();
+  /* Tidak menunggu teks OLED selesai */
+  oledSetListening();
 
   return true;
 }
 
+/* ================= SING ================= */
 bool singRequest(String s){
   s.toLowerCase();
+
   return s.indexOf("nyanyi")>=0||
          s.indexOf("bernyanyi")>=0||
          s.indexOf("nyanyikan")>=0;
 }
 
+/* ================= PROCESS ================= */
 void processQuestion(const String&q){
   uint32_t total=millis();
 
   String answer=ask(q);
+
   if(!answer.length()){
-    oledBase("READY","ASK ERROR");
+    oledSetStatus("ASK ERROR");
     return;
   }
 
@@ -547,48 +677,83 @@ void processQuestion(const String&q){
   uint32_t t=millis();
   bool ok=streamAudio(url,payload);
 
-  Serial.printf("TARS: TTS TIME=%lu ms\n",
-                (unsigned long)(millis()-t));
-  Serial.printf("TARS: TOTAL=%lu ms\n",
-                (unsigned long)(millis()-total));
+  Serial.printf(
+    "TARS: TTS TIME=%lu ms\n",
+    (unsigned long)(millis()-t)
+  );
 
-  if(!ok)oledBase("READY","AUDIO ERROR");
+  Serial.printf(
+    "TARS: TOTAL=%lu ms\n",
+    (unsigned long)(millis()-total)
+  );
+
+  if(!ok)oledSetStatus("AUDIO ERROR");
+
   singMode=false;
 }
 
+/* ================= SETUP ================= */
 void setup(){
   Serial.begin(SERIAL_BAUD);
+
   Wire.begin(OLED_SDA,OLED_SCL);
   Wire.setClock(400000);
 
   oledOK=oled.begin(SSD1306_SWITCHCAPVCC,OLED_ADDR);
-  if(oledOK)oledBase("BOOT");
+
+  if(oledOK){
+    oledHeader();
+    oled.setCursor(3,27);
+    oled.print("BOOT");
+    oled.display();
+  }
 
   LittleFS.begin(true);
 
   dacOK=initDAC();
   micOK=initMic();
 
-  Serial.printf("TARS: DAC=%s MIC=%s\n",
-                dacOK?"READY":"ERROR",micOK?"READY":"ERROR");
+  Serial.printf(
+    "TARS: DAC=%s MIC=%s\n",
+    dacOK?"READY":"ERROR",
+    micOK?"READY":"ERROR"
+  );
+
   Serial.println("TARS: PAM RIGHT GPIO26");
   Serial.println("TARS: INMP441 RIGHT GPIO34");
   Serial.println("TARS: BLUETOOTH DISABLED");
   Serial.println("TARS: MP3 STREAMING ENABLED");
 
+  /* OLED sekarang berdiri sendiri */
+  if(oledOK){
+    xTaskCreatePinnedToCore(
+      oledTask,
+      "TARS_OLED",
+      4096,
+      nullptr,
+      1,
+      nullptr,
+      0
+    );
+  }
+
   wifiManagerBegin();
 
   if(bootWiFi())syncTime();
 
-  oledBase("READY","WAITING...");
+  oledSetListening();
 }
 
+/* ================= LOOP ================= */
 void loop(){
-  if(playing){delay(1);return;}
+  if(playing){
+    delay(1);
+    return;
+  }
 
   if(WiFi.status()!=WL_CONNECTED){
     if(!wifiOK()){
-      oledBase("READY","WIFI ERROR");
+      oledSetStatus("WIFI ERROR");
       delay(500);
       return;
     }
@@ -599,8 +764,10 @@ void loop(){
     LittleFS.remove(STT_FILE);
 
     if(q.length())processQuestion(q);
-    else oledBase("READY","NO INPUT");
-  }else oledListening();
+    else oledSetStatus("NO INPUT");
+  }else{
+    oledSetListening();
+  }
 
   delay(1);
 }
