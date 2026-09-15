@@ -598,6 +598,8 @@ bool streamAudio(const String&url,const String&text){
   dec.begin();
   copier.begin(dec,*stream);
 
+  playing=true;
+
   bool started=false;
   uint32_t start=millis(),lastData=start;
 
