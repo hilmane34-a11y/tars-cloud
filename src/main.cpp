@@ -30,8 +30,10 @@ const char* STT_HOST="tars-cloud-v1.hilmane34.workers.dev";
 
 Adafruit_SSD1306 oled(OLED_WIDTH,OLED_HEIGHT,&Wire,-1);
 AnalogAudioStream analog;
+ChannelFormatConverterStreamT<int16_t> channelConv(analog);
 MP3DecoderHelix codec;
-EncodedAudioStream dec(&analog,&codec);
+EncodedAudioStream dec(&channelConv,&codec);
+
 StreamCopy copier;
 WebSocketsClient sttWS;
 
