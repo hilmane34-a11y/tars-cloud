@@ -39,7 +39,9 @@ MP3DecoderHelix codec;
 EncodedAudioStream dec(&analog,&codec);
 StreamCopy copier;
 
-bool oledOK=false,micOK=false,dacOK=false,playing=false,ntpOK=false;
+bool oledOK=false,micOK=false,dacOK=false;
+bool playing=false,ntpOK=false,singMode=false;
+
 String oledText="",oledStatus="READY";
 uint32_t oledTypePos=0,oledLastType=0,oledLastWave=0;
 
@@ -83,7 +85,8 @@ void oledTask(void*){
 
     uint32_t now=millis();
 
-    if(oledText.length()&&oledTypePos<oledText.length()&&
+    if(oledText.length() &&
+       oledTypePos<oledText.length() &&
        now-oledLastType>=OLED_TYPE_MS){
       oledTypePos++;
       oledLastType=now;
@@ -104,8 +107,7 @@ void oledTask(void*){
           0,min((size_t)oledTypePos,oledText.length())
         );
 
-        String lines[20];
-        String line="";
+        String lines[20],line="";
         int lineCount=0;
 
         for(size_t i=0;i<src.length();i++){
@@ -257,18 +259,21 @@ bool recordMic(){
   File f=LittleFS.open(STT_FILE,FILE_WRITE);
   if(!f)return false;
 
-  uint8_t emptyHeader[44]={};
-  f.write(emptyHeader,44);
+  uint8_t empty[44]={};
+  f.write(empty,44);
 
   static int16_t preroll[PREROLL_SAMPLES];
 
-  size_t prePos=0,preCount=0;
+  size_t prePos=0;
+  size_t preCount=0;
+
   int32_t raw[BUF/4];
   int16_t pcm[BUF/4];
 
   uint32_t voiceStart=0;
   uint32_t lastVoice=0;
   uint32_t samples=0;
+
   bool voice=false;
 
   Serial.println("TARS: LISTENING - WAIT VOICE");
@@ -288,8 +293,14 @@ bool recordMic(){
     int32_t peak=0;
 
     for(size_t i=0;i<count;i++){
-      int32_t v=constrain(raw[i]>>16,-32768,32767);
+      int32_t v=constrain(
+        raw[i]>>16,
+        -32768,
+        32767
+      );
+
       pcm[i]=(int16_t)v;
+
       int32_t a=abs(v);
       if(a>peak)peak=a;
     }
@@ -304,17 +315,22 @@ bool recordMic(){
           preCount++;
       }
 
+      /* Suara terdeteksi */
       if(peak>=MIC_THRESHOLD){
         voice=true;
         voiceStart=millis();
         lastVoice=voiceStart;
 
         size_t start=
-          (preCount==PREROLL_SAMPLES)?prePos:0;
+          preCount==PREROLL_SAMPLES?
+          prePos:0;
 
         for(size_t i=0;i<preCount;i++){
           size_t k=(start+i)%PREROLL_SAMPLES;
-          f.write((uint8_t*)&preroll[k],2);
+          f.write(
+            (uint8_t*)&preroll[k],
+            2
+          );
         }
 
         samples+=preCount;
@@ -325,16 +341,20 @@ bool recordMic(){
         );
       }
     }else{
-      f.write((uint8_t*)pcm,count*2);
+      /* Simpan seluruh audio setelah trigger */
+      f.write(
+        (uint8_t*)pcm,
+        count*2
+      );
+
       samples+=count;
 
       if(peak>=MIC_SILENCE)
         lastVoice=millis();
 
       /*
-       * Tidak ada RECORD_MAX.
-       * Rekaman berhenti hanya setelah suara
-       * benar-benar di bawah threshold selama 1 detik.
+       * Tidak ada batas RECORD MAX.
+       * Berhenti hanya setelah silence 1 detik.
        */
       if(
         millis()-voiceStart>=RECORD_MIN_MS &&
@@ -356,7 +376,8 @@ bool recordMic(){
     return false;
   }
 
-  uint32_t capturedMs=(samples*1000UL)/MIC_RATE;
+  uint32_t capturedMs=
+    (samples*1000UL)/MIC_RATE;
 
   Serial.printf(
     "TARS: CAPTURED AUDIO=%lu ms\n",
@@ -385,7 +406,10 @@ bool syncTime(){
   );
 
   for(int a=1;a<=4;a++){
-    Serial.printf("TARS: NTP ATTEMPT %d/4\n",a);
+    Serial.printf(
+      "TARS: NTP ATTEMPT %d/4\n",
+      a
+    );
 
     for(int i=0;i<20;i++){
       time_t now=time(nullptr);
@@ -487,19 +511,34 @@ String readHTTPBody(WiFiClientSecure&c){
       String line=c.readStringUntil('\n');
       line.trim();
 
-      int n=strtol(line.c_str(),nullptr,16);
+      int n=strtol(
+        line.c_str(),
+        nullptr,
+        16
+      );
 
-      if(n<=0)
-        break;
+      if(n<=0)break;
 
       while(n>0){
         uint8_t b[512];
-        size_t want=min(n,(int)sizeof(b));
-        size_t got=c.readBytes(b,want);
+
+        size_t want=min(
+          n,
+          (int)sizeof(b)
+        );
+
+        size_t got=c.readBytes(
+          b,
+          want
+        );
 
         if(!got)break;
 
-        body.concat((char*)b,got);
+        body.concat(
+          (char*)b,
+          got
+        );
+
         n-=got;
       }
 
@@ -507,22 +546,41 @@ String readHTTPBody(WiFiClientSecure&c){
     }
   }else if(pos>=0){
     int e=headers.indexOf('\n',pos);
-    int len=headers.substring(pos+15,e).toInt();
+    int len=headers.substring(
+      pos+15,
+      e
+    ).toInt();
 
     while(len>0){
       uint8_t b[512];
-      size_t want=min(len,(int)sizeof(b));
-      size_t got=c.readBytes(b,want);
+
+      size_t want=min(
+        len,
+        (int)sizeof(b)
+      );
+
+      size_t got=c.readBytes(
+        b,
+        want
+      );
 
       if(!got)break;
 
-      body.concat((char*)b,got);
+      body.concat(
+        (char*)b,
+        got
+      );
+
       len-=got;
     }
   }else{
     while(c.connected()||c.available()){
       uint8_t b[512];
-      size_t n=c.read(b,sizeof(b));
+
+      size_t n=c.read(
+        b,
+        sizeof(b)
+      );
 
       if(n)
         body.concat((char*)b,n);
@@ -541,7 +599,11 @@ String readHTTPBody(WiFiClientSecure&c){
 String stt(){
   if(!wifiOK())return "";
 
-  File f=LittleFS.open(STT_FILE,FILE_READ);
+  File f=LittleFS.open(
+    STT_FILE,
+    FILE_READ
+  );
+
   if(!f)return "";
 
   const char* boundary="----TARSSTT";
@@ -559,6 +621,7 @@ String stt(){
   c.setTimeout(15000);
 
   String host=TARS_CLOUD_URL;
+
   int p=host.indexOf("://");
 
   if(p>=0)
@@ -587,7 +650,10 @@ String stt(){
     (unsigned long)(millis()-t0)
   );
 
-  size_t total=head.length()+f.size()+tail.length();
+  size_t total=
+    head.length()+
+    f.size()+
+    tail.length();
 
   c.printf(
     "POST /stt HTTP/1.1\r\n"
@@ -606,7 +672,10 @@ String stt(){
   uint8_t buf[BUF];
 
   while(f.available()){
-    size_t n=f.read(buf,sizeof(buf));
+    size_t n=f.read(
+      buf,
+      sizeof(buf)
+    );
 
     if(!n)break;
 
@@ -893,10 +962,15 @@ void processQuestion(const String&q){
     String(TARS_CLOUD_URL)+
     (singMode?"/sing":"/tts");
 
-  String payload=singMode?q:answer;
+  String payload=
+    singMode?q:answer;
 
   uint32_t t=millis();
-  bool ok=streamAudio(url,payload);
+
+  bool ok=streamAudio(
+    url,
+    payload
+  );
 
   Serial.printf(
     "TARS: AUDIO FUNCTION TIME=%lu ms\n",
@@ -916,7 +990,11 @@ void processQuestion(const String&q){
 void setup(){
   Serial.begin(SERIAL_BAUD);
 
-  Wire.begin(OLED_SDA,OLED_SCL);
+  Wire.begin(
+    OLED_SDA,
+    OLED_SCL
+  );
+
   Wire.setClock(400000);
 
   oledOK=oled.begin(
@@ -947,6 +1025,7 @@ void setup(){
   Serial.println("TARS: MIC THRESHOLD=8000");
   Serial.println("TARS: MIC SILENCE=6000");
   Serial.println("TARS: PREROLL=700 ms");
+  Serial.println("TARS: NO RECORD TIMEOUT");
   Serial.println("TARS: BLUETOOTH DISABLED");
   Serial.println("TARS: MP3 STREAMING ENABLED");
 
@@ -986,10 +1065,6 @@ void loop(){
     }
   }
 
-  /*
-   * recordMic() sekarang menunggu suara terus-menerus.
-   * Tidak ada timeout 8 detik dan tidak ada RECORD TIME.
-   */
   if(recordMic()){
     String q=stt();
 
