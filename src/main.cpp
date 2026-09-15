@@ -589,9 +589,9 @@ bool streamAudio(const String&url,const String&text){
     return false;
   }
 
+  dec.addNotifyAudioChange(analog);
   dec.begin();
   copier.begin(dec,*stream);
-  playing=true;
 
   bool started=false;
   uint32_t start=millis(),lastData=start;
