@@ -20,15 +20,10 @@
 #define MIC_SD 34
 #define AUDIO_DAC_PIN 26
 
-const uint32_t MIC_RATE=16000;
-const uint32_t RECORD_MIN_MS=500;
-const uint32_t SILENCE_MS=1000;
-const uint32_t PREROLL_MS=700;
-const int32_t MIC_THRESHOLD=8000;
-const int32_t MIC_SILENCE=6000;
-const uint32_t OLED_TYPE_MS=39;
-const uint32_t OLED_WAVE_MS=70;
+const uint32_t MIC_RATE=16000,RECORD_MIN_MS=500,SILENCE_MS=1000;
+const uint32_t PREROLL_MS=700,OLED_TYPE_MS=39,OLED_WAVE_MS=70;
 const uint32_t AUDIO_IDLE_MS=2500;
+const int32_t MIC_THRESHOLD=8000,MIC_SILENCE=6000;
 const size_t BUF=2048;
 const size_t PREROLL_SAMPLES=MIC_RATE*PREROLL_MS/1000;
 const char* STT_HOST="tars-cloud-v1.hilmane34.workers.dev";
@@ -44,9 +39,15 @@ bool oledOK=false,micOK=false,dacOK=false;
 bool playing=false,ntpOK=false,singMode=false;
 bool sttConnected=false,sttReady=false,sttDone=false,sttError=false;
 
-String sttFinal="",sttPartial="";
-String oledText="",oledStatus="READY";
+String sttFinal,sttPartial,oledText,oledStatus="READY";
 uint32_t oledTypePos=0,oledLastType=0,oledLastWave=0;
+
+/* GLOBAL AUDIO BUFFERS
+   Dipindah dari stack loopTask untuk mencegah stack overflow. */
+static int32_t rawBuf[BUF/4];
+static int16_t pcmBuf[BUF/4];
+static int16_t preBuf[PREROLL_SAMPLES];
+static int16_t sendBuf[256];
 
 /* OLED */
 void oledHeader(){
@@ -87,8 +88,7 @@ void oledTask(void*){
 
     uint32_t now=millis();
 
-    if(oledText.length()&&
-       oledTypePos<oledText.length()&&
+    if(oledText.length()&&oledTypePos<oledText.length()&&
        now-oledLastType>=OLED_TYPE_MS){
       oledTypePos++;
       oledLastType=now;
@@ -108,7 +108,7 @@ void oledTask(void*){
         String src=oledText.substring(
           0,min((size_t)oledTypePos,oledText.length())
         );
-        String lines[20],line="";
+        String lines[20],line;
         int n=0;
 
         for(size_t i=0;i<src.length();i++){
@@ -137,8 +137,7 @@ void oledTask(void*){
           }
         }
 
-        if(line.length()&&n<20)
-          lines[n++]=line;
+        if(line.length()&&n<20)lines[n++]=line;
 
         int first=n?(n-1)/4*4:0;
 
@@ -192,8 +191,7 @@ bool initMic(){
   c.tx_desc_auto_clear=false;
   c.fixed_mclk=0;
 
-  if(i2s_driver_install(MIC_PORT,&c,0,nullptr)!=ESP_OK)
-    return false;
+  if(i2s_driver_install(MIC_PORT,&c,0,nullptr)!=ESP_OK)return false;
 
   i2s_pin_config_t p={};
   p.bck_io_num=MIC_SCK;
@@ -201,8 +199,7 @@ bool initMic(){
   p.data_out_num=I2S_PIN_NO_CHANGE;
   p.data_in_num=MIC_SD;
 
-  if(i2s_set_pin(MIC_PORT,&p)!=ESP_OK)
-    return false;
+  if(i2s_set_pin(MIC_PORT,&p)!=ESP_OK)return false;
 
   i2s_zero_dma_buffer(MIC_PORT);
   Serial.println("TARS: INMP441 RIGHT READY");
@@ -213,12 +210,7 @@ bool initMic(){
 bool syncTime(){
   if(ntpOK)return true;
 
-  configTime(
-    7*3600,0,
-    "pool.ntp.org",
-    "time.nist.gov",
-    "time.google.com"
-  );
+  configTime(7*3600,0,"pool.ntp.org","time.nist.gov","time.google.com");
 
   for(int a=1;a<=4;a++){
     Serial.printf("TARS: NTP ATTEMPT %d/4\n",a);
@@ -229,13 +221,11 @@ bool syncTime(){
       if(now>=1704067200){
         struct tm t;
         localtime_r(&now,&t);
-
         Serial.printf(
           "TARS: NTP VALID %04d-%02d-%02d %02d:%02d:%02d\n",
           t.tm_year+1900,t.tm_mon+1,t.tm_mday,
           t.tm_hour,t.tm_min,t.tm_sec
         );
-
         ntpOK=true;
         return true;
       }
@@ -256,7 +246,6 @@ bool wifiOK(){
 
 bool bootWiFi(){
   Serial.println("TARS: WIFI CONNECTING...");
-
   uint32_t start=millis();
 
   while(WiFi.status()!=WL_CONNECTED&&millis()-start<30000){
@@ -299,15 +288,12 @@ void sttEvent(WStype_t type,uint8_t*payload,size_t length){
   if(type!=WStype_TEXT)return;
 
   String msg;
-  msg.reserve(length);
+  msg.reserve(length+1);
 
-  for(size_t i=0;i<length;i++)
-    msg+=(char)payload[i];
+  for(size_t i=0;i<length;i++)msg+=(char)payload[i];
 
   JsonDocument j;
-
-  if(deserializeJson(j,msg))
-    return;
+  if(deserializeJson(j,msg))return;
 
   String t=j["type"].as<String>();
 
@@ -332,7 +318,6 @@ void sttEvent(WStype_t type,uint8_t*payload,size_t length){
   }else if(t=="error"){
     sttError=true;
     sttDone=true;
-
     Serial.print("TARS: STT ERROR = ");
     Serial.println(j["error"].as<String>());
   }
@@ -349,10 +334,10 @@ bool startSTT(){
   sttPartial="";
 
   sttWS.disconnect();
-  sttWS.beginSSL(STT_HOST,443,"/stt");
   sttWS.onEvent(sttEvent);
   sttWS.setReconnectInterval(0);
   sttWS.enableHeartbeat(15000,5000,2);
+  sttWS.beginSSL(STT_HOST,443,"/stt");
 
   uint32_t start=millis();
 
@@ -402,10 +387,6 @@ String recordRealtime(){
 
   oledSetListening();
 
-  static int16_t preroll[PREROLL_SAMPLES];
-  int32_t raw[BUF/4];
-  int16_t pcm[BUF/4];
-
   size_t prePos=0,preCount=0;
   uint32_t voiceStart=0,lastVoice=0,samples=0;
   bool voice=false;
@@ -419,7 +400,7 @@ String recordRealtime(){
     size_t bytes=0;
 
     if(i2s_read(
-      MIC_PORT,raw,sizeof(raw),&bytes,
+      MIC_PORT,rawBuf,sizeof(rawBuf),&bytes,
       pdMS_TO_TICKS(30)
     )!=ESP_OK)continue;
 
@@ -427,11 +408,8 @@ String recordRealtime(){
     int32_t peak=0;
 
     for(size_t i=0;i<count;i++){
-      int32_t v=constrain(
-        raw[i]>>16,-32768,32767
-      );
-
-      pcm[i]=(int16_t)v;
+      int32_t v=constrain(rawBuf[i]>>16,-32768,32767);
+      pcmBuf[i]=(int16_t)v;
 
       int32_t a=abs(v);
       if(a>peak)peak=a;
@@ -439,11 +417,10 @@ String recordRealtime(){
 
     if(!voice){
       for(size_t i=0;i<count;i++){
-        preroll[prePos]=pcm[i];
+        preBuf[prePos]=pcmBuf[i];
         prePos=(prePos+1)%PREROLL_SAMPLES;
 
-        if(preCount<PREROLL_SAMPLES)
-          preCount++;
+        if(preCount<PREROLL_SAMPLES)preCount++;
       }
 
       if(peak>=MIC_THRESHOLD){
@@ -454,20 +431,15 @@ String recordRealtime(){
         size_t start=
           preCount==PREROLL_SAMPLES?prePos:0;
 
-        /*
-         * Kirim preroll dalam chunk,
-         * bukan 1 sample/frame.
-         */
-        int16_t chunk[256];
         size_t n=0;
 
         for(size_t i=0;i<preCount;i++){
           size_t k=(start+i)%PREROLL_SAMPLES;
-          chunk[n++]=preroll[k];
+          sendBuf[n++]=preBuf[k];
 
           if(n==256){
             if(!sttWS.sendBIN(
-              (uint8_t*)chunk,n*2
+              (uint8_t*)sendBuf,n*2
             )){
               sttError=true;
               break;
@@ -477,9 +449,7 @@ String recordRealtime(){
         }
 
         if(n&&!sttError)
-          sttWS.sendBIN(
-            (uint8_t*)chunk,n*2
-          );
+          sttWS.sendBIN((uint8_t*)sendBuf,n*2);
 
         samples+=preCount;
 
@@ -490,7 +460,7 @@ String recordRealtime(){
       }
     }else{
       if(!sttWS.sendBIN(
-        (uint8_t*)pcm,count*2
+        (uint8_t*)pcmBuf,count*2
       )){
         Serial.println("TARS: STT PCM SEND FAILED");
         sttError=true;
@@ -499,8 +469,7 @@ String recordRealtime(){
 
       samples+=count;
 
-      if(peak>=MIC_SILENCE)
-        lastVoice=millis();
+      if(peak>=MIC_SILENCE)lastVoice=millis();
 
       if(
         millis()-voiceStart>=RECORD_MIN_MS&&
@@ -516,11 +485,6 @@ String recordRealtime(){
     Serial.println("TARS: MIC AUDIO TOO LOW");
     return "";
   }
-
-  Serial.printf(
-    "TARS: REALTIME AUDIO=%lu ms\n",
-    (unsigned long)(samples*1000UL/MIC_RATE)
-  );
 
   if(sttError){
     sttWS.disconnect();
@@ -538,16 +502,10 @@ String ask(const String&q){
   c.setInsecure();
 
   HTTPClient h;
-
-  if(!h.begin(
-    c,String(TARS_CLOUD_URL)+"/ask"
-  ))return "";
+  if(!h.begin(c,String(TARS_CLOUD_URL)+"/ask"))return "";
 
   h.setTimeout(12000);
-  h.addHeader(
-    "Content-Type",
-    "application/json"
-  );
+  h.addHeader("Content-Type","application/json");
 
   JsonDocument j;
   j["question"]=q;
@@ -572,9 +530,7 @@ String ask(const String&q){
   h.end();
 
   JsonDocument x;
-
-  if(deserializeJson(x,r))
-    return "";
+  if(deserializeJson(x,r))return "";
 
   String s=x["response"].as<String>();
   s.trim();
@@ -582,10 +538,7 @@ String ask(const String&q){
 }
 
 /* MP3 STREAM */
-bool streamAudio(
-  const String&url,
-  const String&text
-){
+bool streamAudio(const String&url,const String&text){
   if(!wifiOK())return false;
 
   bool singing=url.endsWith("/sing");
@@ -600,13 +553,9 @@ bool streamAudio(
   if(!h.begin(c,url))return false;
 
   h.setTimeout(60000);
-  h.addHeader(
-    "Content-Type",
-    "application/json"
-  );
+  h.addHeader("Content-Type","application/json");
 
   JsonDocument j;
-
   if(singing)j["prompt"]=text;
   else j["text"]=text;
 
@@ -666,14 +615,10 @@ bool streamAudio(
       }
     }
 
-    if(
-      started&&!available&&
-      millis()-lastData>=AUDIO_IDLE_MS
-    )break;
+    if(started&&!available&&
+       millis()-lastData>=AUDIO_IDLE_MS)break;
 
-    if(
-      !started&&!h.connected()&&!available
-    )break;
+    if(!started&&!h.connected()&&!available)break;
 
     yield();
   }
@@ -716,8 +661,7 @@ void processQuestion(const String&q){
 
   singMode=singRequest(q);
 
-  String url=
-    String(TARS_CLOUD_URL)+
+  String url=String(TARS_CLOUD_URL)+
     (singMode?"/sing":"/tts");
 
   String payload=singMode?q:answer;
@@ -741,10 +685,7 @@ void setup(){
   Wire.begin(OLED_SDA,OLED_SCL);
   Wire.setClock(400000);
 
-  oledOK=oled.begin(
-    SSD1306_SWITCHCAPVCC,
-    OLED_ADDR
-  );
+  oledOK=oled.begin(SSD1306_SWITCHCAPVCC,OLED_ADDR);
 
   if(oledOK){
     oledHeader();
@@ -774,9 +715,7 @@ void setup(){
 
   if(oledOK){
     xTaskCreatePinnedToCore(
-      oledTask,
-      "TARS_OLED",
-      4096,nullptr,1,nullptr,0
+      oledTask,"TARS_OLED",4096,nullptr,1,nullptr,0
     );
   }
 
