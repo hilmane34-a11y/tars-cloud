@@ -591,7 +591,10 @@ bool streamAudio(const String&url,const String&text){
     return false;
   }
 
-  dec.addNotifyAudioChange(analog);
+  AudioInfo stereoOut(44100,2,16);
+  channelConv.begin(stereoOut);
+
+  dec.addNotifyAudioChange(channelConv);
   dec.begin();
   copier.begin(dec,*stream);
 
