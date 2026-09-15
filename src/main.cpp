@@ -24,13 +24,18 @@ const uint32_t MIC_RATE=16000,RECORD_MIN_MS=500,SILENCE_MS=1000;
 const uint32_t PREROLL_MS=700,OLED_TYPE_MS=39,OLED_WAVE_MS=70;
 const uint32_t AUDIO_IDLE_MS=2500;
 const int32_t MIC_THRESHOLD=8000,MIC_SILENCE=6000;
-const size_t BUF=2048,PREROLL_SAMPLES=MIC_RATE*PREROLL_MS/1000;
+const size_t BUF=2048;
+const size_t PREROLL_SAMPLES=MIC_RATE*PREROLL_MS/1000;
 const char* STT_HOST="tars-cloud-v1.hilmane34.workers.dev";
+
+const AudioInfo AUDIO_IN(22050,1,16);
+const AudioInfo AUDIO_OUT(44100,2,16);
 
 Adafruit_SSD1306 oled(OLED_WIDTH,OLED_HEIGHT,&Wire,-1);
 AnalogAudioStream analog;
+FormatConverterStream converter(analog);
 MP3DecoderHelix codec;
-EncodedAudioStream dec(&analog,&codec);
+EncodedAudioStream dec(&converter,&codec);
 StreamCopy copier;
 WebSocketsClient sttWS;
 
@@ -159,7 +164,10 @@ void oledTask(void*){
 
 bool initDAC(){
   auto cfg=analog.defaultConfig(TX_MODE);
+  cfg.copyFrom(AUDIO_OUT);
   cfg.channels=2;
+  cfg.sample_rate=44100;
+  cfg.bits_per_sample=16;
 
   if(!analog.begin(cfg)){
     Serial.println("TARS: DAC ERROR");
@@ -204,7 +212,10 @@ bool initMic(){
 bool syncTime(){
   if(ntpOK)return true;
 
-  configTime(7*3600,0,"pool.ntp.org","time.nist.gov","time.google.com");
+  configTime(7*3600,0,
+    "pool.ntp.org",
+    "time.nist.gov",
+    "time.google.com");
 
   for(int a=1;a<=4;a++){
     Serial.printf("TARS: NTP ATTEMPT %d/4\n",a);
@@ -219,8 +230,7 @@ bool syncTime(){
         Serial.printf(
           "TARS: NTP VALID %04d-%02d-%02d %02d:%02d:%02d\n",
           t.tm_year+1900,t.tm_mon+1,t.tm_mday,
-          t.tm_hour,t.tm_min,t.tm_sec
-        );
+          t.tm_hour,t.tm_min,t.tm_sec);
 
         ntpOK=true;
         return true;
@@ -391,14 +401,14 @@ String recordRealtime(){
 
   for(;;){
     sttWS.loop();
-
     if(sttError)break;
 
     size_t bytes=0;
 
     if(i2s_read(
-      MIC_PORT,rawBuf,sizeof(rawBuf),&bytes,pdMS_TO_TICKS(30)
-    )!=ESP_OK)continue;
+      MIC_PORT,rawBuf,sizeof(rawBuf),
+      &bytes,pdMS_TO_TICKS(30))!=ESP_OK)
+      continue;
 
     size_t count=bytes/4;
     int32_t peak=0;
@@ -423,14 +433,17 @@ String recordRealtime(){
         voiceStart=millis();
         lastVoice=voiceStart;
 
-        size_t start=preCount==PREROLL_SAMPLES?prePos:0,n=0;
+        size_t start=
+          preCount==PREROLL_SAMPLES?prePos:0;
+        size_t n=0;
 
         for(size_t i=0;i<preCount;i++){
           size_t k=(start+i)%PREROLL_SAMPLES;
           sendBuf[n++]=preBuf[k];
 
           if(n==256){
-            if(!sttWS.sendBIN((uint8_t*)sendBuf,n*2)){
+            if(!sttWS.sendBIN(
+              (uint8_t*)sendBuf,n*2)){
               sttError=true;
               break;
             }
@@ -444,11 +457,12 @@ String recordRealtime(){
         samples+=preCount;
 
         Serial.printf(
-          "TARS: VOICE DETECTED PEAK=%ld\n",(long)peak
-        );
+          "TARS: VOICE DETECTED PEAK=%ld\n",
+          (long)peak);
       }
     }else{
-      if(!sttWS.sendBIN((uint8_t*)pcmBuf,count*2)){
+      if(!sttWS.sendBIN(
+        (uint8_t*)pcmBuf,count*2)){
         Serial.println("TARS: STT PCM SEND FAILED");
         sttError=true;
         break;
@@ -506,8 +520,7 @@ String ask(const String&q){
 
   Serial.printf(
     "TARS: ASK HTTP=%d TIME=%lu ms\n",
-    code,(unsigned long)(millis()-t)
-  );
+    code,(unsigned long)(millis()-t));
 
   if(code<200||code>=300){
     h.end();
@@ -555,8 +568,7 @@ bool streamAudio(const String&url,const String&text){
 
   Serial.printf(
     "TARS: AUDIO HTTP=%d TIME=%lu ms\n",
-    code,(unsigned long)(millis()-t)
-  );
+    code,(unsigned long)(millis()-t));
 
   if(code<200||code>=300){
     h.end();
@@ -564,7 +576,6 @@ bool streamAudio(const String&url,const String&text){
   }
 
   WiFiClient*stream=h.getStreamPtr();
-
   if(!stream){
     h.end();
     return false;
@@ -577,21 +588,15 @@ bool streamAudio(const String&url,const String&text){
     return false;
   }
 
-  /*
-    MP3 AUDIO PATH:
-    MeloTTS MP3
-      -> HTTP stream
-      -> MP3DecoderHelix
-      -> PCM native MP3 format
-      -> AnalogAudioStream
-      -> GPIO26 RIGHT
+  converter.end();
 
-    Tidak ada converter sample-rate.
-    Tidak ada mono->stereo converter.
-    AudioTools menangani AudioInfo dari decoder.
-  */
+  if(!converter.begin(AUDIO_IN,AUDIO_OUT)){
+    Serial.println("TARS: AUDIO CONVERTER ERROR");
+    h.end();
+    return false;
+  }
 
-  dec.addNotifyAudioChange(analog);
+  dec.addNotifyAudioChange(converter);
   dec.begin();
 
   copier.begin(dec,*stream);
@@ -600,7 +605,8 @@ bool streamAudio(const String&url,const String&text){
   playing=true;
 
   bool started=false;
-  uint32_t start=millis(),lastData=start;
+  uint32_t start=millis();
+  uint32_t lastData=start;
 
   Serial.println("TARS: AUDIO STREAM START");
 
@@ -613,20 +619,21 @@ bool streamAudio(const String&url,const String&text){
 
       if(!started){
         started=true;
-
         Serial.printf(
           "TARS: AUDIO FIRST DATA=%lu ms\n",
-          (unsigned long)(millis()-start)
-        );
-
+          (unsigned long)(millis()-start));
         oledStartSpeak(text);
       }
     }
 
-    if(started&&!available&&millis()-lastData>=AUDIO_IDLE_MS)
+    if(started&&
+       !available&&
+       millis()-lastData>=AUDIO_IDLE_MS)
       break;
 
-    if(!started&&!h.connected()&&!available)
+    if(!started&&
+       !h.connected()&&
+       !available)
       break;
 
     yield();
@@ -634,17 +641,16 @@ bool streamAudio(const String&url,const String&text){
 
   Serial.printf(
     "TARS: AUDIO STREAM=%lu ms\n",
-    (unsigned long)(millis()-start)
-  );
+    (unsigned long)(millis()-start));
 
   dec.end();
+  converter.end();
   h.end();
   playing=false;
 
   Serial.printf(
     "TARS: AUDIO TOTAL=%lu ms\n",
-    (unsigned long)(millis()-totalStart)
-  );
+    (unsigned long)(millis()-totalStart));
 
   oledSetListening();
   return started;
@@ -668,7 +674,9 @@ void processQuestion(const String&q){
 
   singMode=singRequest(q);
 
-  String url=String(TARS_CLOUD_URL)+(singMode?"/sing":"/tts");
+  String url=String(TARS_CLOUD_URL)+
+             (singMode?"/sing":"/tts");
+
   String payload=singMode?q:answer;
 
   uint32_t t=millis();
@@ -676,8 +684,7 @@ void processQuestion(const String&q){
 
   Serial.printf(
     "TARS: AUDIO FUNCTION TIME=%lu ms\n",
-    (unsigned long)(millis()-t)
-  );
+    (unsigned long)(millis()-t));
 
   oledSetStatus(ok?"LISTENING":"AUDIO ERROR");
   singMode=false;
@@ -686,15 +693,14 @@ void processQuestion(const String&q){
 void setup(){
   Serial.begin(SERIAL_BAUD);
 
-  AudioToolsLogger.begin(
-    Serial,
-    AudioToolsLogLevel::Info
-  );
+  /* AudioTools log sengaja tidak diaktifkan.
+     Serial Monitor tetap hanya menampilkan log TARS. */
 
   Wire.begin(OLED_SDA,OLED_SCL);
   Wire.setClock(400000);
 
-  oledOK=oled.begin(SSD1306_SWITCHCAPVCC,OLED_ADDR);
+  oledOK=oled.begin(
+    SSD1306_SWITCHCAPVCC,OLED_ADDR);
 
   if(oledOK){
     oledHeader();
@@ -709,8 +715,7 @@ void setup(){
   Serial.printf(
     "TARS: DAC=%s MIC=%s\n",
     dacOK?"READY":"ERROR",
-    micOK?"READY":"ERROR"
-  );
+    micOK?"READY":"ERROR");
 
   Serial.println("TARS: PAM RIGHT GPIO26");
   Serial.println("TARS: INMP441 RIGHT GPIO34");
@@ -721,12 +726,12 @@ void setup(){
   Serial.println("TARS: STT REALTIME PCM");
   Serial.println("TARS: BLUETOOTH DISABLED");
   Serial.println("TARS: MP3 STREAMING ENABLED");
-  Serial.println("TARS: AUDIOTOOLS LOG=INFO");
+  Serial.println("TARS: AUDIO CONVERTER 22050/1 -> 44100/2");
 
   if(oledOK)
     xTaskCreatePinnedToCore(
-      oledTask,"TARS_OLED",4096,nullptr,1,nullptr,0
-    );
+      oledTask,"TARS_OLED",4096,
+      nullptr,1,nullptr,0);
 
   wifiManagerBegin();
 
