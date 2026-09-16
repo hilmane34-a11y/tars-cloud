@@ -31,8 +31,44 @@ Adafruit_SSD1306 oled(OLED_WIDTH,OLED_HEIGHT,&Wire,-1);
 AnalogAudioStream analog;
 MP3DecoderHelix mp3;
 WAVDecoder wav;
-EncodedAudioStream mp3Dec(&analog,&mp3);
-EncodedAudioStream wavDec(&analog,&wav);
+
+class MonoStereoStream:public AudioStream{
+public:
+  MonoStereoStream(AudioStream&out):dst(out){}
+  bool begin(){return true;}
+  void end(){}
+  size_t write(const uint8_t*d,size_t len)override{
+    size_t n=len/2;
+    size_t p=0;
+    while(p<n){
+      size_t frames=min((size_t)512,n-p);
+      for(size_t i=0;i<frames;i++){
+        int16_t v=((const int16_t*)d)[p+i];
+        buf[i*2]=v;
+        buf[i*2+1]=v;
+      }
+      size_t w=dst.write((uint8_t*)buf,frames*4);
+      p+=w/4;
+      if(w<frames*4)break;
+    }
+    return p*2;
+  }
+  int availableForWrite()override{return dst.availableForWrite();}
+  void flush()override{dst.flush();}
+  void setAudioInfo(AudioInfo i)override{
+    i.channels=2;
+    AudioStream::setAudioInfo(i);
+    dst.setAudioInfo(i);
+  }
+  AudioInfo audioInfo()override{return AudioStream::audioInfo();}
+private:
+  AudioStream&dst;
+  int16_t buf[1024];
+};
+
+MonoStereoStream stereoOut(analog);
+EncodedAudioStream mp3Dec(&stereoOut,&mp3);
+EncodedAudioStream wavDec(&stereoOut,&wav);
 StreamCopy copier;
 WebSocketsClient sttWS;
 
@@ -401,7 +437,7 @@ String ask(const String&q){
   return s;
 }
 
-/* TTS AUTO MP3/WAV + AUTO AUDIOINFO */
+/* TTS AUTO MP3/WAV + MONO->STEREO */
 bool streamAudio(const String&text){
   if(!wifiOK())return false;
 
@@ -471,9 +507,9 @@ bool streamAudio(const String&text){
 
   if(isWav){
     Serial.println("TARS: FORMAT=WAV");
-    Serial.println("TARS: WAV AUTO AUDIOINFO");
+    Serial.println("TARS: WAV MONO->STEREO");
 
-    wavDec.addNotifyAudioChange(analog);
+    wavDec.addNotifyAudioChange(stereoOut);
     wavDec.begin();
     copier.begin(wavDec,*stream);
     copier.setSynchAudioInfo(true);
@@ -481,9 +517,9 @@ bool streamAudio(const String&text){
     Serial.println("TARS: WAV STREAM START");
   }else{
     Serial.println("TARS: FORMAT=MP3");
-    Serial.println("TARS: MP3 AUTO AUDIOINFO");
+    Serial.println("TARS: MP3 MONO->STEREO");
 
-    mp3Dec.addNotifyAudioChange(analog);
+    mp3Dec.addNotifyAudioChange(stereoOut);
     mp3Dec.begin();
     copier.begin(mp3Dec,*stream);
     copier.setSynchAudioInfo(true);
@@ -609,6 +645,7 @@ void setup(){
   Serial.println("TARS: STT REALTIME PCM");
   Serial.println("TARS: BLUETOOTH DISABLED");
   Serial.println("TARS: MP3/WAV AUTO STREAMING");
+  Serial.println("TARS: MONO->STEREO CONVERTER");
   Serial.println("TARS: AUTO AUDIOINFO");
   Serial.println("TARS: TTS = MELOTTS");
 
