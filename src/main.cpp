@@ -117,11 +117,16 @@ void oledTask(void*){
 /* DAC */
 bool initDAC(){
   auto cfg=analog.defaultConfig(TX_MODE);
+  cfg.sample_rate=44100;
   cfg.channels=2;
+  cfg.bits_per_sample=16;
+
   if(!analog.begin(cfg)){
     Serial.println("TARS: DAC ERROR");return false;
   }
+
   Serial.println("TARS: PAM RIGHT GPIO26 READY");
+  Serial.println("TARS: DAC 44100 Hz / 2 CH / 16 BIT");
   return true;
 }
 
@@ -452,10 +457,17 @@ bool streamAudio(const String&text){
   while(stream->available()<1024&&millis()-bs<500)delay(2);
 
   /*
-   * PENTING:
-   * Decoder boleh menghasilkan mono.
-   * Output converter SELALU dipaksa stereo 44.1kHz/16bit.
-   * Jadi AnalogAudioStream tidak pernah menerima AudioInfo mono.
+   * AUDIO CHAIN:
+   * WAV/MP3 decoder -> FormatConverterStream -> AnalogAudioStream
+   *
+   * Input TTS WAV:
+   * 44100 Hz / 1 CH / 16 BIT
+   *
+   * Output DAC:
+   * 44100 Hz / 2 CH / 16 BIT
+   *
+   * AudioInfo output dijaga tetap stereo agar PAM
+   * tetap menggunakan jalur output yang sama dengan MP3.
    */
   stereoOut.begin(audioIn,audioOut);
 
@@ -466,7 +478,6 @@ bool streamAudio(const String&text){
     wavDec.addNotifyAudioChange(stereoOut);
     wavDec.begin();
     copier.begin(wavDec,*stream);
-    copier.setSynchAudioInfo(true);
 
     Serial.println("TARS: WAV STREAM START");
   }else{
@@ -476,7 +487,6 @@ bool streamAudio(const String&text){
     mp3Dec.addNotifyAudioChange(stereoOut);
     mp3Dec.begin();
     copier.begin(mp3Dec,*stream);
-    copier.setSynchAudioInfo(true);
 
     Serial.println("TARS: MP3 STREAM START");
   }
