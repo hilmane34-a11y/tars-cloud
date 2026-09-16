@@ -32,41 +32,9 @@ AnalogAudioStream analog;
 MP3DecoderHelix mp3;
 WAVDecoder wav;
 
-class MonoStereoStream:public AudioStream{
-public:
-  MonoStereoStream(AudioStream&out):dst(out){}
-  bool begin(){return true;}
-  void end(){}
-  size_t write(const uint8_t*d,size_t len)override{
-    size_t n=len/2;
-    size_t p=0;
-    while(p<n){
-      size_t frames=min((size_t)512,n-p);
-      for(size_t i=0;i<frames;i++){
-        int16_t v=((const int16_t*)d)[p+i];
-        buf[i*2]=v;
-        buf[i*2+1]=v;
-      }
-      size_t w=dst.write((uint8_t*)buf,frames*4);
-      p+=w/4;
-      if(w<frames*4)break;
-    }
-    return p*2;
-  }
-  int availableForWrite()override{return dst.availableForWrite();}
-  void flush()override{dst.flush();}
-  void setAudioInfo(AudioInfo i)override{
-    i.channels=2;
-    AudioStream::setAudioInfo(i);
-    dst.setAudioInfo(i);
-  }
-  AudioInfo audioInfo()override{return AudioStream::audioInfo();}
-private:
-  AudioStream&dst;
-  int16_t buf[1024];
-};
-
-MonoStereoStream stereoOut(analog);
+/* AUDIO: decoder -> mono/stereo converter -> stereo DAC */
+AudioInfo audioIn(44100,1,16),audioOut(44100,2,16);
+FormatConverterStream stereoOut(analog);
 EncodedAudioStream mp3Dec(&stereoOut,&mp3);
 EncodedAudioStream wavDec(&stereoOut,&wav);
 StreamCopy copier;
@@ -74,7 +42,6 @@ WebSocketsClient sttWS;
 
 bool oledOK=false,micOK=false,dacOK=false,playing=false,ntpOK=false;
 bool sttConnected=false,sttReady=false,sttDone=false,sttError=false;
-
 String sttFinal,sttPartial,oledText,oledStatus="READY";
 uint32_t oledTypePos=0,oledLastType=0,oledLastWave=0;
 
@@ -97,10 +64,8 @@ void oledTask(void*){
     if(!oledOK){vTaskDelay(pdMS_TO_TICKS(50));continue;}
     uint32_t now=millis();
 
-    if(oledText.length()&&oledTypePos<oledText.length()&&
-       now-oledLastType>=OLED_TYPE_MS){
-      oledTypePos++;oledLastType=now;
-    }
+    if(oledText.length()&&oledTypePos<oledText.length()&&now-oledLastType>=OLED_TYPE_MS)
+      oledTypePos++,oledLastType=now;
 
     if(now-oledLastWave>=OLED_WAVE_MS){
       oledLastWave=now;oled.clearDisplay();oled.setTextColor(SSD1306_WHITE);
@@ -113,10 +78,7 @@ void oledTask(void*){
 
         for(size_t i=0;i<src.length();i++){
           char c=src[i];
-          if(c=='\n'){
-            if(n<20)lines[n++]=line;
-            line="";continue;
-          }
+          if(c=='\n'){if(n<20)lines[n++]=line;line="";continue;}
           line+=c;
           if(line.length()>=20){
             int cut=line.lastIndexOf(' ');
@@ -134,7 +96,6 @@ void oledTask(void*){
 
         if(line.length()&&n<20)lines[n++]=line;
         int first=n?(n-1)/4*4:0;
-
         for(int i=0;i<4&&first+i<n;i++){
           oled.setCursor(3,27+i*8);oled.print(lines[first+i]);
         }
@@ -158,8 +119,7 @@ bool initDAC(){
   auto cfg=analog.defaultConfig(TX_MODE);
   cfg.channels=2;
   if(!analog.begin(cfg)){
-    Serial.println("TARS: DAC ERROR");
-    return false;
+    Serial.println("TARS: DAC ERROR");return false;
   }
   Serial.println("TARS: PAM RIGHT GPIO26 READY");
   return true;
@@ -169,12 +129,10 @@ bool initDAC(){
 bool initMic(){
   i2s_config_t c={};
   c.mode=(i2s_mode_t)(I2S_MODE_MASTER|I2S_MODE_RX);
-  c.sample_rate=MIC_RATE;
-  c.bits_per_sample=I2S_BITS_PER_SAMPLE_32BIT;
+  c.sample_rate=MIC_RATE;c.bits_per_sample=I2S_BITS_PER_SAMPLE_32BIT;
   c.channel_format=I2S_CHANNEL_FMT_ONLY_RIGHT;
   c.communication_format=I2S_COMM_FORMAT_STAND_I2S;
-  c.intr_alloc_flags=ESP_INTR_FLAG_LEVEL1;
-  c.dma_buf_count=2;c.dma_buf_len=256;
+  c.intr_alloc_flags=ESP_INTR_FLAG_LEVEL1;c.dma_buf_count=2;c.dma_buf_len=256;
   c.use_apll=false;c.tx_desc_auto_clear=false;c.fixed_mclk=0;
 
   if(i2s_driver_install(MIC_PORT,&c,0,nullptr)!=ESP_OK)return false;
@@ -238,17 +196,14 @@ void sttEvent(WStype_t type,uint8_t*payload,size_t length){
   if(type==WStype_CONNECTED){
     sttConnected=true;Serial.println("TARS: STT WS CONNECTED");return;
   }
-
   if(type==WStype_DISCONNECTED){
     sttConnected=false;
     if(!sttDone)sttError=true;
     Serial.println("TARS: STT WS DISCONNECTED");return;
   }
-
   if(type==WStype_ERROR){
     sttError=true;Serial.println("TARS: STT WS ERROR");return;
   }
-
   if(type!=WStype_TEXT)return;
 
   String msg;msg.reserve(length+1);
@@ -410,7 +365,6 @@ String ask(const String&q){
   HTTPClient h;
 
   if(!h.begin(c,String(TARS_CLOUD_URL)+"/ask"))return "";
-
   h.setTimeout(12000);
   h.addHeader("Content-Type","application/json");
 
@@ -423,9 +377,7 @@ String ask(const String&q){
   Serial.printf("TARS: ASK HTTP=%d TIME=%lu ms\n",
     code,(unsigned long)(millis()-t));
 
-  if(code<200||code>=300){
-    h.end();return "";
-  }
+  if(code<200||code>=300){h.end();return "";}
 
   String r=h.getString();h.end();
   JsonDocument x;
@@ -437,7 +389,7 @@ String ask(const String&q){
   return s;
 }
 
-/* TTS AUTO MP3/WAV + MONO->STEREO */
+/* TTS AUTO MP3/WAV -> STEREO 44.1kHz/16bit */
 bool streamAudio(const String&text){
   if(!wifiOK())return false;
 
@@ -451,7 +403,6 @@ bool streamAudio(const String&text){
 
   h.setTimeout(60000);
   h.addHeader("Content-Type","application/json");
-
   const char* hdr[]={"Content-Type"};
   h.collectHeaders(hdr,1);
 
@@ -472,7 +423,8 @@ bool streamAudio(const String&text){
 
   String ct=h.header("Content-Type");
   ct.toLowerCase();
-  Serial.print("TARS: CONTENT-TYPE=");Serial.println(ct);
+  Serial.print("TARS: CONTENT-TYPE=");
+  Serial.println(ct);
 
   WiFiClient*stream=h.getStreamPtr();
   if(!stream){
@@ -483,15 +435,13 @@ bool streamAudio(const String&text){
   if(!dacOK)dacOK=initDAC();
   if(!dacOK){h.end();return false;}
 
-  bool isWav=
-    ct.indexOf("audio/wav")>=0||
-    ct.indexOf("audio/x-wav")>=0||
-    ct.indexOf("audio/wave")>=0||
-    ct.indexOf("application/wav")>=0;
+  bool isWav=ct.indexOf("audio/wav")>=0||
+             ct.indexOf("audio/x-wav")>=0||
+             ct.indexOf("audio/wave")>=0||
+             ct.indexOf("application/wav")>=0;
 
-  bool isMp3=
-    ct.indexOf("audio/mpeg")>=0||
-    ct.indexOf("audio/mp3")>=0;
+  bool isMp3=ct.indexOf("audio/mpeg")>=0||
+             ct.indexOf("audio/mp3")>=0;
 
   if(!isWav&&!isMp3){
     Serial.println("TARS: TTS UNKNOWN AUDIO FORMAT");
@@ -501,9 +451,13 @@ bool streamAudio(const String&text){
   uint32_t bs=millis();
   while(stream->available()<1024&&millis()-bs<500)delay(2);
 
-  playing=true;
-  bool started=false;
-  uint32_t start=millis(),lastData=start,copyCount=0;
+  /*
+   * PENTING:
+   * Decoder boleh menghasilkan mono.
+   * Output converter SELALU dipaksa stereo 44.1kHz/16bit.
+   * Jadi AnalogAudioStream tidak pernah menerima AudioInfo mono.
+   */
+  stereoOut.begin(audioIn,audioOut);
 
   if(isWav){
     Serial.println("TARS: FORMAT=WAV");
@@ -527,6 +481,10 @@ bool streamAudio(const String&text){
     Serial.println("TARS: MP3 STREAM START");
   }
 
+  playing=true;
+  bool started=false;
+  uint32_t start=millis(),lastData=start,copyCount=0;
+
   while(true){
     bool copied=copier.copy();
 
@@ -537,8 +495,7 @@ bool streamAudio(const String&text){
         started=true;
         oledStartSpeak(text);
 
-        AudioInfo info=isWav?
-          wavDec.audioInfo():mp3Dec.audioInfo();
+        AudioInfo info=isWav?wavDec.audioInfo():mp3Dec.audioInfo();
 
         Serial.printf(
           "TARS: AUDIOINFO %lu Hz / %d CH / %d BIT\n",
@@ -548,6 +505,7 @@ bool streamAudio(const String&text){
         );
 
         Serial.printf(
+          "TARS: OUTPUT 44100 Hz / 2 CH / 16 BIT\n"
           "TARS: %s DECODE START=%lu ms\n",
           isWav?"WAV":"MP3",
           (unsigned long)(millis()-start)
@@ -557,11 +515,8 @@ bool streamAudio(const String&text){
 
     bool available=stream->available();
 
-    if(started&&!available&&millis()-lastData>=AUDIO_IDLE_MS)
-      break;
-
-    if(!started&&!h.connected()&&!available)
-      break;
+    if(started&&!available&&millis()-lastData>=AUDIO_IDLE_MS)break;
+    if(!started&&!h.connected()&&!available)break;
 
     if(millis()-start>70000){
       Serial.println("TARS: AUDIO TIMEOUT");
@@ -573,14 +528,15 @@ bool streamAudio(const String&text){
 
   Serial.printf("TARS: %s COPY CALLS=%lu\n",
     isWav?"WAV":"MP3",(unsigned long)copyCount);
-
   Serial.printf("TARS: AUDIO STREAM=%lu ms\n",
     (unsigned long)(millis()-start));
 
   if(isWav)wavDec.end();
   else mp3Dec.end();
 
-  h.end();playing=false;
+  stereoOut.end();
+  h.end();
+  playing=false;
 
   Serial.printf("TARS: AUDIO TOTAL=%lu ms\n",
     (unsigned long)(millis()-totalStart));
@@ -588,10 +544,8 @@ bool streamAudio(const String&text){
   oledSetListening();
 
   if(!started)
-    Serial.printf(
-      "TARS: %s DATA RECEIVED BUT DECODER NEVER STARTED\n",
-      isWav?"WAV":"MP3"
-    );
+    Serial.printf("TARS: %s DATA RECEIVED BUT DECODER NEVER STARTED\n",
+      isWav?"WAV":"MP3");
 
   return started;
 }
@@ -645,7 +599,8 @@ void setup(){
   Serial.println("TARS: STT REALTIME PCM");
   Serial.println("TARS: BLUETOOTH DISABLED");
   Serial.println("TARS: MP3/WAV AUTO STREAMING");
-  Serial.println("TARS: MONO->STEREO CONVERTER");
+  Serial.println("TARS: MONO->STEREO FORMAT CONVERTER");
+  Serial.println("TARS: OUTPUT 44100 Hz / 2 CH / 16 BIT");
   Serial.println("TARS: AUTO AUDIOINFO");
   Serial.println("TARS: TTS = MELOTTS");
 
@@ -663,9 +618,7 @@ void setup(){
 
 /* LOOP */
 void loop(){
-  if(playing){
-    delay(1);return;
-  }
+  if(playing){delay(1);return;}
 
   if(WiFi.status()!=WL_CONNECTED&&!wifiOK()){
     oledSetStatus("WIFI ERROR");
