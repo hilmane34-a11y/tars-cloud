@@ -473,7 +473,7 @@ bool streamAudio(const String&text){
     Serial.println("TARS: FORMAT=WAV");
     Serial.println("TARS: WAV AUTO AUDIOINFO");
 
-    wavDec.setNotifyAudioChange(analog);
+    wavDec.addNotifyAudioChange(analog);
     wavDec.begin();
     copier.begin(wavDec,*stream);
     copier.setSynchAudioInfo(true);
@@ -483,7 +483,7 @@ bool streamAudio(const String&text){
     Serial.println("TARS: FORMAT=MP3");
     Serial.println("TARS: MP3 AUTO AUDIOINFO");
 
-    mp3Dec.setNotifyAudioChange(analog);
+    mp3Dec.addNotifyAudioChange(analog);
     mp3Dec.begin();
     copier.begin(mp3Dec,*stream);
     copier.setSynchAudioInfo(true);
