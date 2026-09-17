@@ -515,18 +515,60 @@ bool streamAudio(const String&url,const String&text){
     Serial.println("TARS: MP3 DECODER -> VOLUME -> ANALOG GPIO26");
 
     mp3Dec.begin();
+    StreamCopy mp3Copier(mp3Dec,*stream,MP3_COPY_BUFFER);
 
-    /* SATU-SATUNYA PERUBAHAN:
-       buffer StreamCopy MP3 diperbesar untuk mencegah starvation. */
-    copier.setBufferSize(MP3_COPY_BUFFER);
-    copier.begin(mp3Dec,*stream);
-  }else{
-    Serial.println("TARS: WAV PLAYBACK");
-    copier.setBufferSize(1024);
-    wavDec.addNotifyAudioChange(stereoOut);
-    wavDec.begin();
-    copier.begin(wavDec,*stream);
+    playing=true;
+
+    bool started=false;
+    uint32_t start=millis();
+    uint32_t lastData=start;
+
+    Serial.println("TARS: AUDIO STREAM START");
+
+    while(true){
+      bool copied=mp3Copier.copy();
+      bool available=stream->available();
+
+      if(copied){
+        lastData=millis();
+
+        if(!started){
+          started=true;
+
+          Serial.printf("TARS: AUDIO FIRST DATA=%lu ms\n",
+            (unsigned long)(millis()-start));
+
+          oledStartSpeak(text);
+        }
+      }
+
+      if(started&&!available&&millis()-lastData>=AUDIO_IDLE_MS)break;
+      if(!started&&!h.connected()&&!available)break;
+      if(millis()-start>70000)break;
+
+      yield();
+    }
+
+    Serial.printf("TARS: AUDIO STREAM=%lu ms\n",
+      (unsigned long)(millis()-start));
+
+    mp3Dec.end();
+    mp3Volume.end();
+
+    h.end();playing=false;
+
+    Serial.printf("TARS: AUDIO TOTAL=%lu ms\n",
+      (unsigned long)(millis()-totalStart));
+
+    oledSetListening();
+    return started;
   }
+
+  Serial.println("TARS: WAV PLAYBACK");
+
+  copier.begin(wavDec,*stream);
+  wavDec.addNotifyAudioChange(stereoOut);
+  wavDec.begin();
 
   playing=true;
 
@@ -563,14 +605,8 @@ bool streamAudio(const String&url,const String&text){
   Serial.printf("TARS: AUDIO STREAM=%lu ms\n",
     (unsigned long)(millis()-start));
 
-  if(isMp3){
-    mp3Dec.end();
-    mp3Volume.end();
-  }else{
-    wavDec.end();
-    stereoOut.end();
-  }
-
+  wavDec.end();
+  stereoOut.end();
   h.end();playing=false;
 
   Serial.printf("TARS: AUDIO TOTAL=%lu ms\n",
