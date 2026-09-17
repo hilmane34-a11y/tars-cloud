@@ -61,12 +61,15 @@ void oledHeader(){
   oled.clearDisplay();oled.setTextColor(SSD1306_WHITE);
   oled.setTextSize(2);oled.setCursor(36,0);oled.print("TARS");oled.display();
 }
+
 void oledSetStatus(const String&s){
   oledStatus=s;oledText="";oledTypePos=0;oledPage=0;oledLastPage=millis();
 }
+
 void oledSetListening(){
   oledStatus="LISTENING";oledText="";oledTypePos=0;oledPage=0;oledLastPage=millis();
 }
+
 void oledStartSpeak(const String&s){
   oledStatus="SPEAKING";oledText=s;oledTypePos=0;oledPage=0;
   oledLastType=millis();oledLastPage=millis();
@@ -89,49 +92,78 @@ void oledTask(void*){
 
       if(oledText.length()){
         String src=oledText.substring(0,min((size_t)oledTypePos,oledText.length()));
-        String lines[20],line;int n=0;
 
-        for(size_t i=0;i<src.length();i++){
-          char c=src[i];
-          if(c=='\n'){
-            if(n<20)lines[n++]=line;
-            line="";continue;
+        uint32_t targetLine=oledPage*4,lineNo=0;
+        uint8_t shown=0;
+        bool hasNextPage=false;
+        String line;
+
+        for(size_t i=0;i<=src.length();i++){
+          char c=(i<src.length())?src[i]:'\0';
+
+          if(c=='\n'||c=='\0'){
+            if(lineNo>=targetLine&&shown<4){
+              oled.setCursor(3,27+shown*8);
+              oled.print(line);
+              shown++;
+            }
+
+            line="";
+            lineNo++;
+
+            if(shown>=4){
+              if(i<src.length())hasNextPage=true;
+              break;
+            }
+            continue;
           }
+
           line+=c;
+
           if(line.length()>=20){
             int cut=line.lastIndexOf(' ');
+
             if(cut>0){
               String rest=line.substring(cut+1);
               line=line.substring(0,cut);
-              if(n<20)lines[n++]=line;
+
+              if(lineNo>=targetLine&&shown<4){
+                oled.setCursor(3,27+shown*8);
+                oled.print(line);
+                shown++;
+              }
+
               line=rest;
+              lineNo++;
+
+              if(shown>=4){
+                if(i+1<src.length())hasNextPage=true;
+                break;
+              }
             }else{
-              if(n<20)lines[n++]=line;
+              if(lineNo>=targetLine&&shown<4){
+                oled.setCursor(3,27+shown*8);
+                oled.print(line);
+                shown++;
+              }
+
               line="";
+              lineNo++;
+
+              if(shown>=4){
+                if(i+1<src.length())hasNextPage=true;
+                break;
+              }
             }
           }
         }
 
-        if(line.length()&&n<20)lines[n++]=line;
-
-        uint32_t pages=(n+3)/4;
-
-        if(pages){
-          if(oledPage>=pages)oledPage=pages-1;
-
-          if(oledStatus=="SPEAKING"&&now-oledLastPage>=OLED_PAGE_MS){
-            if(oledPage+1<pages){
-              oledPage++;
-              oledLastPage=now;
-            }else if(oledTypePos<oledText.length()){
-              oledLastPage=now;
-            }
-          }
-
-          int first=oledPage*4;
-          for(int i=0;i<4&&first+i<n;i++){
-            oled.setCursor(3,27+i*8);
-            oled.print(lines[first+i]);
+        if(oledStatus=="SPEAKING"&&now-oledLastPage>=OLED_PAGE_MS){
+          if(hasNextPage){
+            oledPage++;
+            oledLastPage=now;
+          }else if(oledTypePos<oledText.length()){
+            oledLastPage=now;
           }
         }
       }
