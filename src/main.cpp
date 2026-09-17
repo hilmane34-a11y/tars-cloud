@@ -28,14 +28,15 @@ const int32_t MIC_THRESHOLD=8000,MIC_SILENCE=6000;
 const size_t BUF=2048,PREROLL_SAMPLES=MIC_RATE*PREROLL_MS/1000;
 const char* STT_HOST="tars-cloud-v1.hilmane34.workers.dev";
 
+const float MP3_VOLUME=0.85f;
+
 Adafruit_SSD1306 oled(OLED_WIDTH,OLED_HEIGHT,&Wire,-1);
 AnalogAudioStream analog;
 
-/* MP3: jalur langsung seperti firmware ElevenLabs lama */
 MP3DecoderHelix mp3;
-EncodedAudioStream mp3Dec(&analog,&mp3);
+VolumeStream mp3Volume(analog);
+EncodedAudioStream mp3Dec(&mp3Volume,&mp3);
 
-/* WAV: jalur lama tetap dipertahankan */
 WAVDecoder wav;
 AudioInfo audioIn(44100,1,16),audioOut(44100,2,16);
 FormatConverterStream stereoOut(analog);
@@ -55,7 +56,6 @@ static int16_t pcmBuf[BUF/4];
 static int16_t preBuf[PREROLL_SAMPLES];
 static int16_t sendBuf[256];
 
-/* OLED */
 void oledHeader(){
   if(!oledOK)return;
   oled.clearDisplay();
@@ -168,7 +168,6 @@ void oledTask(void*){
   }
 }
 
-/* DAC */
 bool initDAC(){
   auto cfg=analog.defaultConfig(TX_MODE);
   cfg.sample_rate=44100;
@@ -180,11 +179,25 @@ bool initDAC(){
     return false;
   }
 
-  Serial.println("TARS: PAM RIGHT GPIO26 READY");
+  auto vcfg=mp3Volume.defaultConfig();
+  vcfg.copyFrom(cfg);
+  vcfg.volume=MP3_VOLUME;
+  vcfg.allow_boost=false;
+
+  if(!mp3Volume.begin(vcfg)){
+    Serial.println("TARS: MP3 VOLUME ERROR");
+    return false;
+  }
+
+  mp3Volume.setVolume(MP3_VOLUME);
+
+  Serial.printf(
+    "TARS: PAM RIGHT GPIO26 READY MP3 VOL=%.2f\n",
+    MP3_VOLUME
+  );
   return true;
 }
 
-/* INMP441 */
 bool initMic(){
   i2s_config_t c={};
   c.mode=(i2s_mode_t)(I2S_MODE_MASTER|I2S_MODE_RX);
@@ -214,14 +227,15 @@ bool initMic(){
   return true;
 }
 
-/* NTP */
 bool syncTime(){
   if(ntpOK)return true;
 
-  configTime(7*3600,0,
-             "pool.ntp.org",
-             "time.nist.gov",
-             "time.google.com");
+  configTime(
+    7*3600,0,
+    "pool.ntp.org",
+    "time.nist.gov",
+    "time.google.com"
+  );
 
   for(int a=1;a<=4;a++){
     Serial.printf("TARS: NTP ATTEMPT %d/4\n",a);
@@ -251,7 +265,6 @@ bool syncTime(){
   return false;
 }
 
-/* WIFI */
 bool wifiOK(){
   if(WiFi.status()==WL_CONNECTED)return true;
   return wifiManagerConnect(false)&&WiFi.status()==WL_CONNECTED;
@@ -277,7 +290,6 @@ bool bootWiFi(){
   return true;
 }
 
-/* REALTIME STT */
 void sttEvent(WStype_t type,uint8_t*payload,size_t length){
   if(type==WStype_CONNECTED){
     sttConnected=true;
@@ -313,8 +325,7 @@ void sttEvent(WStype_t type,uint8_t*payload,size_t length){
   if(t=="ready"){
     sttReady=true;
     Serial.println("TARS: STT REALTIME READY");
-  }
-  else if(t=="partial"){
+  }else if(t=="partial"){
     sttPartial=j["text"].as<String>();
     sttPartial.trim();
 
@@ -322,16 +333,14 @@ void sttEvent(WStype_t type,uint8_t*payload,size_t length){
       Serial.print("TARS: STT PARTIAL = ");
       Serial.println(sttPartial);
     }
-  }
-  else if(t=="final"){
+  }else if(t=="final"){
     sttFinal=j["text"].as<String>();
     sttFinal.trim();
     sttDone=true;
 
     Serial.print("TARS: YOU SAID = ");
     Serial.println(sttFinal);
-  }
-  else if(t=="error"){
+  }else if(t=="error"){
     sttError=true;
     sttDone=true;
 
@@ -475,8 +484,7 @@ String recordRealtime(){
           (long)peak
         );
       }
-    }
-    else{
+    }else{
       if(!sttWS.sendBIN(
         (uint8_t*)pcmBuf,count*2
       )){
@@ -512,7 +520,6 @@ String recordRealtime(){
   return stopSTT(samples);
 }
 
-/* ASK — TIDAK DIUBAH */
 String ask(const String&q){
   if(!wifiOK())return "";
 
@@ -555,9 +562,6 @@ String ask(const String&q){
   return s;
 }
 
-/* AUDIO
-   MP3 = jalur langsung proven dari ElevenLabs lama.
-   WAV = converter lama tetap dipakai. */
 bool streamAudio(const String&url,const String&text){
   if(!wifiOK())return false;
 
@@ -639,20 +643,16 @@ bool streamAudio(const String&url,const String&text){
   Serial.println(isWav?"WAV":"MP3");
   Serial.println("TARS: ===== END TTS DIAGNOSTIC =====");
 
-  /*
-     PENTING:
-     MP3 TIDAK menggunakan stereoOut/FormatConverterStream.
-     Ini sama seperti kode ElevenLabs lama:
-       MP3DecoderHelix -> AnalogAudioStream -> GPIO26
-  */
   if(isMp3){
-    Serial.println("TARS: MP3 DIRECT PLAYBACK");
-    Serial.println("TARS: MP3 DECODER -> ANALOG GPIO26");
+    Serial.printf(
+      "TARS: MP3 DIRECT PLAYBACK VOL=%.2f\n",
+      MP3_VOLUME
+    );
+    Serial.println("TARS: MP3 DECODER -> VOLUME -> ANALOG GPIO26");
 
     mp3Dec.begin();
     copier.begin(mp3Dec,*stream);
-  }
-  else{
+  }else{
     Serial.println("TARS: WAV PLAYBACK");
 
     wavDec.addNotifyAudioChange(stereoOut);
@@ -707,6 +707,7 @@ bool streamAudio(const String&url,const String&text){
 
   if(isMp3){
     mp3Dec.end();
+    mp3Volume.end();
   }else{
     wavDec.end();
     stereoOut.end();
@@ -724,7 +725,6 @@ bool streamAudio(const String&url,const String&text){
   return started;
 }
 
-/* PROCESS */
 void processQuestion(const String&q){
   String answer=ask(q);
 
@@ -746,7 +746,6 @@ void processQuestion(const String&q){
   oledSetStatus(ok?"LISTENING":"AUDIO ERROR");
 }
 
-/* SETUP */
 void setup(){
   Serial.begin(SERIAL_BAUD);
 
@@ -795,7 +794,6 @@ void setup(){
   oledSetListening();
 }
 
-/* LOOP */
 void loop(){
   if(playing){
     delay(1);
