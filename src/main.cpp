@@ -75,17 +75,20 @@ class AudioRingStream:public Stream{
       int av=src?src->available():0;
 
       if(av>0){
-        size_t freeSpace=AUDIO_RING_SIZE-available();
+        size_t freeSpace=AUDIO_RING_SIZE-(size_t)available();
         if(!freeSpace){
           vTaskDelay(pdMS_TO_TICKS(1));
           continue;
         }
 
-        size_t want=min((size_t)av,min(sizeof(tmp),freeSpace));
-        int n=src->read(tmp,want);
+        size_t a=(size_t)av;
+        size_t b=sizeof(tmp);
+        size_t want=a<b?a:b;
+        if(want>freeSpace)want=freeSpace;
 
+        int n=src->read(tmp,want);
         if(n>0){
-          push(tmp,n);
+          push(tmp,(size_t)n);
           received+=n;
           last=millis();
           if(expected>=0&&received>=expected)break;
@@ -106,13 +109,21 @@ class AudioRingStream:public Stream{
 
   size_t push(const uint8_t*p,size_t n){
     portENTER_CRITICAL(&mux);
-    size_t freeSpace=AUDIO_RING_SIZE-count;
+
+    size_t c=(size_t)count;
+    size_t freeSpace=AUDIO_RING_SIZE-c;
     if(n>freeSpace)n=freeSpace;
-    size_t first=min(n,AUDIO_RING_SIZE-head);
-    memcpy(buf+head,p,first);
+
+    size_t h=(size_t)head;
+    size_t remain=AUDIO_RING_SIZE-h;
+    size_t first=n<remain?n:remain;
+
+    memcpy(buf+h,p,first);
     if(n>first)memcpy(buf,p+first,n-first);
-    head=(head+n)%AUDIO_RING_SIZE;
+
+    head=(h+n)%AUDIO_RING_SIZE;
     count+=n;
+
     portEXIT_CRITICAL(&mux);
     return n;
   }
@@ -150,29 +161,35 @@ public:
 
   bool finished(){return done&&available()==0;}
 
-  size_t available(){
+  int available() override{
     portENTER_CRITICAL(&mux);
-    size_t n=count;
+    int n=(int)count;
     portEXIT_CRITICAL(&mux);
     return n;
   }
 
-  int read(){
+  int read() override{
     uint8_t c;
     return read(&c,1)==1?c:-1;
   }
 
-  int read(uint8_t*p,size_t n){
+  int read(uint8_t*p,size_t n) override{
     if(!p||!n)return 0;
 
     portENTER_CRITICAL(&mux);
-    size_t take=min(n,count);
+
+    size_t c=(size_t)count;
+    size_t take=n<c?n:c;
 
     if(take){
-      size_t first=min(take,AUDIO_RING_SIZE-tail);
-      memcpy(p,buf+tail,first);
+      size_t t=(size_t)tail;
+      size_t remain=AUDIO_RING_SIZE-t;
+      size_t first=take<remain?take:remain;
+
+      memcpy(p,buf+t,first);
       if(take>first)memcpy(p+first,buf,take-first);
-      tail=(tail+take)%AUDIO_RING_SIZE;
+
+      tail=(t+take)%AUDIO_RING_SIZE;
       count-=take;
     }
 
@@ -180,21 +197,21 @@ public:
     return (int)take;
   }
 
-  int peek(){
+  int peek() override{
     portENTER_CRITICAL(&mux);
     int r=count?buf[tail]:-1;
     portEXIT_CRITICAL(&mux);
     return r;
   }
 
-  void flush(){
+  void flush() override{
     portENTER_CRITICAL(&mux);
     head=tail=count=0;
     portEXIT_CRITICAL(&mux);
   }
 
-  size_t write(uint8_t){return 0;}
-  size_t write(const uint8_t*,size_t){return 0;}
+  size_t write(uint8_t) override{return 0;}
+  size_t write(const uint8_t*,size_t) override{return 0;}
 };
 
 AudioRingStream audioRing;
@@ -259,7 +276,10 @@ void oledTask(void*){
       oled.print(oledStatus);
 
       if(oledText.length()){
-        String src=oledText.substring(min((size_t)oledTypePos,oledText.length()));
+        size_t pos=(size_t)oledTypePos;
+        if(pos>oledText.length())pos=oledText.length();
+
+        String src=oledText.substring(0,pos);
         uint32_t targetLine=oledPage*4,lineNo=0;
         uint8_t shown=0;
         bool hasNextPage=false;
@@ -411,11 +431,8 @@ bool syncTime(){
         struct tm t;
         localtime_r(&now,&t);
 
-        Serial.printf(
-          "TARS: NTP VALID %04d-%02d-%02d %02d:%02d:%02d\n",
-          t.tm_year+1900,t.tm_mon+1,t.tm_mday,
-          t.tm_hour,t.tm_min,t.tm_sec
-        );
+        Serial.printf("TARS: NTP VALID %04d-%02d-%02d %02d:%02d:%02d\n",
+          t.tm_year+1900,t.tm_mon+1,t.tm_mday,t.tm_hour,t.tm_min,t.tm_sec);
 
         ntpOK=true;
         return true;
@@ -478,7 +495,6 @@ void sttEvent(WStype_t type,uint8_t*payload,size_t length){
 
   String msg;
   msg.reserve(length+1);
-
   for(size_t i=0;i<length;i++)msg+=(char)payload[i];
 
   JsonDocument j;
