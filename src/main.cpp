@@ -28,20 +28,17 @@ const int32_t MIC_THRESHOLD=8000,MIC_SILENCE=6000;
 const size_t BUF=2048,PREROLL_SAMPLES=MIC_RATE*PREROLL_MS/1000;
 const char* STT_HOST="tars-cloud-v1.hilmane34.workers.dev";
 const float MP3_VOLUME=0.85f;
-const int MP3_COPY_BUFFER=8192;
+const int MP3_COPY_BUFFER=4096;
 
 Adafruit_SSD1306 oled(OLED_WIDTH,OLED_HEIGHT,&Wire,-1);
 AnalogAudioStream analog;
-
 MP3DecoderHelix mp3;
 VolumeStream mp3Volume(analog);
 EncodedAudioStream mp3Dec(&mp3Volume,&mp3);
-
 WAVDecoder wav;
 AudioInfo audioIn(44100,1,16),audioOut(44100,2,16);
 FormatConverterStream stereoOut(analog);
 EncodedAudioStream wavDec(&stereoOut,&wav);
-
 StreamCopy copier;
 WebSocketsClient sttWS;
 
@@ -62,14 +59,8 @@ void oledHeader(){
   oled.setTextSize(2);oled.setCursor(36,0);oled.print("TARS");oled.display();
 }
 
-void oledSetStatus(const String&s){
-  oledStatus=s;oledText="";oledTypePos=0;
-}
-
-void oledSetListening(){
-  oledStatus="LISTENING";oledText="";oledTypePos=0;
-}
-
+void oledSetStatus(const String&s){oledStatus=s;oledText="";oledTypePos=0;}
+void oledSetListening(){oledStatus="LISTENING";oledText="";oledTypePos=0;}
 void oledStartSpeak(const String&s){
   oledStatus="SPEAKING";oledText=s;oledTypePos=0;oledLastType=millis();
 }
