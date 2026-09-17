@@ -27,7 +27,7 @@ const uint32_t OLED_PAGE_MS=2200;
 const int32_t MIC_THRESHOLD=8000,MIC_SILENCE=6000;
 const size_t BUF=2048,PREROLL_SAMPLES=MIC_RATE*PREROLL_MS/1000;
 const int MP3_COPY_BUFFER=3584;
-const float MP3_VOLUME=0.75f;
+const float MP3_VOLUME=0.65f;
 const char* STT_HOST="tars-cloud-v1.hilmane34.workers.dev";
 
 Adafruit_SSD1306 oled(OLED_WIDTH,OLED_HEIGHT,&Wire,-1);
