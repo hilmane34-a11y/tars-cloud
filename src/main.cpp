@@ -27,19 +27,21 @@ const uint32_t AUDIO_IDLE_MS=2500;
 const int32_t MIC_THRESHOLD=8000,MIC_SILENCE=6000;
 const size_t BUF=2048,PREROLL_SAMPLES=MIC_RATE*PREROLL_MS/1000;
 const char* STT_HOST="tars-cloud-v1.hilmane34.workers.dev";
-const float MP3_VOLUME=0.85f;
-const int MP3_COPY_BUFFER=4096;
 
 Adafruit_SSD1306 oled(OLED_WIDTH,OLED_HEIGHT,&Wire,-1);
 AnalogAudioStream analog;
-MP3DecoderHelix mp3;
-VolumeStream mp3Volume(analog);
-EncodedAudioStream mp3Dec(&mp3Volume,&mp3);
+
+/* MP3: DIKEMBALIKAN KE JALUR YANG TERBUKTI JELAS */
+MP3DecoderHelix codec;
+EncodedAudioStream dec(&analog,&codec);
+StreamCopy copier;
+
+/* WAV TETAP */
 WAVDecoder wav;
 AudioInfo audioIn(44100,1,16),audioOut(44100,2,16);
 FormatConverterStream stereoOut(analog);
 EncodedAudioStream wavDec(&stereoOut,&wav);
-StreamCopy copier;
+
 WebSocketsClient sttWS;
 
 bool oledOK=false,micOK=false,dacOK=false,playing=false,ntpOK=false;
@@ -128,31 +130,23 @@ void oledTask(void*){
   }
 }
 
+/* DAC: DIKEMBALIKAN KE KONFIGURASI JALUR MP3 LAMA */
 bool initDAC(){
   auto cfg=analog.defaultConfig(TX_MODE);
-  cfg.sample_rate=44100;cfg.channels=2;cfg.bits_per_sample=16;
+  cfg.channels=2;
 
   if(!analog.begin(cfg)){
     Serial.println("TARS: DAC ERROR");return false;
   }
 
-  auto vcfg=mp3Volume.defaultConfig();
-  vcfg.copyFrom(cfg);vcfg.volume=MP3_VOLUME;vcfg.allow_boost=false;
-
-  if(!mp3Volume.begin(vcfg)){
-    Serial.println("TARS: MP3 VOLUME ERROR");return false;
-  }
-
-  mp3Volume.setVolume(MP3_VOLUME);
-  Serial.printf("TARS: PAM RIGHT GPIO26 READY MP3 VOL=%.2f\n",MP3_VOLUME);
+  Serial.println("TARS: PAM RIGHT GPIO26 READY");
   return true;
 }
 
 bool initMic(){
   i2s_config_t c={};
   c.mode=(i2s_mode_t)(I2S_MODE_MASTER|I2S_MODE_RX);
-  c.sample_rate=MIC_RATE;
-  c.bits_per_sample=I2S_BITS_PER_SAMPLE_32BIT;
+  c.sample_rate=MIC_RATE;c.bits_per_sample=I2S_BITS_PER_SAMPLE_32BIT;
   c.channel_format=I2S_CHANNEL_FMT_ONLY_RIGHT;
   c.communication_format=I2S_COMM_FORMAT_STAND_I2S;
   c.intr_alloc_flags=ESP_INTR_FLAG_LEVEL1;
@@ -173,23 +167,18 @@ bool initMic(){
 
 bool syncTime(){
   if(ntpOK)return true;
-
   configTime(7*3600,0,"pool.ntp.org","time.nist.gov","time.google.com");
 
   for(int a=1;a<=4;a++){
     Serial.printf("TARS: NTP ATTEMPT %d/4\n",a);
-
     for(int i=0;i<20;i++){
       time_t now=time(nullptr);
-
       if(now>=1704067200){
-        struct tm t;
-        localtime_r(&now,&t);
+        struct tm t;localtime_r(&now,&t);
         Serial.printf("TARS: NTP VALID %04d-%02d-%02d %02d:%02d:%02d\n",
           t.tm_year+1900,t.tm_mon+1,t.tm_mday,t.tm_hour,t.tm_min,t.tm_sec);
         ntpOK=true;return true;
       }
-
       delay(500);
     }
   }
@@ -249,7 +238,6 @@ void sttEvent(WStype_t type,uint8_t*payload,size_t length){
     sttReady=true;Serial.println("TARS: STT REALTIME READY");
   }else if(t=="partial"){
     sttPartial=j["text"].as<String>();sttPartial.trim();
-
     if(sttPartial.length()){
       Serial.print("TARS: STT PARTIAL = ");Serial.println(sttPartial);
     }
@@ -324,7 +312,6 @@ String recordRealtime(){
     if(sttError)break;
 
     size_t bytes=0;
-
     if(i2s_read(MIC_PORT,rawBuf,sizeof(rawBuf),&bytes,pdMS_TO_TICKS(30))!=ESP_OK)continue;
 
     size_t count=bytes/4;
@@ -431,6 +418,7 @@ String ask(const String&q){
   return s;
 }
 
+/* AUDIO - MP3 DIKEMBALIKAN KE MEKANISME ELEVENLABS */
 bool streamAudio(const String&url,const String&text){
   if(!wifiOK())return false;
 
@@ -452,8 +440,8 @@ bool streamAudio(const String&url,const String&text){
   uint32_t t=millis();
   int code=h.POST(body);
 
-  Serial.printf("TARS: AUDIO HTTP=%d TIME=%lu ms",code,(unsigned long)(millis()-t));
-  Serial.println();
+  Serial.printf("TARS: AUDIO HTTP=%d TIME=%lu ms\n",
+    code,(unsigned long)(millis()-t));
 
   if(code<200||code>=300){
     h.end();return false;
@@ -462,7 +450,6 @@ bool streamAudio(const String&url,const String&text){
   String ct=h.header("Content-Type");
   String fmt=h.header("X-TARS-TTS-FORMAT");
   String engine=h.header("X-TARS-TTS");
-
   ct.toLowerCase();
 
   Serial.print("TARS: TTS CONTENT-TYPE=");
@@ -485,7 +472,6 @@ bool streamAudio(const String&url,const String&text){
   }
 
   bool isWav=ct.indexOf("wav")>=0||fmt.equalsIgnoreCase("WAV");
-  bool isMp3=!isWav;
 
   Serial.println("TARS: ===== TTS DIAGNOSTIC =====");
   Serial.println("TARS: RESPONSE MODE=BINARY");
@@ -500,24 +486,22 @@ bool streamAudio(const String&url,const String&text){
   Serial.println(isWav?"WAV":"MP3");
   Serial.println("TARS: ===== END TTS DIAGNOSTIC =====");
 
-  if(isMp3){
-    Serial.printf("TARS: MP3 DIRECT PLAYBACK VOL=%.2f\n",MP3_VOLUME);
-    Serial.printf("TARS: MP3 STREAM BUFFER=%d BYTES\n",MP3_COPY_BUFFER);
-    Serial.println("TARS: MP3 DECODER -> VOLUME -> ANALOG GPIO26");
+  if(!isWav){
+    /* JALUR MP3 LAMA YANG SUDAH TERBUKTI JELAS */
+    Serial.println("TARS: MP3 STREAMING ENABLED");
+    Serial.println("TARS: MP3 DECODER -> ANALOG GPIO26");
 
-    mp3Dec.begin();
-    StreamCopy mp3Copier(mp3Dec,*stream,MP3_COPY_BUFFER);
-
+    dec.begin();
+    copier.begin(dec,*stream);
     playing=true;
 
     bool started=false;
-    uint32_t start=millis();
-    uint32_t lastData=start;
+    uint32_t start=millis(),lastData=start;
 
     Serial.println("TARS: AUDIO STREAM START");
 
     while(true){
-      bool copied=mp3Copier.copy();
+      bool copied=copier.copy();
       bool available=stream->available();
 
       if(copied){
@@ -525,17 +509,14 @@ bool streamAudio(const String&url,const String&text){
 
         if(!started){
           started=true;
-
           Serial.printf("TARS: AUDIO FIRST DATA=%lu ms\n",
             (unsigned long)(millis()-start));
-
           oledStartSpeak(text);
         }
       }
 
       if(started&&!available&&millis()-lastData>=AUDIO_IDLE_MS)break;
       if(!started&&!h.connected()&&!available)break;
-      if(millis()-start>70000)break;
 
       yield();
     }
@@ -543,9 +524,7 @@ bool streamAudio(const String&url,const String&text){
     Serial.printf("TARS: AUDIO STREAM=%lu ms\n",
       (unsigned long)(millis()-start));
 
-    mp3Dec.end();
-    mp3Volume.end();
-
+    dec.end();
     h.end();playing=false;
 
     Serial.printf("TARS: AUDIO TOTAL=%lu ms\n",
@@ -555,17 +534,16 @@ bool streamAudio(const String&url,const String&text){
     return started;
   }
 
+  /* WAV TETAP */
   Serial.println("TARS: WAV PLAYBACK");
 
   copier.begin(wavDec,*stream);
   wavDec.addNotifyAudioChange(stereoOut);
   wavDec.begin();
-
   playing=true;
 
   bool started=false;
-  uint32_t start=millis();
-  uint32_t lastData=start;
+  uint32_t start=millis(),lastData=start;
 
   Serial.println("TARS: AUDIO STREAM START");
 
@@ -578,17 +556,14 @@ bool streamAudio(const String&url,const String&text){
 
       if(!started){
         started=true;
-
         Serial.printf("TARS: AUDIO FIRST DATA=%lu ms\n",
           (unsigned long)(millis()-start));
-
         oledStartSpeak(text);
       }
     }
 
     if(started&&!available&&millis()-lastData>=AUDIO_IDLE_MS)break;
     if(!started&&!h.connected()&&!available)break;
-    if(millis()-start>70000)break;
 
     yield();
   }
@@ -653,7 +628,7 @@ void setup(){
   Serial.println("TARS: NO RECORD TIMEOUT");
   Serial.println("TARS: STT REALTIME PCM");
   Serial.println("TARS: BLUETOOTH DISABLED");
-  Serial.println("TARS: MP3 DIRECT STREAM ENABLED");
+  Serial.println("TARS: MP3 STREAMING ENABLED");
 
   if(oledOK)
     xTaskCreatePinnedToCore(oledTask,"TARS_OLED",4096,nullptr,1,nullptr,0);
