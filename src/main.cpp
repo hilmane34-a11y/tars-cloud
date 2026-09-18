@@ -820,4 +820,393 @@ bool streamAudio(const String&url,const String&text){
   HTTPClient h;
   uint32_t totalStart=millis();
 
-  if(!h.begin(c,url))return false
+  if(!h.begin(c,url))return false;
+
+  h.setTimeout(60000);
+  h.addHeader("Content-Type","application/json");
+
+  const char*headerKeys[]={
+    "Content-Type",
+    "X-TARS-TTS",
+    "X-TARS-TTS-FORMAT"
+  };
+
+  h.collectHeaders(headerKeys,3);
+
+  JsonDocument j;
+  j["text"]=text;
+
+  String body;
+  serializeJson(j,body);
+
+  uint32_t t=millis();
+  int code=h.POST(body);
+
+  Serial.printf(
+    "TARS: AUDIO HTTP=%d TIME=%lu ms\n",
+    code,(unsigned long)(millis()-t)
+  );
+
+  if(code<200||code>=300){
+    h.end();
+    return false;
+  }
+
+  String ct=h.header("Content-Type");
+  String fmt=h.header("X-TARS-TTS-FORMAT");
+  String engine=h.header("X-TARS-TTS");
+
+  ct.toLowerCase();
+
+  Serial.print("TARS: TTS CONTENT-TYPE=");
+  Serial.println(ct.length()?ct:"<none>");
+
+  Serial.print("TARS: TTS STATUS=");
+  Serial.println(engine.length()?engine:"<none>");
+
+  Serial.print("TARS: TTS FORMAT=");
+  Serial.println(fmt.length()?fmt:"<none>");
+
+  WiFiClient*stream=h.getStreamPtr();
+
+  if(!stream){
+    h.end();
+    return false;
+  }
+
+  if(!dacOK)dacOK=initDAC();
+
+  if(!dacOK){
+    h.end();
+    return false;
+  }
+
+  bool isWav=
+    ct.indexOf("wav")>=0||
+    fmt.equalsIgnoreCase("WAV");
+
+  int contentLen=h.getSize();
+
+  Serial.printf(
+    "TARS: AUDIO CONTENT-LENGTH=%d\n",
+    contentLen
+  );
+
+  audioRing.start(*stream,contentLen);
+  playing=true;
+
+  if(!isWav){
+    Serial.println("TARS: MP3 STREAMING");
+
+    size_t target=AUDIO_PREBUFFER;
+
+    if(contentLen>0&&(size_t)contentLen<target)
+      target=(size_t)contentLen;
+
+    uint32_t preStart=millis();
+
+    while(audioRing.available()<(int)target){
+      int avail=audioRing.available();
+
+      if(audioRing.finished()){
+        if(avail>0)break;
+
+        Serial.println("TARS: MP3 PREBUFFER FAILED");
+
+        audioRing.stop();
+        h.end();
+        playing=false;
+        oledSetListening();
+        return false;
+      }
+
+      if(millis()-preStart>10000){
+        Serial.println("TARS: MP3 PREBUFFER TIMEOUT");
+
+        audioRing.stop();
+        h.end();
+        playing=false;
+        oledSetListening();
+        return false;
+      }
+
+      delay(1);
+      yield();
+    }
+
+    Serial.printf(
+      "TARS: MP3 PREBUFFER=%d/%u BYTES\n",
+      audioRing.available(),(unsigned)target
+    );
+
+    dec.begin();
+    copier.begin(dec,audioRing);
+
+    bool started=false;
+    uint32_t start=millis(),lastData=start,emptySince=0;
+
+    while(true){
+      int before=audioRing.available();
+      bool copied=copier.copy();
+      int after=audioRing.available();
+
+      if(copied){
+        lastData=millis();
+        emptySince=0;
+
+        if(!started){
+          started=true;
+
+          Serial.printf(
+            "TARS: AUDIO FIRST DATA=%lu ms\n",
+            (unsigned long)(millis()-start)
+          );
+
+          Serial.printf(
+            "TARS: DECODER %lu Hz / %d ch / %d bit\n",
+            (unsigned long)dec.audioInfo().sample_rate,
+            dec.audioInfo().channels,
+            dec.audioInfo().bits_per_sample
+          );
+
+          oledStartSpeak(text);
+        }
+      }else if(after<=0){
+        if(!emptySince)emptySince=millis();
+
+        if(audioRing.finished()&&millis()-emptySince>=150)
+          break;
+      }
+
+      if(audioRing.finished()&&
+         audioRing.available()==0&&
+         millis()-lastData>=200)
+        break;
+
+      if(audioRing.available()==0&&millis()-lastData>5000){
+        Serial.println("TARS: MP3 PLAYBACK TIMEOUT");
+        break;
+      }
+
+      if(before==after)yield();
+    }
+
+    audioRing.stop();
+    dec.end();
+    h.end();
+    playing=false;
+
+    Serial.printf(
+      "TARS: AUDIO STREAM=%lu ms\n",
+      (unsigned long)(millis()-start)
+    );
+
+    Serial.printf(
+      "TARS: AUDIO TOTAL=%lu ms\n",
+      (unsigned long)(millis()-totalStart)
+    );
+
+    oledSetListening();
+    return started;
+  }
+
+  Serial.println("TARS: WAV PLAYBACK");
+
+  size_t wavTarget=2048;
+
+  if(contentLen>0&&(size_t)contentLen<wavTarget)
+    wavTarget=(size_t)contentLen;
+
+  uint32_t wavPreStart=millis();
+
+  while(audioRing.available()<(int)wavTarget){
+    if(audioRing.finished())break;
+    if(millis()-wavPreStart>10000)break;
+
+    delay(1);
+    yield();
+  }
+
+  wavDec.addNotifyAudioChange(dac8);
+  wavDec.begin();
+
+  copier.begin(wavDec,audioRing);
+
+  bool started=false;
+  uint32_t start=millis(),lastData=start;
+
+  while(true){
+    bool copied=copier.copy();
+
+    if(copied){
+      lastData=millis();
+
+      if(!started){
+        started=true;
+
+        Serial.printf(
+          "TARS: AUDIO FIRST DATA=%lu ms\n",
+          (unsigned long)(millis()-start)
+        );
+
+        oledStartSpeak(text);
+      }
+    }
+
+    if(audioRing.finished()&&
+       audioRing.available()==0&&
+       millis()-lastData>=200)
+      break;
+
+    if(audioRing.available()==0&&
+       millis()-lastData>5000){
+      Serial.println("TARS: WAV PLAYBACK TIMEOUT");
+      break;
+    }
+
+    yield();
+  }
+
+  audioRing.stop();
+  wavDec.end();
+  h.end();
+  playing=false;
+
+  Serial.printf(
+    "TARS: AUDIO STREAM=%lu ms\n",
+    (unsigned long)(millis()-start)
+  );
+
+  Serial.printf(
+    "TARS: AUDIO TOTAL=%lu ms\n",
+    (unsigned long)(millis()-totalStart)
+  );
+
+  oledSetListening();
+  return started;
+}
+
+void processQuestion(const String&q){
+  String answer=ask(q);
+
+  if(!answer.length()){
+    oledSetStatus("ASK ERROR");
+    return;
+  }
+
+  String url=String(TARS_CLOUD_URL)+"/tts";
+  uint32_t t=millis();
+
+  bool ok=streamAudio(url,answer);
+
+  Serial.printf(
+    "TARS: AUDIO FUNCTION TIME=%lu ms\n",
+    (unsigned long)(millis()-t)
+  );
+
+  oledSetStatus(ok?"LISTENING":"AUDIO ERROR");
+}
+
+void setup(){
+  Serial.begin(SERIAL_BAUD);
+
+  Wire.begin(OLED_SDA,OLED_SCL);
+  Wire.setClock(400000);
+
+  oledOK=oled.begin(
+    SSD1306_SWITCHCAPVCC,OLED_ADDR
+  );
+
+  if(oledOK){
+    oledHeader();
+    oled.setCursor(3,27);
+    oled.print("BOOT");
+    oled.display();
+  }
+
+  dacOK=initDAC();
+  micOK=initMic();
+
+  Serial.printf(
+    "TARS: DAC=%s MIC=%s\n",
+    dacOK?"READY":"ERROR",
+    micOK?"READY":"ERROR"
+  );
+
+  Serial.println("TARS: DAC GPIO26 8-BIT");
+  Serial.println("TARS: INMP441 RIGHT GPIO34");
+
+  Serial.printf(
+    "TARS: MIC THRESHOLD=%ld\n",
+    (long)MIC_THRESHOLD
+  );
+
+  Serial.printf(
+    "TARS: MIC SILENCE=%ld\n",
+    (long)MIC_SILENCE
+  );
+
+  Serial.println("TARS: MIC RMS TRIGGER=1800");
+  Serial.println("TARS: MIC RMS SILENCE=1200");
+  Serial.println("TARS: PREROLL=700 ms");
+  Serial.println("TARS: NO RECORD TIMEOUT");
+  Serial.println("TARS: STT REALTIME PCM");
+  Serial.println("TARS: BLUETOOTH DISABLED");
+
+  Serial.printf(
+    "TARS: MP3 BUFFER=%d BYTES\n",
+    MP3_COPY_BUFFER
+  );
+
+  Serial.printf(
+    "TARS: MP3 VOLUME=%.2f\n",
+    MP3_VOLUME
+  );
+
+  Serial.printf(
+    "TARS: AUDIO RING=%u BYTES\n",
+    (unsigned)AUDIO_RING_SIZE
+  );
+
+  Serial.printf(
+    "TARS: AUDIO PREBUFFER=%u BYTES\n",
+    (unsigned)AUDIO_PREBUFFER
+  );
+
+  if(oledOK){
+    xTaskCreatePinnedToCore(
+      oledTask,"TARS_OLED",4096,nullptr,1,nullptr,0
+    );
+  }
+
+  wifiManagerBegin();
+
+  if(bootWiFi())
+    syncTime();
+
+  oledSetListening();
+}
+
+void loop(){
+  if(playing){
+    delay(1);
+    return;
+  }
+
+  if(WiFi.status()!=WL_CONNECTED){
+    if(!wifiOK()){
+      oledSetStatus("WIFI ERROR");
+      delay(500);
+      return;
+    }
+  }
+
+  String q=recordRealtime();
+
+  if(q.length())
+    processQuestion(q);
+  else
+    oledSetListening();
+
+  delay(1);
+}
