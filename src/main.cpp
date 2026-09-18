@@ -370,17 +370,6 @@ bool initDAC(){
   }
 
   auto v=mp3Volume.defaultConfig();
-  v.sample_rate=44100;
-  v.channels=1;
-  v.bits_per_sample=16;
-  v.volume=MP3_VOLUME;
-  v.allow_boost=false;
-
-  if(!mp3Volume.begin(v)){
-    Serial.println("TARS: VOLUME ERROR");
-    analog.end();
-    return false;
-  }
 
   /* Decoder -> Volume -> Analog DAC */
   dec.addNotifyAudioChange(mp3Volume);
