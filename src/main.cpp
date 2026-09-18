@@ -29,6 +29,7 @@ const size_t BUF=2048,PREROLL_SAMPLES=MIC_RATE*PREROLL_MS/1000;
 const int MP3_COPY_BUFFER=3584;
 const float MP3_VOLUME=0.75f;
 const size_t AUDIO_RING_SIZE=12288;
+const size_t AUDIO_PREBUFFER=8192;
 const char* STT_HOST="tars-cloud-v1.hilmane34.workers.dev";
 
 Adafruit_SSD1306 oled(OLED_WIDTH,OLED_HEIGHT,&Wire,-1);
@@ -96,6 +97,7 @@ class AudioRingStream:public Stream{
       }else{
         if(expected>=0&&received>=expected)break;
         if(src&&!src->connected()&&millis()-last>50)break;
+        if(expected<0&&src&&millis()-last>1500&&available()==0)break;
         vTaskDelay(pdMS_TO_TICKS(1));
       }
     }
