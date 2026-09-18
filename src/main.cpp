@@ -29,7 +29,7 @@ const int32_t MIC_THRESHOLD=6500,MIC_SILENCE=4000;
 const size_t BUF=1024,PREROLL_SAMPLES=MIC_RATE*PREROLL_MS/1000;
 const int MP3_COPY_BUFFER=512;
 const float MP3_VOLUME=.67f;
-const size_t AUDIO_RING_SIZE=8192,AUDIO_PREBUFFER=2048;
+const size_t AUDIO_RING_SIZE=8192,AUDIO_PREBUFFER=4000;
 const char* STT_HOST="tars-cloud-v1.hilmane34.workers.dev";
 
 Adafruit_SSD1306 oled(OLED_WIDTH,OLED_HEIGHT,&Wire,-1);
