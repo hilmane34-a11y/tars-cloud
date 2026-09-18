@@ -356,10 +356,6 @@ void oledTask(void*){
 
 bool initDAC(){
   auto cfg=analog.defaultConfig(TX_MODE);
-
-  /* Initial format only.
-     MP3DecoderHelix will notify the output with
-     the actual decoded AudioInfo dynamically. */
   cfg.sample_rate=44100;
   cfg.channels=1;
   cfg.bits_per_sample=16;
@@ -369,16 +365,11 @@ bool initDAC(){
     return false;
   }
 
-  auto v=mp3Volume.defaultConfig();
-
-  /* Decoder -> Volume -> Analog DAC */
-  dec.addNotifyAudioChange(mp3Volume);
-  mp3Volume.addNotifyAudioChange(analog);
+  dec.addNotifyAudioChange(analog);
 
   Serial.println("TARS: DAC GPIO26 READY");
-  Serial.println("TARS: AUTO MP3 FORMAT");
-  Serial.println("TARS: DECODER -> VOLUME -> DAC");
-  Serial.printf("TARS: MP3 VOLUME=%.2f\n",MP3_VOLUME);
+  Serial.println("TARS: MP3 DECODER -> DAC");
+  Serial.println("TARS: AUDIO FORMAT AUTO");
 
   return true;
 }
