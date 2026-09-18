@@ -35,8 +35,7 @@ Adafruit_SSD1306 oled(OLED_WIDTH,OLED_HEIGHT,&Wire,-1);
 
 AnalogAudioStream analog;
 MP3DecoderHelix codec;
-VolumeStream mp3Volume(analog);
-EncodedAudioStream dec(&mp3Volume,&codec);
+EncodedAudioStream dec(&analog,&codec);
 WAVDecoder wav;
 EncodedAudioStream wavDec(&analog,&wav);
 StreamCopy copier(MP3_COPY_BUFFER);
