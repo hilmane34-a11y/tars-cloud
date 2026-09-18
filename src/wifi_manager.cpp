@@ -13,6 +13,7 @@ static DNSServer dnsServer;
 static const char* AP_NAME="TARS-SETUP";
 static const char* AP_PASSWORD="12345678";
 static const uint32_t WIFI_TIMEOUT_MS=15000;
+static const uint8_t WIFI_MAX_ATTEMPTS=3;
 
 static String savedSSID,savedPassword;
 static bool portalRunning=false,wifiReady=false,routesRegistered=false;
@@ -66,11 +67,6 @@ static void registerPortalRoutes(){
     prefs.begin("wifi",false);
     prefs.putString("ssid",ssid);
     prefs.putString("pass",pass);
-
-    /*
-       setupDone menandakan TARS sudah pernah
-       mendapatkan konfigurasi WiFi yang valid.
-    */
     prefs.putBool("setupDone",true);
     prefs.putBool("pending",true);
     prefs.end();
@@ -162,12 +158,6 @@ bool wifiManagerBegin(){
 
   prefs.end();
 
-  /*
-     Hanya power-on pertama TANPA konfigurasi WiFi
-     yang masuk TARS-SETUP.
-
-     Reboot biasa tidak menghapus credential.
-  */
   if(!setupDone||!savedSSID.length()){
 
     Serial.println();
@@ -222,58 +212,88 @@ bool wifiManagerConnect(bool requireTime){
     return false;
   }
 
+  WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(false);
+  WiFi.setSleep(false);
+
   Serial.print("TARS: WiFi connecting to ");
   Serial.println(savedSSID);
 
-  WiFi.mode(WIFI_STA);
-  WiFi.setAutoReconnect(true);
-  WiFi.setSleep(false);
+  for(uint8_t attempt=1;attempt<=WIFI_MAX_ATTEMPTS;attempt++){
 
-  if(WiFi.status()!=WL_CONNECTED)
+    Serial.printf(
+      "TARS: WIFI AUTH ATTEMPT %u/%u\n",
+      attempt,WIFI_MAX_ATTEMPTS
+    );
+
+    WiFi.disconnect(false,true);
+    delay(200);
+
     WiFi.begin(
       savedSSID.c_str(),
       savedPassword.c_str()
     );
 
-  uint32_t start=millis();
+    uint32_t start=millis();
 
-  while(
-    WiFi.status()!=WL_CONNECTED&&
-    millis()-start<WIFI_TIMEOUT_MS
-  ){
-    delay(100);
-    yield();
-  }
+    while(
+      WiFi.status()!=WL_CONNECTED&&
+      millis()-start<WIFI_TIMEOUT_MS
+    ){
+      wl_status_t s=WiFi.status();
 
-  if(WiFi.status()==WL_CONNECTED){
+      if(
+        s==WL_CONNECT_FAILED||
+        s==WL_NO_SSID_AVAIL
+      ){
+        break;
+      }
 
-    wifiReady=true;
+      delay(100);
+      yield();
+    }
 
-    prefs.begin("wifi",false);
-    prefs.putBool("pending",false);
-    prefs.putBool("setupDone",true);
-    prefs.end();
+    if(WiFi.status()==WL_CONNECTED){
 
-    Serial.println();
-    Serial.println("TARS: WIFI CONNECTED");
-    Serial.print("TARS: IP = ");
-    Serial.println(WiFi.localIP());
-    Serial.print("TARS: RSSI = ");
-    Serial.println(WiFi.RSSI());
+      wifiReady=true;
 
-    return true;
+      prefs.begin("wifi",false);
+      prefs.putBool("pending",false);
+      prefs.putBool("setupDone",true);
+      prefs.end();
+
+      Serial.println();
+      Serial.println("TARS: WIFI CONNECTED");
+      Serial.print("TARS: IP = ");
+      Serial.println(WiFi.localIP());
+      Serial.print("TARS: RSSI = ");
+      Serial.println(WiFi.RSSI());
+
+      return true;
+    }
+
+    Serial.printf(
+      "TARS: WIFI AUTH FAILED %u/%u\n",
+      attempt,WIFI_MAX_ATTEMPTS
+    );
+
+    WiFi.disconnect(false,true);
+    delay(300);
   }
 
   wifiReady=false;
 
   Serial.println();
-  Serial.println("TARS: WIFI FAILED");
+  Serial.println("TARS: WIFI AUTH FAILED 3/3");
+  Serial.println("TARS: WRONG PASSWORD OR WIFI UNAVAILABLE");
+  Serial.println("TARS: STOPPING WIFI RETRIES");
+  Serial.println("TARS: RETURNING TO WIFI SETUP");
 
-  /*
-     Jangan hapus credential.
-     Jangan langsung masuk portal.
-     Main.cpp dapat mencoba reconnect lagi.
-  */
+  WiFi.disconnect(false,true);
+  delay(300);
+
+  startPortal();
+  portalWaitLoop();
 
   return false;
 }
@@ -293,9 +313,6 @@ void wifiManagerDisconnect(){
     portalRunning=false;
   }
 
-  /*
-     false = jangan hapus konfigurasi WiFi.
-  */
   WiFi.disconnect(false);
 
   wifiReady=false;
