@@ -27,7 +27,7 @@ const uint32_t PREROLL_MS=700,OLED_TYPE_MS=39,OLED_WAVE_MS=70,AUDIO_IDLE_MS=2500
 const int32_t MIC_THRESHOLD=4500,MIC_SILENCE=3000;
 const size_t BUF=2048,PREROLL_SAMPLES=MIC_RATE*PREROLL_MS/1000;
 const int MP3_COPY_BUFFER=3584;
-const float MP3_VOLUME=0.80f;
+const float MP3_VOLUME=0.67f;
 const size_t AUDIO_RING_SIZE=16384;
 const size_t AUDIO_PREBUFFER=4096;
 const char* STT_HOST="tars-cloud-v1.hilmane34.workers.dev";
