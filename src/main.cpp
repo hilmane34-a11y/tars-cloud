@@ -162,7 +162,7 @@ public:
     if(!p||!x)return 0;
 
     portENTER_CRITICAL(&mux);
-      size_t take=(size_t)n<len?(size_t)n:len;
+      size_t take=(size_t)n<x?(size_t)n:x;
       if(take){
       size_t first=min(take,AUDIO_RING_SIZE-t);
       memcpy(p,b+t,first);
