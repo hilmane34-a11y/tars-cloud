@@ -217,7 +217,7 @@ public:
     return read(&c,1)==1?c:-1;
   }
 
-  int read(uint8_t*p,size_t n) override{
+  int read(uint8_t*p,size_t n){
     if(!p||!n)return 0;
 
     portENTER_CRITICAL(&mux);
