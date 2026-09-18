@@ -32,6 +32,12 @@ const float MP3_VOLUME=.67f;
 const size_t AUDIO_RING_SIZE=12000,AUDIO_PREBUFFER=4000;
 const char* STT_HOST="tars-cloud-v1.hilmane34.workers.dev";
 
+/* ALARM */
+const uint32_t ALARM_DURATION_MS=120000;
+const char* ALARM_TEXT="Tuan, sudah jam enam pagi. Bangun dulu.";
+bool alarmRunning=false;
+int alarmLastDay=-1;
+
 Adafruit_SSD1306 oled(OLED_WIDTH,OLED_HEIGHT,&Wire,-1);
 AnalogAudioStream analog;
 MP3DecoderHelix codec;
@@ -89,21 +95,9 @@ class AudioRingStream:public Stream{
       }else{
         if(expected>=0&&received>=expected)break;
 
-        /*
-         * Fish Audio memakai streaming/chunked.
-         * Content-Length biasanya -1, sehingga koneksi
-         * tidak boleh dijadikan satu-satunya EOF.
-         *
-         * Setelah byte audio pernah diterima, jika tidak
-         * ada byte baru selama 3 detik -> anggap EOF.
-         */
         if(expected<0&&gotData&&millis()-lastRx>=STREAM_EOF_IDLE_MS)
           break;
 
-        /*
-         * Jika server benar-benar menutup koneksi,
-         * langsung selesai.
-         */
         if(src&&!src->connected()&&gotData)
           break;
 
@@ -249,7 +243,6 @@ class PCMProbeStream:public AudioStream{
 
 public:
   PCMProbeStream(AudioStream&o):out(&o){}
-
   bool begin()override{return true;}
   void end()override{}
 
@@ -266,18 +259,14 @@ public:
 
     Serial.printf(
       "TARS: PCM->DAC FORMAT %lu Hz / %d ch / %d bit\n",
-      (unsigned long)x.sample_rate,
-      x.channels,
-      x.bits_per_sample
+      (unsigned long)x.sample_rate,x.channels,x.bits_per_sample
     );
 
     AudioInfo d=out->audioInfo();
 
     Serial.printf(
       "TARS: DAC INPUT FORMAT %lu Hz / %d ch / %d bit\n",
-      (unsigned long)d.sample_rate,
-      d.channels,
-      d.bits_per_sample
+      (unsigned long)d.sample_rate,d.channels,d.bits_per_sample
     );
   }
 
@@ -315,8 +304,7 @@ public:
 
     Serial.printf(
       "TARS: PCM ACTUAL DECODER=%lu Hz | DAC ACCEPTED=%lu Hz\n",
-      (unsigned long)dr,
-      (unsigned long)ar
+      (unsigned long)dr,(unsigned long)ar
     );
 
     Serial.printf(
@@ -588,12 +576,8 @@ bool syncTime(){
 
         Serial.printf(
           "TARS: NTP VALID %04d-%02d-%02d %02d:%02d:%02d\n",
-          t.tm_year+1900,
-          t.tm_mon+1,
-          t.tm_mday,
-          t.tm_hour,
-          t.tm_min,
-          t.tm_sec
+          t.tm_year+1900,t.tm_mon+1,t.tm_mday,
+          t.tm_hour,t.tm_min,t.tm_sec
         );
 
         ntpOK=true;
@@ -857,8 +841,7 @@ String recordRealtime(){
 
         Serial.printf(
           "TARS: VOICE DETECTED PEAK=%ld RMS=%lu\n",
-          (long)peak,
-          (unsigned long)rms
+          (long)peak,(unsigned long)rms
         );
       }
 
@@ -897,9 +880,7 @@ String recordRealtime(){
     sttWS.disconnect();
 
     if(!voice)
-      Serial.println(
-        "TARS: MIC AUDIO TOO LOW"
-      );
+      Serial.println("TARS: MIC AUDIO TOO LOW");
 
     return "";
   }
@@ -1025,19 +1006,13 @@ bool streamAudio(
   ct.toLowerCase();
 
   Serial.print("TARS: TTS CONTENT-TYPE=");
-  Serial.println(
-    ct.length()?ct:"<none>"
-  );
+  Serial.println(ct.length()?ct:"<none>");
 
   Serial.print("TARS: TTS STATUS=");
-  Serial.println(
-    engine.length()?engine:"<none>"
-  );
+  Serial.println(engine.length()?engine:"<none>");
 
   Serial.print("TARS: TTS FORMAT=");
-  Serial.println(
-    fmt.length()?fmt:"<none>"
-  );
+  Serial.println(fmt.length()?fmt:"<none>");
 
   WiFiClient*stream=h.getStreamPtr();
 
@@ -1068,9 +1043,7 @@ bool streamAudio(
 
   /* MP3 */
   if(!isWav){
-    Serial.println(
-      "TARS: MP3 AUTO FORMAT"
-    );
+    Serial.println("TARS: MP3 AUTO FORMAT");
 
     size_t target=AUDIO_PREBUFFER;
 
@@ -1114,7 +1087,6 @@ bool streamAudio(
     );
 
     pcmProbe.reset();
-
     dec.begin();
 
     copier.begin(
@@ -1123,15 +1095,12 @@ bool streamAudio(
     );
 
     bool started=false;
-
     uint32_t start=millis();
     uint32_t lastData=start;
 
     while(true){
       int before=audioRing.available();
-
       bool copied=copier.copy();
-
       int after=audioRing.available();
 
       if(copied){
@@ -1157,25 +1126,12 @@ bool streamAudio(
         }
       }
 
-      /*
-       * EOF utama sekarang berasal dari RX:
-       *
-       * 1. Content-Length tercapai, atau
-       * 2. Streaming chunked idle >= 3 detik.
-       *
-       * Decoder tetap diberi kesempatan menghabiskan
-       * seluruh byte yang masih tersimpan di ring.
-       */
       if(
         audioRing.finished()&&
         audioRing.available()==0
       )
         break;
 
-      /*
-       * Fallback jika RX sudah selesai tetapi decoder
-       * mengalami kondisi tidak biasa.
-       */
       if(
         audioRing.finished()&&
         millis()-lastData>=5000
@@ -1187,12 +1143,9 @@ bool streamAudio(
     }
 
     audioRing.stop();
-
     pcmProbe.report();
-
     dec.end();
     h.end();
-
     playing=false;
 
     Serial.printf(
@@ -1211,9 +1164,7 @@ bool streamAudio(
   }
 
   /* WAV */
-  Serial.println(
-    "TARS: WAV STREAMING"
-  );
+  Serial.println("TARS: WAV STREAMING");
 
   wavDec.addNotifyAudioChange(analog);
   wavDec.begin();
@@ -1224,7 +1175,6 @@ bool streamAudio(
   );
 
   bool started=false;
-
   uint32_t start=millis();
   uint32_t lastData=start;
 
@@ -1266,14 +1216,78 @@ bool streamAudio(
   }
 
   audioRing.stop();
-
   wavDec.end();
   h.end();
-
   playing=false;
   oledSetListening();
 
   return started;
+}
+
+/* ALARM */
+bool alarmDue(){
+  if(!ntpOK||alarmRunning)
+    return false;
+
+  time_t now=time(nullptr);
+  if(now<1704067200)
+    return false;
+
+  struct tm t;
+  localtime_r(&now,&t);
+
+  return t.tm_hour==6&&t.tm_min==0&&alarmLastDay!=t.tm_yday;
+}
+
+void runAlarm(){
+  if(!alarmDue())
+    return;
+
+  time_t now=time(nullptr);
+  struct tm t;
+  localtime_r(&now,&t);
+
+  alarmLastDay=t.tm_yday;
+  alarmRunning=true;
+
+  Serial.println("TARS: ALARM 06:00 WIB");
+  Serial.println("TARS: ALARM DURATION=120000 ms");
+
+  oledSetStatus("ALARM");
+
+  uint32_t start=millis();
+
+  while(millis()-start<ALARM_DURATION_MS){
+    if(!wifiOK())
+      break;
+
+    uint32_t before=millis();
+
+    streamAudio(
+      String(TARS_CLOUD_URL)+"/tts",
+      ALARM_TEXT
+    );
+
+    if(millis()-start>=ALARM_DURATION_MS)
+      break;
+
+    /* Jeda kecil agar tidak langsung request TTS berikutnya */
+    while(
+      millis()-before<3000&&
+      millis()-start<ALARM_DURATION_MS
+    ){
+      delay(20);
+      yield();
+    }
+  }
+
+  playing=false;
+  alarmRunning=false;
+
+  oledSetListening();
+
+  Serial.println("TARS: ALARM SELESAI");
+  Serial.println("TARS: REALTIME LISTENING");
 }
 
 /* PROCESS */
@@ -1342,25 +1356,11 @@ void setup(){
     micOK?"READY":"ERROR"
   );
 
-  Serial.println(
-    "TARS: DAC GPIO26 INTERNAL DAC"
-  );
-
-  Serial.println(
-    "TARS: AUDIO FORMAT AUTO"
-  );
-
-  Serial.println(
-    "TARS: AUDIO DECODER FORMAT PROPAGATION ON"
-  );
-
-  Serial.println(
-    "TARS: PCM PROBE ENABLED"
-  );
-
-  Serial.println(
-    "TARS: INMP441 RIGHT GPIO34"
-  );
+  Serial.println("TARS: DAC GPIO26 INTERNAL DAC");
+  Serial.println("TARS: AUDIO FORMAT AUTO");
+  Serial.println("TARS: AUDIO DECODER FORMAT PROPAGATION ON");
+  Serial.println("TARS: PCM PROBE ENABLED");
+  Serial.println("TARS: INMP441 RIGHT GPIO34");
 
   Serial.printf(
     "TARS: MIC THRESHOLD=%ld\n",
@@ -1372,29 +1372,12 @@ void setup(){
     (long)MIC_SILENCE
   );
 
-  Serial.println(
-    "TARS: MIC RMS TRIGGER=1800"
-  );
-
-  Serial.println(
-    "TARS: MIC RMS SILENCE=1200"
-  );
-
-  Serial.println(
-    "TARS: PREROLL=700 ms"
-  );
-
-  Serial.println(
-    "TARS: NO RECORD TIMEOUT"
-  );
-
-  Serial.println(
-    "TARS: STT REALTIME PCM"
-  );
-
-  Serial.println(
-    "TARS: BLUETOOTH DISABLED"
-  );
+  Serial.println("TARS: MIC RMS TRIGGER=1800");
+  Serial.println("TARS: MIC RMS SILENCE=1200");
+  Serial.println("TARS: PREROLL=700 ms");
+  Serial.println("TARS: NO RECORD TIMEOUT");
+  Serial.println("TARS: STT REALTIME PCM");
+  Serial.println("TARS: BLUETOOTH DISABLED");
 
   Serial.printf(
     "TARS: MP3 COPY BUFFER=%d BYTES\n",
@@ -1420,6 +1403,9 @@ void setup(){
     "TARS: STREAM EOF IDLE=%lu ms\n",
     (unsigned long)STREAM_EOF_IDLE_MS
   );
+
+  Serial.println("TARS: ALARM=06:00 WIB");
+  Serial.println("TARS: ALARM DURATION=2 MINUTES");
 
   if(oledOK)
     xTaskCreatePinnedToCore(
@@ -1453,6 +1439,12 @@ void loop(){
       delay(500);
       return;
     }
+  }
+
+  /* ALARM 06:00 WIB */
+  if(alarmDue()){
+    runAlarm();
+    return;
   }
 
   String q=recordRealtime();
