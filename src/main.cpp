@@ -201,7 +201,7 @@ public:
 PCMProbeStream pcmProbe(analog);
 
 /* MP3: 44.1k decode -> 22.05k resample -> PCM -> GPIO26 RIGHT */
-ResampleStream<int16_t> mp3Resample(pcmProbe);
+ResampleStream mp3Resample(pcmProbe);
 EncodedAudioStream dec(&mp3Resample,&codec);
 
 /* WAV: jalur lama */
