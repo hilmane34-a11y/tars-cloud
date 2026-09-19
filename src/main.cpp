@@ -1039,7 +1039,7 @@ bool streamAudio(
   audioRing.start(*stream,contentLen);
   playing=true;
 
-  bool isWav=ct.indexOf("wav")>=0;
+  bool isWav=ct.indexOf("wav")>=0||fmt.equalsIgnoreCase("WAV");
 
   /* MP3 */
   if(!isWav){
