@@ -1278,6 +1278,7 @@ audioRing.stop(); h.end(); playing=false;
 
 Serial.printf("TARS: WAV RIGHT SAMPLES=%lu\n",(unsigned long)samples);
 return samples>0;
+}
 
 /* ALARM */
 bool alarmDue(){
