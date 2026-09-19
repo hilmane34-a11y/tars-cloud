@@ -1209,7 +1209,7 @@ while(!dok){
     if(g>=16){
       uint16_t format=R16(f);
       chs=R16(f+2); rate=R32(f+4); bits=R16(f+14);
-      fok=format==1&&chs>=2&&bits==16;
+      fok=format==1&&(chs==1||chs==2)&&bits==16;
     }
 
     uint32_t skip=sz>16?sz-16:0;
@@ -1246,28 +1246,34 @@ Serial.printf("TARS: WAV %lu Hz / %u ch / %u bit RIGHT ONLY\n",
 uint8_t in[1024];
 uint32_t remain=dsize,samples=0;
 uint64_t next=esp_timer_get_time();
-const uint32_t period=(1000000ULL/rate);
+uint32_t step=(uint32_t)(1000000ULL/rate);
+uint8_t frameBytes=chs*2;
 
-while(remain>=4){
+while(remain>=frameBytes){
   if(!audioRing.available()){
     if(audioRing.finished())break;
-    delay(1); yield(); continue;
+    delay(1);yield();continue;
   }
-
   size_t want=min((uint32_t)sizeof(in),remain);
-  want-=want%4;
+  want-=(want%frameBytes);
+  if(!want)break;
   int n=audioRing.read(in,want);
   if(n<=0){delay(1);yield();continue;}
-  n-=n%4;
-
-  for(int i=0;i<n;i+=4){
-    int16_t r=(int16_t)((uint16_t)in[i+2]|((uint16_t)in[i+3]<<8));
-    dacWrite(AUDIO_DAC_PIN,(uint8_t)(((int32_t)r+32768)>>8));
-
-    next+=period;
+  n-=n%frameBytes;
+  for(int i=0;i<n;i+=frameBytes){
+    int16_t s;
+    if(chs==1){
+      /* MONO -> DAC */
+      s=(int16_t)((uint16_t)in[i]|((uint16_t)in[i+1]<<8));
+    }else{
+      /* STEREO -> RIGHT ONLY */
+      s=(int16_t)((uint16_t)in[i+2]|((uint16_t)in[i+3]<<8));
+    }
+    dacWrite(AUDIO_DAC_PIN,
+      (uint8_t)(((int32_t)s+32768)>>8));
+    next+=step;
     while((int64_t)(esp_timer_get_time()-next)<0)
       delayMicroseconds(1);
-
     samples++;
   }
   remain-=n;
