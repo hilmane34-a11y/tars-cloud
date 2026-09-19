@@ -1163,66 +1163,121 @@ bool streamAudio(
     return started;
   }
 
-  /* WAV */
-  Serial.println("TARS: WAV STREAMING");
+/* WAV PCM RIGHT ONLY -> DAC GPIO26 */
+Serial.println("TARS: WAV RIGHT -> DAC");
+oledStartSpeak(text);
 
-  wavDec.addNotifyAudioChange(analog);
-  wavDec.begin();
+uint8_t wh[12]; size_t g=0;
+while(g<12){
+  int n=audioRing.read(wh+g,12-g);
+  if(n>0)g+=n;
+  else if(audioRing.finished())break;
+  else{delay(1);yield();}
+}
+if(g<12||memcmp(wh,"RIFF",4)||memcmp(wh+8,"WAVE",4)){
+  Serial.println("TARS: WAV HEADER ERROR");
+  audioRing.stop(); h.end(); playing=false; return false;
+}
 
-  copier.begin(
-    wavDec,
-    audioRing
-  );
+auto R16=[](uint8_t*p)->uint16_t{return p[0]|p[1]<<8;};
+auto R32=[](uint8_t*p)->uint32_t{return p[0]|p[1]<<8|p[2]<<16|p[3]<<24;};
 
-  bool started=false;
-  uint32_t start=millis();
-  uint32_t lastData=start;
+uint16_t chs=0,bits=0; uint32_t rate=0,dsize=0;
+bool fok=false,dok=false;
 
-  while(true){
-    bool copied=copier.copy();
+while(!dok){
+  uint8_t c[8]; g=0;
+  while(g<8){
+    int n=audioRing.read(c+g,8-g);
+    if(n>0)g+=n;
+    else if(audioRing.finished())break;
+    else{delay(1);yield();}
+  }
+  if(g<8)break;
 
-    if(copied){
-      lastData=millis();
+  uint32_t sz=R32(c+4);
 
-      if(!started){
-        started=true;
-
-        AudioInfo ai=wav.audioInfo();
-
-        Serial.printf(
-          "TARS: WAV %lu Hz / %d ch / %d bit\n",
-          (unsigned long)ai.sample_rate,
-          ai.channels,
-          ai.bits_per_sample
-        );
-
-        oledStartSpeak(text);
-      }
+  if(!memcmp(c,"fmt ",4)){
+    uint8_t f[16]; size_t need=min((uint32_t)16,sz); g=0;
+    while(g<need){
+      int n=audioRing.read(f+g,need-g);
+      if(n>0)g+=n;
+      else if(audioRing.finished())break;
+      else{delay(1);yield();}
     }
 
-    if(
-      audioRing.finished()&&
-      audioRing.available()==0
-    )
-      break;
+    if(g>=16){
+      uint16_t format=R16(f);
+      chs=R16(f+2); rate=R32(f+4); bits=R16(f+14);
+      fok=format==1&&chs>=2&&bits==16;
+    }
 
-    if(
-      audioRing.finished()&&
-      millis()-lastData>5000
-    )
-      break;
+    uint32_t skip=sz>16?sz-16:0;
+    while(skip){
+      uint8_t x[64]; size_t n=min((uint32_t)64,skip);
+      int r=audioRing.read(x,n);
+      if(r>0)skip-=r;
+      else if(audioRing.finished())break;
+      else{delay(1);yield();}
+    }
+  }else if(!memcmp(c,"data",4)){
+    dsize=sz; dok=true;
+  }else{
+    uint32_t skip=sz;
+    while(skip){
+      uint8_t x[64]; size_t n=min((uint32_t)64,skip);
+      int r=audioRing.read(x,n);
+      if(r>0)skip-=r;
+      else if(audioRing.finished())break;
+      else{delay(1);yield();}
+    }
+  }
+}
 
-    yield();
+if(!fok||!dok||!rate){
+  Serial.printf("TARS: WAV FORMAT ERROR %lu Hz/%u ch/%u bit\n",
+    (unsigned long)rate,chs,bits);
+  audioRing.stop(); h.end(); playing=false; return false;
+}
+
+Serial.printf("TARS: WAV %lu Hz / %u ch / %u bit RIGHT ONLY\n",
+  (unsigned long)rate,chs,bits);
+
+uint8_t in[1024];
+uint32_t remain=dsize,samples=0;
+uint64_t next=esp_timer_get_time();
+const uint32_t period=(1000000ULL/rate);
+
+while(remain>=4){
+  if(!audioRing.available()){
+    if(audioRing.finished())break;
+    delay(1); yield(); continue;
   }
 
-  audioRing.stop();
-  wavDec.end();
-  h.end();
-  playing=false;
-  oledSetListening();
+  size_t want=min((uint32_t)sizeof(in),remain);
+  want-=want%4;
+  int n=audioRing.read(in,want);
+  if(n<=0){delay(1);yield();continue;}
+  n-=n%4;
 
-  return started;
+  for(int i=0;i<n;i+=4){
+    int16_t r=(int16_t)((uint16_t)in[i+2]|((uint16_t)in[i+3]<<8));
+    dacWrite(AUDIO_DAC_PIN,(uint8_t)(((int32_t)r+32768)>>8));
+
+    next+=period;
+    while((int64_t)(esp_timer_get_time()-next)<0)
+      delayMicroseconds(1);
+
+    samples++;
+  }
+  remain-=n;
 }
+
+dacWrite(AUDIO_DAC_PIN,128);
+audioRing.stop(); h.end(); playing=false;
+
+Serial.printf("TARS: WAV RIGHT SAMPLES=%lu\n",(unsigned long)samples);
+return samples>0;
 
 /* ALARM */
 bool alarmDue(){
