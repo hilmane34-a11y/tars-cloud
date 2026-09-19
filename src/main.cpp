@@ -50,7 +50,6 @@ uint32_t oledTypePos=0,oledLastType=0,oledLastWave=0,oledPage=0,oledLastPage=0;
 static int32_t rawBuf[BUF/4];
 static int16_t pcmBuf[BUF/4],preBuf[PREROLL_SAMPLES],sendBuf[256];
 
-/* AUDIO RING */
 class AudioRingStream:public Stream{
   uint8_t b[AUDIO_RING_SIZE];
   volatile size_t h=0,t=0,n=0;
@@ -62,25 +61,19 @@ class AudioRingStream:public Stream{
   uint32_t lastRx=0;
   bool gotData=false;
 
-  static void entry(void*p){
-    ((AudioRingStream*)p)->rx();
-    vTaskDelete(nullptr);
-  }
+  static void entry(void*p){((AudioRingStream*)p)->rx();vTaskDelete(nullptr);}
 
   void rx(){
     uint8_t tmp[1024];
     lastRx=millis();gotData=false;
-
     while(!stopFlag){
       int av=src?src->available():0;
       if(av>0){
         size_t freeSpace=AUDIO_RING_SIZE-available();
         if(!freeSpace){vTaskDelay(1);continue;}
-
         size_t want=min((size_t)av,sizeof(tmp));
         want=min(want,freeSpace);
         int r=src->read(tmp,want);
-
         if(r>0){
           push(tmp,r);received+=r;lastRx=millis();gotData=true;
           if(expected>=0&&received>=expected)break;
@@ -92,7 +85,6 @@ class AudioRingStream:public Stream{
         vTaskDelay(1);
       }
     }
-
     portENTER_CRITICAL(&mux);
     done=true;running=false;
     portEXIT_CRITICAL(&mux);
@@ -117,7 +109,6 @@ public:
     portENTER_CRITICAL(&mux);
     h=t=n=0;done=false;stopFlag=false;running=true;
     portEXIT_CRITICAL(&mux);
-
     src=&s;expected=len;received=0;lastRx=millis();gotData=false;
     xTaskCreatePinnedToCore(entry,"TARS_RX",3072,this,2,&task,0);
   }
@@ -127,7 +118,6 @@ public:
     uint32_t st=millis();
     while(running&&millis()-st<1500)vTaskDelay(1);
     if(task){vTaskDelete(task);task=nullptr;}
-
     portENTER_CRITICAL(&mux);
     running=false;done=true;
     portEXIT_CRITICAL(&mux);
@@ -181,7 +171,6 @@ public:
 
 AudioRingStream audioRing;
 
-/* PCM -> DAC */
 class PCMProbeStream:public AudioStream{
   AudioStream*out;
   AudioInfo info;
@@ -193,14 +182,10 @@ public:
   bool begin()override{return true;}
   void end()override{}
 
-  void reset(){
-    decBytes=dacBytes=0;t0=0;info=AudioInfo();
-  }
+  void reset(){decBytes=dacBytes=0;t0=0;info=AudioInfo();}
 
   void setAudioInfo(AudioInfo x)override{
-    AudioStream::setAudioInfo(x);
-    info=x;
-    out->setAudioInfo(x);
+    AudioStream::setAudioInfo(x);info=x;out->setAudioInfo(x);
     Serial.printf("TARS: PCM->DAC %lu Hz / %d ch / %d bit\n",
       (unsigned long)x.sample_rate,x.channels,x.bits_per_sample);
   }
@@ -209,7 +194,6 @@ public:
     if(!p||!n)return 0;
     if(!t0)t0=micros();
     decBytes+=n;
-
     size_t done=0;
     while(done<n){
       size_t w=out->write(p+done,n-done);
@@ -224,8 +208,7 @@ public:
 
   void report(){
     Serial.printf("TARS: PCM BYTES=%llu DAC=%llu\n",
-      (unsigned long long)decBytes,
-      (unsigned long long)dacBytes);
+      (unsigned long long)decBytes,(unsigned long long)dacBytes);
   }
 };
 
@@ -234,11 +217,12 @@ EncodedAudioStream dec(&pcmProbe,&codec);
 EncodedAudioStream wavDec(&pcmProbe,&wav);
 StreamCopy copier(MP3_COPY_BUFFER);
 
-/* OLED */
 void oledSetStatus(const String&s){
   oledStatus=s;oledText="";oledTypePos=0;oledPage=0;oledLastPage=millis();
 }
+
 void oledSetListening(){oledSetStatus("LISTENING");}
+
 void oledStartSpeak(const String&s){
   oledStatus="SPEAKING";oledText=s;oledTypePos=0;oledPage=0;
   oledLastType=millis();oledLastPage=millis();
@@ -274,6 +258,7 @@ void oledTask(void*){
             if(shown>=4){next=i<s.length();break;}
             continue;
           }
+
           line+=c;
           if(line.length()>=20){
             int cut=line.lastIndexOf(' ');
@@ -307,27 +292,21 @@ void oledTask(void*){
   }
 }
 
-/* DAC */
 bool initDAC(){
   auto cfg=analog.defaultConfig(TX_MODE);
-  cfg.sample_rate=44100;
-  cfg.channels=1;
-  cfg.bits_per_sample=16;
+  cfg.sample_rate=44100;cfg.channels=1;cfg.bits_per_sample=16;
 
   if(!analog.begin(cfg)){
-    Serial.println("TARS: DAC ERROR");
-    return false;
+    Serial.println("TARS: DAC ERROR");return false;
   }
 
   dec.addNotifyAudioChange(pcmProbe);
   wavDec.addNotifyAudioChange(pcmProbe);
-
   Serial.println("TARS: DAC GPIO26 READY");
   Serial.println("TARS: MP3/WAV -> PCM -> DAC");
   return true;
 }
 
-/* MIC */
 bool initMic(){
   i2s_config_t c={};
   c.mode=(i2s_mode_t)(I2S_MODE_MASTER|I2S_MODE_RX);
@@ -351,7 +330,6 @@ bool initMic(){
   return true;
 }
 
-/* WIFI/NTP */
 bool wifiOK(){
   if(WiFi.status()==WL_CONNECTED)return true;
   return wifiManagerConnect(false)&&WiFi.status()==WL_CONNECTED;
@@ -366,8 +344,7 @@ bool bootWiFi(){
   }
 
   if(WiFi.status()!=WL_CONNECTED){
-    Serial.println("TARS: WIFI BOOT FAILED");
-    return false;
+    Serial.println("TARS: WIFI BOOT FAILED");return false;
   }
 
   Serial.print("TARS: WIFI CONNECTED IP=");
@@ -388,7 +365,8 @@ bool syncTime(){
       if(now>=1704067200){
         struct tm t;localtime_r(&now,&t);
         Serial.printf("TARS: NTP VALID %04d-%02d-%02d %02d:%02d:%02d\n",
-          t.tm_year+1900,t.tm_mon+1,t.tm_mday,t.tm_hour,t.tm_min,t.tm_sec);
+          t.tm_year+1900,t.tm_mon+1,t.tm_mday,
+          t.tm_hour,t.tm_min,t.tm_sec);
         ntpOK=true;return true;
       }
       delay(500);
@@ -399,7 +377,6 @@ bool syncTime(){
   return false;
 }
 
-/* STT */
 void sttEvent(WStype_t type,uint8_t*payload,size_t length){
   if(type==WStype_CONNECTED){
     sttConnected=true;Serial.println("TARS: STT WS CONNECTED");return;
@@ -565,7 +542,6 @@ String recordRealtime(){
   return stopSTT(samples);
 }
 
-/* ASK */
 String ask(const String&q){
   if(!wifiOK())return "";
 
@@ -581,7 +557,8 @@ String ask(const String&q){
 
   uint32_t st=millis();
   int code=h.POST(body);
-  Serial.printf("TARS: ASK HTTP=%d TIME=%lu ms\n",code,(unsigned long)(millis()-st));
+  Serial.printf("TARS: ASK HTTP=%d TIME=%lu ms\n",
+    code,(unsigned long)(millis()-st));
 
   if(code<200||code>=300){h.end();return "";}
   String r=h.getString();h.end();
@@ -593,15 +570,18 @@ String ask(const String&q){
   s.trim();return s;
 }
 
-/* AUDIO */
 bool streamAudio(const String&url,const String&text){
   if(!wifiOK())return false;
 
-  WiFiClientSecure c;c.setInsecure();c.setTimeout(15000);
-  HTTPClient h;uint32_t total=millis();
+  WiFiClientSecure c;
+  c.setInsecure();
+  c.setTimeout(20000);
+
+  HTTPClient h;
+  uint32_t total=millis();
 
   if(!h.begin(c,url))return false;
-  h.setTimeout(60000);
+  h.setTimeout(20000);
   h.addHeader("Content-Type","application/json");
 
   const char*keys[]={"Content-Type","X-TARS-TTS","X-TARS-TTS-FORMAT"};
@@ -664,7 +644,8 @@ bool streamAudio(const String&url,const String&text){
       return false;
     }
 
-    Serial.printf("TARS: MP3 PREBUFFER=%d/%u BYTES\n",pre,(unsigned)target);
+    Serial.printf("TARS: MP3 PREBUFFER=%d/%u BYTES\n",
+      pre,(unsigned)target);
 
     pcmProbe.reset();
     dec.begin();
@@ -678,14 +659,12 @@ bool streamAudio(const String&url,const String&text){
       bool copied=copier.copy();
       int after=audioRing.available();
 
-      if(copied){
-        if(!started){
-          started=true;
-          AudioInfo ai=codec.audioInfo();
-          Serial.printf("TARS: MP3 %lu Hz / %d ch / %d bit\n",
-            (unsigned long)ai.sample_rate,ai.channels,ai.bits_per_sample);
-          oledStartSpeak(text);
-        }
+      if(copied&&!started){
+        started=true;
+        AudioInfo ai=codec.audioInfo();
+        Serial.printf("TARS: MP3 %lu Hz / %d ch / %d bit\n",
+          (unsigned long)ai.sample_rate,ai.channels,ai.bits_per_sample);
+        oledStartSpeak(text);
       }
 
       if(audioRing.finished()&&audioRing.available()==0)break;
@@ -749,9 +728,9 @@ bool streamAudio(const String&url,const String&text){
   return started;
 }
 
-/* ALARM */
 bool alarmDue(){
   if(!ntpOK||alarmRunning)return false;
+
   time_t now=time(nullptr);
   if(now<1704067200)return false;
 
@@ -786,11 +765,12 @@ void runAlarm(){
   Serial.println("TARS: ALARM SELESAI");
 }
 
-/* PROCESS */
 void processQuestion(const String&q){
   String answer=ask(q);
+
   if(!answer.length()){
-    oledSetStatus("ASK ERROR");return;
+    oledSetStatus("ASK ERROR");
+    return;
   }
 
   uint32_t st=millis();
@@ -802,7 +782,6 @@ void processQuestion(const String&q){
   oledSetStatus(ok?"LISTENING":"AUDIO ERROR");
 }
 
-/* SETUP */
 void setup(){
   Serial.begin(SERIAL_BAUD);
 
@@ -835,7 +814,8 @@ void setup(){
   Serial.println("TARS: BLUETOOTH DISABLED");
   Serial.printf("TARS: AUDIO RING=%u BYTES\n",(unsigned)AUDIO_RING_SIZE);
   Serial.printf("TARS: AUDIO PREBUFFER=%u BYTES\n",(unsigned)AUDIO_PREBUFFER);
-  Serial.printf("TARS: STREAM EOF IDLE=%lu ms\n",(unsigned long)STREAM_EOF_IDLE_MS);
+  Serial.printf("TARS: STREAM EOF IDLE=%lu ms\n",
+    (unsigned long)STREAM_EOF_IDLE_MS);
   Serial.println("TARS: ALARM=06:00 WIB");
 
   if(oledOK)
@@ -847,19 +827,20 @@ void setup(){
   oledSetListening();
 }
 
-/* LOOP */
 void loop(){
   if(playing){delay(1);return;}
 
   if(WiFi.status()!=WL_CONNECTED){
     if(!wifiOK()){
       oledSetStatus("WIFI ERROR");
-      delay(500);return;
+      delay(500);
+      return;
     }
   }
 
   if(alarmDue()){
-    runAlarm();return;
+    runAlarm();
+    return;
   }
 
   String q=recordRealtime();
