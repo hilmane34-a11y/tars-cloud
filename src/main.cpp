@@ -26,15 +26,15 @@
 const uint32_t MIC_RATE=16000,RECORD_MIN_MS=500,SILENCE_MS=1000,PREROLL_MS=700;
 const uint32_t OLED_TYPE_MS=39,OLED_WAVE_MS=70,AUDIO_IDLE_MS=2500,OLED_PAGE_MS=2200;
 const uint32_t STREAM_EOF_IDLE_MS=5000;
-const int32_t MIC_THRESHOLD=6500,MIC_SILENCE=4000;
+const int32_t MIC_THRESHOLD=10500,MIC_SILENCE=8000;
 const size_t BUF=512,PREROLL_SAMPLES=MIC_RATE*PREROLL_MS/1000;
 const int MP3_COPY_BUFFER=512;
 const float MP3_VOLUME=.67f;
-const size_t AUDIO_RING_SIZE=16384,AUDIO_PREBUFFER=4096;
+const size_t AUDIO_RING_SIZE=8192,AUDIO_PREBUFFER=2048;
 const char* STT_HOST="tars-cloud-v1.hilmane34.workers.dev";
 
 const uint32_t ALARM_DURATION_MS=120000;
-const char* ALARM_TEXT="Tuan, sudah jam enam pagi. Bangun dulu.";
+const char* ALARM_TEXT="Tuan, sudah jam enam pagi. bangun dan beraktifitas, ayo tuan.";
 bool alarmRunning=false;
 int alarmLastDay=-1;
 
