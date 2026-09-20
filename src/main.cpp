@@ -423,7 +423,7 @@ bool startSTT(){
   sttWS.beginSSL(STT_HOST,443,"/stt");
 
   uint32_t st=millis();
-  while(!sttReady&&!sttError&&millis()-st<7000){
+  while(!sttReady&&!sttError&&millis()-st<20000){
     sttWS.loop();delay(2);yield();
   }
 
