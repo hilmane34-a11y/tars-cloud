@@ -33,10 +33,11 @@ const int MP3_COPY_BUFFER=512;
 const float MP3_VOLUME=.67f;
 const size_t AUDIO_RING_SIZE=8192,AUDIO_PREBUFFER=2048;
 const char* STT_HOST="tars-cloud-v1.hilmane34.workers.dev";
-
 const uint32_t ALARM_DURATION_MS=120000;
-const char* ALARM_FILE="/alarm.mp3";
 bool alarmRunning=false;int alarmLastDay=-1;
+
+extern const uint8_t alarm_start[] asm("_binary_src_alarm_mp3_start");
+extern const uint8_t alarm_end[] asm("_binary_src_alarm_mp3_end");
 
 Adafruit_SSD1306 oled(OLED_WIDTH,OLED_HEIGHT,&Wire,-1);
 AnalogAudioStream analog;
@@ -52,6 +53,22 @@ uint32_t oledTypePos=0,oledLastType=0,oledLastWave=0,oledPage=0,oledLastPage=0;
 static int32_t rawBuf[BUF/4];
 static int16_t pcmBuf[BUF/4],preBuf[PREROLL_SAMPLES],sendBuf[256];
 
+class AlarmStream:public Stream{
+  size_t pos=0;
+public:
+  void begin(){pos=0;}
+  int available()override{return (int)(alarm_end-alarm_start-pos);}
+  int read()override{return available()?alarm_start[pos++]:-1;}
+  int read(uint8_t*b,size_t n){
+    size_t left=alarm_end-alarm_start-pos;n=min(n,left);
+    if(n){memcpy(b,alarm_start+pos,n);pos+=n;}return n;
+  }
+  int peek()override{return available()?alarm_start[pos]:-1;}
+  void flush()override{}
+  size_t write(uint8_t)override{return 0;}
+  size_t write(const uint8_t*,size_t)override{return 0;}
+}alarmStream;
+
 class AudioRingStream:public Stream{
   uint8_t b[AUDIO_RING_SIZE];volatile size_t h=0,t=0,n=0;
   volatile bool done=false,stopFlag=false,running=false;
@@ -66,8 +83,7 @@ class AudioRingStream:public Stream{
         size_t f=AUDIO_RING_SIZE-available();if(!f){vTaskDelay(1);continue;}
         size_t want=min((size_t)av,sizeof(tmp));want=min(want,f);
         int r=src->read(tmp,want);
-        if(r>0){push(tmp,r);received+=r;lastRx=millis();gotData=true;
-          if(expected>=0&&received>=expected)break;}
+        if(r>0){push(tmp,r);received+=r;lastRx=millis();gotData=true;if(expected>=0&&received>=expected)break;}
       }else{
         if(expected>=0&&received>=expected)break;
         if(expected<0&&gotData&&millis()-lastRx>=STREAM_EOF_IDLE_MS)break;
@@ -98,8 +114,8 @@ public:
   int read()override{uint8_t c;return read(&c,1)==1?c:-1;}
   int read(uint8_t*p,size_t x){
     if(!p||!x)return 0;portENTER_CRITICAL(&mux);size_t take=min((size_t)n,x);
-    if(take){size_t z=min(take,AUDIO_RING_SIZE-t);memcpy(p,b+t,z);if(take>z)memcpy(p+z,b,take-z);
-      t=(t+take)%AUDIO_RING_SIZE;n-=take;}portEXIT_CRITICAL(&mux);return take;
+    if(take){size_t z=min(take,AUDIO_RING_SIZE-t);memcpy(p,b+t,z);if(take>z)memcpy(p+z,b,take-z);t=(t+take)%AUDIO_RING_SIZE;n-=take;}
+    portEXIT_CRITICAL(&mux);return take;
   }
   int peek()override{portENTER_CRITICAL(&mux);int r=n?b[t]:-1;portEXIT_CRITICAL(&mux);return r;}
   void flush()override{portENTER_CRITICAL(&mux);h=t=n=0;portEXIT_CRITICAL(&mux);}
@@ -208,13 +224,16 @@ bool syncTime(){
     Serial.printf("TARS: NTP ATTEMPT %d/4\n",a);oledSetStatus("NTP "+String(a)+"/4");uint32_t st=millis();
     while(millis()-st<10000){
       if(ntpSyncEvent||sntp_get_sync_status()==SNTP_SYNC_STATUS_COMPLETED){
-        time_t now=time(nullptr);if(now>=1704067200){
+        time_t now=time(nullptr);
+        if(now>=1704067200){
           struct tm t;localtime_r(&now,&t);
           Serial.printf("TARS: NTP VALID %04d-%02d-%02d %02d:%02d:%02d\n",t.tm_year+1900,t.tm_mon+1,t.tm_mday,t.tm_hour,t.tm_min,t.tm_sec);
-          ntpOK=true;String d=String(t.tm_mday<10?"0":"")+String(t.tm_mday)+"/"+String(t.tm_mon+1<10?"0":"")+String(t.tm_mon+1)+"/"+String(t.tm_year+1900)+" "+String(t.tm_hour<10?"0":"")+String(t.tm_hour)+":"+String(t.tm_min<10?"0":"")+String(t.tm_min)+":"+String(t.tm_sec<10?"0":"")+String(t.tm_sec);
+          ntpOK=true;
+          String d=String(t.tm_mday<10?"0":"")+String(t.tm_mday)+"/"+String(t.tm_mon+1<10?"0":"")+String(t.tm_mon+1)+"/"+String(t.tm_year+1900)+" "+String(t.tm_hour<10?"0":"")+String(t.tm_hour)+":"+String(t.tm_min<10?"0":"")+String(t.tm_min)+":"+String(t.tm_sec<10?"0":"")+String(t.tm_sec);
           oledSetStatus("NTP OK");oledText=d;oledTypePos=d.length();delay(2500);return true;
         }
-      }delay(100);yield();
+      }
+      delay(100);yield();
     }
     if(a<4){Serial.println("TARS: NTP RETRY");oledSetStatus("NTP RETRY");ntpSyncEvent=false;sntp_restart();delay(1000);}
   }
@@ -235,7 +254,8 @@ void sttEvent(WStype_t type,uint8_t*payload,size_t length){
 }
 
 bool startSTT(){
-  if(!wifiOK())return false;sttConnected=sttReady=sttDone=sttError=false;sttFinal="";sttPartial="";
+  if(!wifiOK())return false;
+  sttConnected=sttReady=sttDone=sttError=false;sttFinal="";sttPartial="";
   sttWS.disconnect();sttWS.onEvent(sttEvent);sttWS.setReconnectInterval(0);sttWS.enableHeartbeat(15000,5000,2);sttWS.beginSSL(STT_HOST,443,"/stt");
   uint32_t st=millis();while(!sttReady&&!sttError&&millis()-st<20000){sttWS.loop();delay(2);yield();}
   if(!sttReady){Serial.println("TARS: STT REALTIME TIMEOUT");sttWS.disconnect();return false;}return true;
@@ -270,7 +290,8 @@ String recordRealtime(){
       if(!sttWS.sendBIN((uint8_t*)pcmBuf,count*2)){Serial.println("TARS: STT PCM SEND FAILED");sttError=true;break;}
       samples+=count;if(peak>=MIC_SILENCE||rms>=1200)lastVoice=millis();
       if(millis()-voiceStart>=RECORD_MIN_MS&&millis()-lastVoice>=SILENCE_MS)break;
-    }yield();
+    }
+    yield();
   }
   if(!voice||sttError){sttWS.disconnect();if(!voice)Serial.println("TARS: MIC AUDIO TOO LOW");return "";}
   return stopSTT(samples);
@@ -331,9 +352,7 @@ String systemStatus(){
   String s="DATA STATUS TARS SAAT INI:\n";
   s+="RAM bebas "+String(ESP.getFreeHeap()/1024.0,1)+" KB, minimum "+String(ESP.getMinFreeHeap()/1024.0,1)+" KB, blok terbesar "+String(ESP.getMaxAllocHeap()/1024.0,1)+" KB.\n";
   s+="Flash "+String(ESP.getFlashChipSize()/1024.0/1024.0,1)+" MB, sketch "+String(ESP.getSketchSize()/1024.0,1)+" KB, ruang sketch bebas "+String(ESP.getFreeSketchSpace()/1024.0,1)+" KB.\n";
-  if(LittleFS.begin(true)){
-    s+="LittleFS total "+String(LittleFS.totalBytes()/1024.0,1)+" KB, terpakai "+String(LittleFS.usedBytes()/1024.0,1)+" KB.\n";
-  }
+  if(LittleFS.begin(true))s+="LittleFS total "+String(LittleFS.totalBytes()/1024.0,1)+" KB, terpakai "+String(LittleFS.usedBytes()/1024.0,1)+" KB.\n";
   s+="CPU "+String(getCpuFrequencyMhz())+" MHz, uptime "+String(millis()/3600000UL)+" jam "+String((millis()/60000UL)%60)+" menit.\n";
   s+="Suhu ESP32 "+String(temperatureRead(),1)+" C.\n";
   s+="WiFi "+String(WiFi.status()==WL_CONNECTED?"terhubung":"terputus");
@@ -348,34 +367,34 @@ String systemStatus(){
 
 /* ===== ALARM OFFLINE ===== */
 bool alarmDue(){
-  if(!ntpOK||alarmRunning)return false;time_t now=time(nullptr);if(now<1704067200)return false;
-  struct tm t;localtime_r(&now,&t);return t.tm_hour==6&&t.tm_min==0&&alarmLastDay!=t.tm_yday;
+  if(!ntpOK||alarmRunning)return false;
+  time_t now=time(nullptr);if(now<1704067200)return false;
+  struct tm t;localtime_r(&now,&t);
+  return t.tm_hour==6&&t.tm_min==0&&alarmLastDay!=t.tm_yday;
 }
 
 bool playLocalAlarm(){
-  if(!LittleFS.begin(true))return false;
-  File f=LittleFS.open(ALARM_FILE,"r");if(!f){Serial.println("TARS: ALARM FILE NOT FOUND");return false;}
-  if(!dacOK)dacOK=initDAC();if(!dacOK){f.close();return false;}
-  Serial.println("TARS: OFFLINE ALARM PLAY");oledSetStatus("ALARM");playing=true;
-  pcmProbe.reset();dec.begin();AudioInfo src=codec.audioInfo();
+  if(!dacOK)dacOK=initDAC();if(!dacOK)return false;
+  Serial.printf("TARS: OFFLINE ALARM PLAY %u BYTES\n",(unsigned)(alarm_end-alarm_start));
+  oledSetStatus("ALARM");playing=true;alarmStream.begin();pcmProbe.reset();
+  dec.begin();AudioInfo src=codec.audioInfo();
   bool ok=mp3Resample.begin(src,22050);
   if(ok){
-    copier.begin(dec,f);oledStartSpeak("Tuan, waktunya bangun.");
-    while(f.available()||copier.copy())yield();
+    copier.begin(dec,alarmStream);oledStartSpeak("Tuan, waktunya bangun.");
+    while(alarmStream.available()>0)copier.copy();
     mp3Resample.flush();mp3Resample.end();
   }
-  dec.end();pcmProbe.report();f.close();playing=false;oledSetListening();
-  Serial.println("TARS: OFFLINE ALARM DONE");return ok;
+  dec.end();pcmProbe.report();playing=false;oledSetListening();
+  Serial.println(ok?"TARS: OFFLINE ALARM DONE":"TARS: OFFLINE ALARM ERROR");
+  return ok;
 }
 
 void runAlarm(){
-  if(!alarmDue())return;time_t now=time(nullptr);struct tm t;localtime_r(&now,&t);
+  if(!alarmDue())return;
+  time_t now=time(nullptr);struct tm t;localtime_r(&now,&t);
   alarmLastDay=t.tm_yday;alarmRunning=true;Serial.println("TARS: ALARM 06:00 WIB");
   uint32_t st=millis();
-  while(millis()-st<ALARM_DURATION_MS){
-    if(!playLocalAlarm())break;
-    delay(500);
-  }
+  while(millis()-st<ALARM_DURATION_MS){if(!playLocalAlarm())break;delay(500);}
   playing=false;alarmRunning=false;oledSetListening();Serial.println("TARS: ALARM SELESAI");
 }
 
