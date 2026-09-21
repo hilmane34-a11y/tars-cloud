@@ -31,7 +31,7 @@ const int32_t MIC_THRESHOLD=10500,MIC_SILENCE=8000;
 const size_t BUF=512,PREROLL_SAMPLES=MIC_RATE*PREROLL_MS/1000;
 const int MP3_COPY_BUFFER=512;
 const float MP3_VOLUME=.67f;
-const size_t AUDIO_RING_SIZE=8192,AUDIO_PREBUFFER=2048;
+const size_t AUDIO_RING_SIZE=8192,AUDIO_PREBUFFER=4096;
 const char* STT_HOST="tars-cloud-v1.hilmane34.workers.dev";
 const uint32_t ALARM_DURATION_MS=120000;
 bool alarmRunning=false;int alarmLastDay=-1;
