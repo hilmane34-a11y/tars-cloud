@@ -555,7 +555,7 @@ struct tm t;localtime_r(&now,&t);return t.tm_hour==6&&t.tm_min==0&&alarmLastDay!
 bool playLocalAlarm(){
 if(!dacOK)dacOK=initDAC();if(!dacOK)return false;
 Serial.printf("TARS: OFFLINE ALARM PLAY %u BYTES\n",(unsigned)(alarm_end-alarm_start));
-oledSetStatus("ALARM");playing=true;alarmStream.begin();pcmProbe.reset();dec.begin();
+oledSetStatus("ALARM");playing=true;alarmStream.begin(alarm_start,alarm_end);pcmProbe.reset();dec.begin();
 AudioInfo src=codec.audioInfo();bool ok=mp3Resample.begin(src,22050);
 if(ok){
 copier.begin(dec,alarmStream);oledStartSpeak("Tuan, waktunya bangun.");
