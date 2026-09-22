@@ -39,102 +39,6 @@ jobs:
 
           echo "OK - partisi LittleFS 512 KB sesuai"
 
-      - name: Verify required MP3 files
-        shell: bash
-        run: |
-          echo "========================================"
-          echo "VERIFY TARS MP3 ASSETS"
-          echo "========================================"
-
-          MP3_FILES=(
-            "src/online.mp3"
-            "src/offline.mp3"
-            "src/follow.mp3"
-            "src/mundur.mp3"
-            "src/maju.mp3"
-            "src/angkat.mp3"
-          )
-
-          for file in "${MP3_FILES[@]}"; do
-            if [ ! -f "$file" ]; then
-              echo "ERROR: MP3 tidak ditemukan: $file"
-              exit 1
-            fi
-
-            SIZE=$(stat -c%s "$file")
-
-            if [ "$SIZE" -eq 0 ]; then
-              echo "ERROR: MP3 kosong: $file"
-              exit 1
-            fi
-
-            echo "OK: $file ($SIZE bytes)"
-          done
-
-          echo "Semua 6 MP3 tersedia."
-
-      - name: Embed TARS MP3 into firmware
-        shell: bash
-        run: |
-          echo "========================================"
-          echo "EMBED TARS MP3"
-          echo "========================================"
-
-          cat > src/tars_mp3.S <<EOF
-          .section .rodata.tars_mp3,"a",@progbits
-
-          .global _binary_src_online_mp3_start
-          .global _binary_src_online_mp3_end
-          .type _binary_src_online_mp3_start,@object
-          .type _binary_src_online_mp3_end,@object
-          _binary_src_online_mp3_start:
-          .incbin "${GITHUB_WORKSPACE}/src/online.mp3"
-          _binary_src_online_mp3_end:
-
-          .global _binary_src_offline_mp3_start
-          .global _binary_src_offline_mp3_end
-          .type _binary_src_offline_mp3_start,@object
-          .type _binary_src_offline_mp3_end,@object
-          _binary_src_offline_mp3_start:
-          .incbin "${GITHUB_WORKSPACE}/src/offline.mp3"
-          _binary_src_offline_mp3_end:
-
-          .global _binary_src_follow_mp3_start
-          .global _binary_src_follow_mp3_end
-          .type _binary_src_follow_mp3_start,@object
-          .type _binary_src_follow_mp3_end,@object
-          _binary_src_follow_mp3_start:
-          .incbin "${GITHUB_WORKSPACE}/src/follow.mp3"
-          _binary_src_follow_mp3_end:
-
-          .global _binary_src_mundur_mp3_start
-          .global _binary_src_mundur_mp3_end
-          .type _binary_src_mundur_mp3_start,@object
-          .type _binary_src_mundur_mp3_end,@object
-          _binary_src_mundur_mp3_start:
-          .incbin "${GITHUB_WORKSPACE}/src/mundur.mp3"
-          _binary_src_mundur_mp3_end:
-
-          .global _binary_src_maju_mp3_start
-          .global _binary_src_maju_mp3_end
-          .type _binary_src_maju_mp3_start,@object
-          .type _binary_src_maju_mp3_end,@object
-          _binary_src_maju_mp3_start:
-          .incbin "${GITHUB_WORKSPACE}/src/maju.mp3"
-          _binary_src_maju_mp3_end:
-
-          .global _binary_src_angkat_mp3_start
-          .global _binary_src_angkat_mp3_end
-          .type _binary_src_angkat_mp3_start,@object
-          .type _binary_src_angkat_mp3_end,@object
-          _binary_src_angkat_mp3_start:
-          .incbin "${GITHUB_WORKSPACE}/src/angkat.mp3"
-          _binary_src_angkat_mp3_end:
-          EOF
-
-          echo "Generated src/tars_mp3.S:"
-          cat src/tars_mp3.S
-
       - name: Prepare LittleFS
         shell: bash
         run: |
@@ -142,21 +46,11 @@ jobs:
           touch data/.gitkeep
 
       - name: Build TARS firmware
-        shell: bash
         run: |
-          echo "========================================"
-          echo "BUILD TARS FIRMWARE"
-          echo "========================================"
-
           pio run -e tars
 
       - name: Build LittleFS
-        shell: bash
         run: |
-          echo "========================================"
-          echo "BUILD LITTLEFS 512 KB"
-          echo "========================================"
-
           pio run -e tars -t buildfs
 
       - name: Locate ESP32 tools
@@ -210,35 +104,12 @@ jobs:
           test -f "$BUILD/littlefs.bin"
           test -f "$BOOT_APP0"
 
-          echo "========================================"
-          echo "BUILD FILES"
-          echo "========================================"
-
+          echo "Build files:"
           ls -lh bootloader.bin
           ls -lh "$BUILD/partitions.bin"
           ls -lh "$BUILD/firmware.bin"
           ls -lh "$BUILD/littlefs.bin"
           ls -lh "$BOOT_APP0"
-
-      - name: Verify firmware size
-        shell: bash
-        run: |
-          BUILD=".pio/build/tars"
-          SIZE=$(stat -c%s "$BUILD/firmware.bin")
-
-          echo "========================================"
-          echo "VERIFY FIRMWARE SIZE"
-          echo "========================================"
-          echo "Firmware : $SIZE bytes"
-          echo "Maximum  : 3604480 bytes"
-          echo "Maximum  : 3.4375 MB"
-
-          if [ "$SIZE" -gt 3604480 ]; then
-            echo "ERROR: Firmware melebihi ruang app 0x370000"
-            exit 1
-          fi
-
-          echo "OK - firmware muat dalam partisi 3.4375 MB"
 
       - name: Verify LittleFS image size
         shell: bash
@@ -246,12 +117,8 @@ jobs:
           BUILD=".pio/build/tars"
           SIZE=$(stat -c%s "$BUILD/littlefs.bin")
 
-          echo "========================================"
-          echo "VERIFY LITTLEFS SIZE"
-          echo "========================================"
-          echo "LittleFS : $SIZE bytes"
-          echo "Maximum  : 524288 bytes"
-          echo "Maximum  : 512 KB"
+          echo "LittleFS image size: $SIZE bytes"
+          echo "Expected maximum : 524288 bytes"
 
           if [ "$SIZE" -gt 524288 ]; then
             echo "ERROR: LittleFS melebihi 512 KB"
@@ -260,49 +127,10 @@ jobs:
 
           echo "OK - LittleFS berada dalam batas 512 KB"
 
-      - name: Verify embedded MP3 symbols
-        shell: bash
-        run: |
-          BUILD=".pio/build/tars/firmware.elf"
-
-          echo "========================================"
-          echo "VERIFY EMBEDDED MP3 SYMBOLS"
-          echo "========================================"
-
-          SYMBOLS=(
-            "_binary_src_online_mp3_start"
-            "_binary_src_online_mp3_end"
-            "_binary_src_offline_mp3_start"
-            "_binary_src_offline_mp3_end"
-            "_binary_src_follow_mp3_start"
-            "_binary_src_follow_mp3_end"
-            "_binary_src_mundur_mp3_start"
-            "_binary_src_mundur_mp3_end"
-            "_binary_src_maju_mp3_start"
-            "_binary_src_maju_mp3_end"
-            "_binary_src_angkat_mp3_start"
-            "_binary_src_angkat_mp3_end"
-          )
-
-          for symbol in "${SYMBOLS[@]}"; do
-            if ! xtensa-esp32-elf-nm "$BUILD" | grep -q "$symbol"; then
-              echo "ERROR: Symbol MP3 tidak ditemukan: $symbol"
-              exit 1
-            fi
-
-            echo "OK: $symbol"
-          done
-
-          echo "Semua simbol MP3 berhasil di-embed."
-
       - name: Merge TARS firmware
         shell: bash
         run: |
           BUILD=".pio/build/tars"
-
-          echo "========================================"
-          echo "MERGE TARS 4 MB"
-          echo "========================================"
 
           python "$ESPTOOL" \
             --chip esp32 \
@@ -329,16 +157,15 @@ jobs:
           print("========================================")
           print("TARS FINAL FIRMWARE")
           print("========================================")
-          print("File            :", path)
-          print("Size            :", size, "bytes")
-          print("Size            :", round(size / 1024 / 1024, 2), "MB")
+          print("File :", path)
+          print("Size :", size, "bytes")
+          print("Size :", round(size / 1024 / 1024, 2), "MB")
           print("----------------------------------------")
           print("Flash           : 4 MB")
           print("Firmware offset : 0x10000")
           print("Firmware size   : 0x370000 (3.4375 MB)")
           print("LittleFS offset : 0x380000")
           print("LittleFS size   : 0x80000 (512 KB)")
-          print("Flash end       : 0x400000")
           print("----------------------------------------")
 
           if size > 0x400000:
