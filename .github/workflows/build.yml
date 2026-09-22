@@ -30,14 +30,14 @@ jobs:
 
           cat partitions.csv
 
-          grep -Eq '^spiffs,[[:space:]]*data,[[:space:]]*spiffs,[[:space:]]*0x2A0000,[[:space:]]*0x160000' partitions.csv || {
+          grep -Eq '^spiffs,[[:space:]]*data,[[:space:]]*spiffs,[[:space:]]*0x380000,[[:space:]]*0x80000' partitions.csv || {
             echo "ERROR: Partisi LittleFS tidak sesuai!"
             echo "Harus:"
-            echo "spiffs,data,spiffs,0x2A0000,0x160000"
+            echo "spiffs,data,spiffs,0x380000,0x80000"
             exit 1
           }
 
-          echo "OK - partisi LittleFS sesuai"
+          echo "OK - partisi LittleFS 512 KB sesuai"
 
       - name: Prepare LittleFS
         shell: bash
@@ -111,6 +111,22 @@ jobs:
           ls -lh "$BUILD/littlefs.bin"
           ls -lh "$BOOT_APP0"
 
+      - name: Verify LittleFS image size
+        shell: bash
+        run: |
+          BUILD=".pio/build/tars"
+          SIZE=$(stat -c%s "$BUILD/littlefs.bin")
+
+          echo "LittleFS image size: $SIZE bytes"
+          echo "Expected maximum : 524288 bytes"
+
+          if [ "$SIZE" -gt 524288 ]; then
+            echo "ERROR: LittleFS melebihi 512 KB"
+            exit 1
+          fi
+
+          echo "OK - LittleFS berada dalam batas 512 KB"
+
       - name: Merge TARS firmware
         shell: bash
         run: |
@@ -127,7 +143,7 @@ jobs:
             0x8000 "$BUILD/partitions.bin" \
             0xE000 "$BOOT_APP0" \
             0x10000 "$BUILD/firmware.bin" \
-            0x2A0000 "$BUILD/littlefs.bin"
+            0x380000 "$BUILD/littlefs.bin"
 
       - name: Verify final BIN
         shell: bash
@@ -144,6 +160,13 @@ jobs:
           print("File :", path)
           print("Size :", size, "bytes")
           print("Size :", round(size / 1024 / 1024, 2), "MB")
+          print("----------------------------------------")
+          print("Flash           : 4 MB")
+          print("Firmware offset : 0x10000")
+          print("Firmware size   : 0x370000 (3.4375 MB)")
+          print("LittleFS offset : 0x380000")
+          print("LittleFS size   : 0x80000 (512 KB)")
+          print("----------------------------------------")
 
           if size > 0x400000:
               raise SystemExit("ERROR: BIN melebihi 4 MB")
@@ -152,9 +175,7 @@ jobs:
               raise SystemExit("ERROR: merged BIN bukan 4 MB penuh")
 
           print("OK - merged BIN tepat 4 MB")
-          print("LittleFS offset : 0x2A0000")
-          print("LittleFS size   : 0x160000")
-          print("Flash address   : 0x0000")
+          print("OK - layout flash sesuai")
           PY
 
       - name: Upload TARS firmware
