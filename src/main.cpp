@@ -181,7 +181,7 @@ void drawSpecialOLED(uint8_t m){
   oled.drawLine(79,18,94,32,SSD1306_WHITE);oled.drawLine(94,18,79,32,SSD1306_WHITE);
   oled.drawCircle(64,45,7,SSD1306_WHITE);oled.fillRect(61,49,6,4,SSD1306_BLACK);
   oled.drawLine(64,52,64,57,SSD1306_WHITE);oled.drawLine(64,57,69,57,SSD1306_WHITE);
-  uint32_t e=millis()-oledDoorStart;int bx=5+(int)min(e/35,48UL);
+  uint32_t e=millis()-oledDoorStart;int bx=5+(int)((e/35U>48U)?48U:e/35U);
   oled.drawLine(bx-10,27,bx-2,27,SSD1306_WHITE);
   oled.drawLine(bx-8,30,bx-2,30,SSD1306_WHITE);
   oled.fillCircle(bx,27,3,SSD1306_WHITE);
