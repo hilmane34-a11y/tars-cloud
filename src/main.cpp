@@ -358,7 +358,7 @@ String recordRealtime(){
   uint32_t rms=count?(uint32_t)sqrt((double)sum/count):0;
   if(!voice){
    for(size_t i=0;i<count;i++){preBuf[prePos]=pcmBuf[i];prePos=(prePos+1)%PREROLL_SAMPLES;if(preCount<PREROLL_SAMPLES)preCount++;}
-   if(peak>=MIC_THRESHOLD||rms>=1800){
+   if(peak>=MIC_THRESHOLD||rms>=3000){
     voice=true;voiceStart=lastVoice=millis();
     size_t start=preCount==PREROLL_SAMPLES?prePos:0,nsend=0;
     for(size_t i=0;i<preCount;i++){
@@ -370,7 +370,7 @@ String recordRealtime(){
    }
   }else{
    if(!sttWS.sendBIN((uint8_t*)pcmBuf,count*2)){Serial.println("TARS: STT PCM SEND FAILED");sttError=true;break;}
-   samples+=count;if(peak>=MIC_SILENCE||rms>=1200)lastVoice=millis();
+   samples+=count;if(peak>=MIC_SILENCE||rms>=1800)lastVoice=millis();
    if(millis()-voiceStart>=RECORD_MIN_MS&&millis()-lastVoice>=SILENCE_MS)break;
   }
   yield();
@@ -402,9 +402,9 @@ bool recordOfflineWAV(){
   }
   uint32_t rms=count?(uint32_t)sqrt((double)sum/count):0;
   if(!voice){
-   if(peak>=MIC_THRESHOLD||rms>=1800){voice=true;start=millis();lastVoice=start;}
+   if(peak>=MIC_THRESHOLD||rms>=3000){voice=true;start=millis();lastVoice=start;}
   }else{
-   if(peak>=MIC_SILENCE||rms>=1200)lastVoice=millis();
+   if(peak>=MIC_SILENCE||rms>=1800)lastVoice=millis();
    if(millis()-start>=RECORD_MIN_MS&&millis()-lastVoice>=SILENCE_MS)break;
   }
   if(voice){f.write((uint8_t*)pcmBuf,count*2);total+=count;}
@@ -673,7 +673,7 @@ void setup(){
  Serial.println("TARS: AUDIO MP3/WAV -> 22050Hz/16bit");
  Serial.println("TARS: INMP441 RIGHT GPIO34");
  Serial.printf("TARS: MIC THRESHOLD=%ld SILENCE=%ld\n",(long)MIC_THRESHOLD,(long)MIC_SILENCE);
- Serial.println("TARS: MIC RMS TRIGGER=1800 SILENCE=1200 PREROLL=700 ms");
+ Serial.println("TARS: MIC RMS TRIGGER=3000 SILENCE=1800 PREROLL=700 ms");
  Serial.println("TARS: STT REALTIME PCM");Serial.println("TARS: STT OFFLINE CLOUDFLARE WHISPER");
  Serial.println("TARS: MODE OFFLINE");Serial.println("TARS: BLUETOOTH DISABLED");
  Serial.printf("TARS: AUDIO RING=%u PREBUFFER=%u\n",(unsigned)AUDIO_RING_SIZE,(unsigned)AUDIO_PREBUFFER);
