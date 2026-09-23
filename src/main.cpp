@@ -412,7 +412,7 @@ String normCmd(String s){
 }
 
 bool startOfflineSTT(){
- if(!wifiOK()||!micOK())return false;
+ if(!wifiOK()||!micOK)return false;
  sttConnected=sttReady=sttDone=sttError=false;sttFinal="";sttPartial="";
  sttWS.disconnect();sttWS.onEvent(sttEvent);sttWS.setReconnectInterval(0);
  sttWS.enableHeartbeat(15000,5000,2);sttWS.beginSSL(STT_HOST,443,"/stt");
