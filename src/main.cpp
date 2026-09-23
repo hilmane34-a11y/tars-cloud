@@ -379,67 +379,107 @@ String recordRealtime(){
  return stopSTT(samples);
 }
 
-/* OFFLINE STT */
+/* OFFLINE STT - SPEECHMATICS REALTIME */
 String normCmd(String s){
  s.toLowerCase();
  for(size_t i=0;i<s.length();i++)if(ispunct((unsigned char)s[i]))s.setCharAt(i,' ');
  while(s.indexOf("  ")>=0)s.replace("  "," ");
  s.trim();return s;
 }
-
-bool recordOfflineWAV(){
- if(!micOK||!wifiOK())return false;
- File f=LittleFS.open("/stt.wav","w");if(!f){Serial.println("TARS: OFFLINE WAV OPEN ERROR");return false;}
- uint32_t maxSamples=MIC_RATE*OFFLINE_MAX_MS/1000,total=0;uint8_t hdr[44]={0};f.write(hdr,44);
- oledSetStatus("READY");uint32_t lastVoice=millis(),start=millis();bool voice=false;
- Serial.println("TARS: OFFLINE COMMAND WAITING");
- while(total<maxSamples){
-  size_t bytes=0;if(i2s_read(MIC_PORT,rawBuf,sizeof(rawBuf),&bytes,pdMS_TO_TICKS(30))!=ESP_OK)continue;
-  size_t count=bytes/4;int32_t peak=0;uint64_t sum=0;
+bool startOfflineSTT(){
+ if(tarsMode!=MODE_OFFLINE||!wifiOK())return false;
+ sttConnected=sttReady=sttDone=sttError=false;
+ sttFinal="";sttPartial="";
+ sttWS.disconnect();sttWS.onEvent(sttEvent);sttWS.setReconnectInterval(0);
+ sttWS.enableHeartbeat(15000,5000,2);
+ sttWS.beginSSL(STT_HOST,443,"/stt");
+ uint32_t st=millis();
+ while(!sttReady&&!sttError&&millis()-st<20000){
+  sttWS.loop();delay(2);yield();
+ }
+ if(!sttReady){
+  Serial.println("TARS: OFFLINE STT REALTIME TIMEOUT");
+  sttWS.disconnect();return false;
+ }
+ Serial.println("TARS: OFFLINE STT REALTIME READY");
+ return true;
+}
+String stopOfflineSTT(uint32_t samples){
+ if(!sttConnected)return "";
+ JsonDocument j;j["type"]="end";j["timestamp"]=(double)samples/MIC_RATE;
+ String msg;serializeJson(j,msg);sttWS.sendTXT(msg);
+ Serial.println("TARS: OFFLINE STT END SENT");
+ uint32_t st=millis();
+ while(!sttDone&&!sttError&&millis()-st<6000){
+  sttWS.loop();delay(2);yield();
+ }
+ String r=sttFinal;r.trim();sttWS.disconnect();
+ Serial.print("TARS: OFFLINE YOU SAID = ");Serial.println(r);
+ return r;
+}
+String recordOffline(){
+ if(!micOK||!startOfflineSTT())return "";
+ oledSetStatus("READY");
+ size_t prePos=0,preCount=0;
+ uint32_t voiceStart=0,lastVoice=0,samples=0;
+ bool voice=false;
+ Serial.println("TARS: OFFLINE REALTIME LISTENING");
+  for(;;){
+  sttWS.loop();
+  if(sttError)break;
+  size_t bytes=0;
+  if(i2s_read(MIC_PORT,rawBuf,sizeof(rawBuf),&bytes,pdMS_TO_TICKS(30))!=ESP_OK)continue;
+  size_t count=bytes/4;
+  int32_t peak=0;uint64_t sum=0;
   for(size_t i=0;i<count;i++){
-   int32_t v=constrain(rawBuf[i]>>16,-32768,32767);pcmBuf[i]=(int16_t)v;
-   int32_t a=abs(v);if(a>peak)peak=a;sum+=(uint64_t)a*a;
+   int32_t v=constrain(rawBuf[i]>>16,-32768,32767);
+   pcmBuf[i]=(int16_t)v;
+   int32_t a=abs(v);if(a>peak)peak=a;
+   sum+=(uint64_t)a*a;
   }
   uint32_t rms=count?(uint32_t)sqrt((double)sum/count):0;
   if(!voice){
-   if(peak>=MIC_THRESHOLD||rms>=3000){voice=true;start=millis();lastVoice=start;}
+   for(size_t i=0;i<count;i++){
+    preBuf[prePos]=pcmBuf[i];
+    prePos=(prePos+1)%PREROLL_SAMPLES;
+    if(preCount<PREROLL_SAMPLES)preCount++;
+   }
+   if(peak>=MIC_THRESHOLD||rms>=3000){
+    voice=true;voiceStart=lastVoice=millis();
+    size_t start=preCount==PREROLL_SAMPLES?prePos:0,nsend=0;
+    for(size_t i=0;i<preCount;i++){
+     sendBuf[nsend++]=preBuf[(start+i)%PREROLL_SAMPLES];
+     if(nsend==256){
+      if(!sttWS.sendBIN((uint8_t*)sendBuf,nsend*2)){
+       sttError=true;break;
+      }
+      nsend=0;
+     }
+    }
+    if(nsend&&!sttError)
+     sttWS.sendBIN((uint8_t*)sendBuf,nsend*2);
+    samples+=preCount;
+    Serial.printf("TARS: OFFLINE VOICE PEAK=%ld RMS=%lu\n",
+     (long)peak,(unsigned long)rms);
+   }
   }else{
+   if(!sttWS.sendBIN((uint8_t*)pcmBuf,count*2)){
+    Serial.println("TARS: OFFLINE PCM SEND FAILED");
+    sttError=true;break;
+   }
+   samples+=count;
    if(peak>=MIC_SILENCE||rms>=1800)lastVoice=millis();
-   if(millis()-start>=RECORD_MIN_MS&&millis()-lastVoice>=SILENCE_MS)break;
+   if(millis()-voiceStart>=RECORD_MIN_MS&&
+      millis()-lastVoice>=SILENCE_MS)break;
   }
-  if(voice){f.write((uint8_t*)pcmBuf,count*2);total+=count;}
+  yield();
  }
- f.close();
- if(!voice||!total){LittleFS.remove("/stt.wav");Serial.println("TARS: OFFLINE AUDIO TOO LOW");return false;}
- f=LittleFS.open("/stt.wav","r");if(!f)return false;
- uint32_t dataBytes=total*2,fileBytes=dataBytes+44;
- uint8_t h[44]={
-  'R','I','F','F',(uint8_t)fileBytes,(uint8_t)(fileBytes>>8),(uint8_t)(fileBytes>>16),(uint8_t)(fileBytes>>24),
-  'W','A','V','E','f','m','t',' ',16,0,0,0,1,0,1,0,
-  (uint8_t)MIC_RATE,(uint8_t)(MIC_RATE>>8),(uint8_t)(MIC_RATE>>16),(uint8_t)(MIC_RATE>>24),
-  (uint8_t)(MIC_RATE*2),(uint8_t)((MIC_RATE*2)>>8),0,0,2,0,16,0,'d','a','t','a',
-  (uint8_t)dataBytes,(uint8_t)(dataBytes>>8),(uint8_t)(dataBytes>>16),(uint8_t)(dataBytes>>24)
- };
- File out=LittleFS.open("/stt2.wav","w");if(!out){f.close();return false;}out.write(h,44);
- uint8_t b[1024];while(f.available()){size_t n=f.read(b,sizeof(b));out.write(b,n);}
- f.close();out.close();LittleFS.remove("/stt.wav");return true;
-}
-
-String recordOffline(){
- if(!recordOfflineWAV())return "";
- File f=LittleFS.open("/stt2.wav","r");if(!f)return "";
- WiFiClientSecure c;c.setInsecure();HTTPClient h;
- if(!h.begin(c,String(TARS_CLOUD_URL)+"/stt-offline")){f.close();return "";}
- h.setTimeout(20000);h.addHeader("Content-Type","audio/wav");
- uint32_t st=millis();int code=h.sendRequest("POST",&f,f.size());
- Serial.printf("TARS: OFFLINE STT HTTP=%d TIME=%lu ms",code,(unsigned long)(millis()-st));Serial.println();
- String r;
- if(code>=200&&code<300){
-  String body=h.getString();JsonDocument j;
-  if(!deserializeJson(j,body))r=j["text"].as<String>();
-  r.trim();Serial.print("TARS: OFFLINE YOU SAID = ");Serial.println(r);
- }else Serial.printf("TARS: OFFLINE STT ERROR=%d\n",code);
- h.end();f.close();LittleFS.remove("/stt2.wav");return r;
+ if(!voice||sttError){
+  sttWS.disconnect();
+  if(!voice)Serial.println("TARS: OFFLINE MIC AUDIO TOO LOW");
+  return "";
+ }
+ return stopOfflineSTT(samples);
 }
 
 /* LOCAL MP3 */
