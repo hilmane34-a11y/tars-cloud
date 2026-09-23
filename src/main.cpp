@@ -714,7 +714,8 @@ void setup(){
  Serial.println("TARS: INMP441 RIGHT GPIO34");
  Serial.printf("TARS: MIC THRESHOLD=%ld SILENCE=%ld\n",(long)MIC_THRESHOLD,(long)MIC_SILENCE);
  Serial.println("TARS: MIC RMS TRIGGER=3000 SILENCE=1800 PREROLL=700 ms");
- Serial.println("TARS: STT REALTIME PCM");Serial.println("TARS: STT OFFLINE CLOUDFLARE WHISPER");
+ Serial.println("TARS: STT REALTIME PCM");
+ Serial.println("TARS: STT OFFLINE SPEECHMATICS REALTIME");
  Serial.println("TARS: MODE OFFLINE");Serial.println("TARS: BLUETOOTH DISABLED");
  Serial.printf("TARS: AUDIO RING=%u PREBUFFER=%u\n",(unsigned)AUDIO_RING_SIZE,(unsigned)AUDIO_PREBUFFER);
  Serial.printf("TARS: STREAM EOF IDLE=%lu ms\n",(unsigned long)STREAM_EOF_IDLE_MS);
