@@ -51,10 +51,10 @@
 const uint32_t MIC_RATE=16000,RECORD_MIN_MS=500,SILENCE_MS=1000,PREROLL_MS=250;
 const uint32_t OLED_TYPE_MS=39,OLED_WAVE_MS=70,AUDIO_IDLE_MS=2500,OLED_PAGE_MS=2200;
 const uint32_t STREAM_EOF_IDLE_MS=5000,OFFLINE_MAX_MS=4000,ALARM_DURATION_MS=120000;
-const int32_t MIC_THRESHOLD=,12000,MIC_SILENCE=8000;
+const int32_t MIC_THRESHOLD=12000,MIC_SILENCE=8000;
 const size_t BUF=256,PREROLL_SAMPLES=MIC_RATE*PREROLL_MS/1000;
 const int MP3_COPY_BUFFER=512;
-const float MP3_VOLUME=.60f;
+const float MP3_VOLUME=.67f;
 const size_t AUDIO_RING_SIZE=8192,AUDIO_PREBUFFER=2048;
 const char*STT_HOST="tars-cloud-v1.hilmane34.workers.dev";
 
@@ -470,7 +470,7 @@ String recordOffline(){
 }
 
 /* TIME GREETING */
-bool playLocalMP3(const uint8_t*,const uint8_t*,const String&,bool=false);
+bool playLocalMP3(const uint8_t*,const uint8_t*,const String&,bool);
 uint8_t greetingPeriod(){
  if(!ntpOK)return 255;
  time_t now=time(nullptr);if(now<1704067200)return 255;
@@ -482,7 +482,7 @@ uint8_t greetingPeriod(){
 }
 const char* greetingText(uint8_t p){
  switch(p){
-  case 0:return "Emm..., Selamat pagi, tuan.";
+  case 0:return "Selamat pagi, tuan.";
   case 1:return "Selamat siang, tuan.";
   case 2:return "Selamat sore, tuan.";
   default:return "Selamat malam, tuan.";
