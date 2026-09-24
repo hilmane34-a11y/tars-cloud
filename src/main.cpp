@@ -512,7 +512,7 @@ void checkTimeGreeting(){
 }
 
 /* LOCAL MP3 */
-bool playLocalMP3(const uint8_t*a,const uint8_t*z,const String&text,bool keepSpecial=false){
+bool playLocalMP3(const uint8_t*a,const uint8_t*z,const String&text,bool keepSpecial){
  if(!dacOK)dacOK=initDAC();if(!dacOK)return false;
  localMP3.begin(a,z);playing=true;pcmProbe.reset();if(!keepSpecial)oledStartSpeak(text);
  dec.begin();AudioInfo src=codec.audioInfo();bool ok=mp3Resample.begin(src,22050);
