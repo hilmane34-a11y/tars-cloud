@@ -51,17 +51,17 @@
 const uint32_t MIC_RATE=16000,RECORD_MIN_MS=500,SILENCE_MS=1000,PREROLL_MS=250;
 const uint32_t OLED_TYPE_MS=39,OLED_WAVE_MS=70,AUDIO_IDLE_MS=2500,OLED_PAGE_MS=2200;
 const uint32_t STREAM_EOF_IDLE_MS=5000,OFFLINE_MAX_MS=4000,ALARM_DURATION_MS=120000;
-const int32_t MIC_THRESHOLD=12000,MIC_SILENCE=8000;
+const int32_t MIC_THRESHOLD=,7000,MIC_SILENCE=4500;
 const size_t BUF=256,PREROLL_SAMPLES=MIC_RATE*PREROLL_MS/1000;
 const int MP3_COPY_BUFFER=512;
-const float MP3_VOLUME=.67f;
+const float MP3_VOLUME=.60f;
 const size_t AUDIO_RING_SIZE=8192,AUDIO_PREBUFFER=2048;
 const char*STT_HOST="tars-cloud-v1.hilmane34.workers.dev";
 
 enum TarsMode:uint8_t{MODE_OFFLINE,MODE_ONLINE};
 TarsMode tarsMode=MODE_OFFLINE;
 
-bool alarmRunning=false;int alarmLastDay=-1;
+bool alarmRunning=false,greetingPlaying=false;int alarmLastDay=-1;uint8_t lastGreetingPeriod=255;
 extern const uint8_t alarm_start[] asm("_binary_src_alarm_mp3_start");
 extern const uint8_t alarm_end[] asm("_binary_src_alarm_mp3_end");
 
@@ -69,6 +69,7 @@ extern const uint8_t alarm_end[] asm("_binary_src_alarm_mp3_end");
 extern const uint8_t n##_start[] asm("_binary_src_" #n "_mp3_start"); \
 extern const uint8_t n##_end[] asm("_binary_src_" #n "_mp3_end");
 MP3SYM(follow)MP3SYM(mundur)MP3SYM(maju)MP3SYM(online)MP3SYM(offline)MP3SYM(angkat)
+MP3SYM(hari)MP3SYM(pagi)MP3SYM(siang)MP3SYM(sore)MP3SYM(malam)
 
 Adafruit_SSD1306 oled(OLED_WIDTH,OLED_HEIGHT,&Wire,-1);
 AnalogAudioStream analog;MP3DecoderHelix codec;WAVDecoder wav;WebSocketsClient sttWS;
@@ -468,6 +469,48 @@ String recordOffline(){
  return stopOfflineSTT(samples);
 }
 
+/* TIME GREETING */
+bool playLocalMP3(const uint8_t*,const uint8_t*,const String&,bool=false);
+uint8_t greetingPeriod(){
+ if(!ntpOK)return 255;
+ time_t now=time(nullptr);if(now<1704067200)return 255;
+ struct tm t;localtime_r(&now,&t);
+ if(t.tm_hour>=5&&t.tm_hour<11)return 0;
+ if(t.tm_hour>=11&&t.tm_hour<15)return 1;
+ if(t.tm_hour>=15&&t.tm_hour<20)return 2;
+ return 3;
+}
+const char* greetingText(uint8_t p){
+ switch(p){
+  case 0:return "Emm..., Selamat pagi, tuan.";
+  case 1:return "Selamat siang, tuan.";
+  case 2:return "Selamat sore, tuan.";
+  default:return "Selamat malam, tuan.";
+ }
+}
+bool playTimeGreeting(uint8_t p){
+ switch(p){
+  case 0:return playLocalMP3(pagi_start,pagi_end,greetingText(p));
+  case 1:return playLocalMP3(siang_start,siang_end,greetingText(p));
+  case 2:return playLocalMP3(sore_start,sore_end,greetingText(p));
+  case 3:return playLocalMP3(malam_start,malam_end,greetingText(p));
+ }
+ return false;
+}
+void checkTimeGreeting(){
+ if(!ntpOK||playing||alarmRunning||greetingPlaying)return;
+ uint8_t p=greetingPeriod();
+ if(p==255||p==lastGreetingPeriod)return;
+ greetingPlaying=true;
+ Serial.printf("TARS: TIME GREETING PERIOD=%u\n",p);
+ Serial.println(String("TARS: ")+greetingText(p));
+ oledShowText(greetingText(p),"SALAM");
+ bool ok=playTimeGreeting(p);
+ if(ok)lastGreetingPeriod=p;
+ greetingPlaying=false;
+ oledSetStatus(ok?(tarsMode==MODE_ONLINE?"LISTENING":"READY"):"AUDIO ERROR");
+}
+
 /* LOCAL MP3 */
 bool playLocalMP3(const uint8_t*a,const uint8_t*z,const String&text,bool keepSpecial=false){
  if(!dacOK)dacOK=initDAC();if(!dacOK)return false;
@@ -640,7 +683,11 @@ bool processOffline(const String&q){
  static const char*mundur[]={"mundur","tars mundur","mundur tars","surut","tars surut","jalan mundur","balik mundur"};
  static const char*maju[]={"maju","tars maju","maju tars","majulah","tars majulah","jalan maju","terus maju"};
  static const char*angkat[]={"angkat","tars angkat","angkat tangan","tars angkat tangan","angkatlah","tangan","angkat tangan tars"};
+ static const char*hari[]={"hari","hari ini","kata hari","kata hari ini","kata kata","kata kata hari ini","kata kata hari","kata kata hari ini tars","kata hari ini tars","tars hari ini","tars kata hari ini"};
 
+ if(cmdMatch(s,hari,sizeof(hari)/sizeof(*hari))){
+  oledShowText("HARI INI","OFFLINE");playLocalMP3(hari_start,hari_end,"Kata-kata hari ini, tuan.");oledSetStatus("READY");return true;
+ }
  if(cmdMatch(s,online,sizeof(online)/sizeof(*online))){
   Serial.println("TARS: SWITCH OFFLINE -> ONLINE");oledShowText("ONLINE","OFFLINE");tarsMode=MODE_ONLINE;
   playLocalMP3(online_start,online_end,"Mode online aktif, tuan");Serial.println("TARS: MODE ONLINE");return true;
@@ -720,7 +767,7 @@ void setup(){
  Serial.printf("TARS: STREAM EOF IDLE=%lu ms\n",(unsigned long)STREAM_EOF_IDLE_MS);
  Serial.println("TARS: OFFLINE ALARM=06:00 WIB");
  if(oledOK)xTaskCreatePinnedToCore(oledTask,"TARS_OLED",4096,nullptr,1,nullptr,0);
- wifiManagerBegin();if(bootWiFi())syncTime();oledSetStatus("READY");
+ wifiManagerBegin();if(bootWiFi()){if(syncTime())checkTimeGreeting();}oledSetStatus("READY");
 }
 
 /* LOOP */
@@ -730,6 +777,7 @@ void loop(){
   if(!wifiOK()){oledSetStatus("WIFI ERROR");delay(500);return;}
  }
  if(alarmDue()){runAlarm();return;}
+ checkTimeGreeting();if(playing){delay(1);return;}
  String q=tarsMode==MODE_ONLINE?recordRealtime():recordOffline();
  if(q.length())processQuestion(q);
  else if(!specialActive())oledSetStatus(tarsMode==MODE_ONLINE?"LISTENING":"READY");
