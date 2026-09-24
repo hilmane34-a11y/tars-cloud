@@ -470,7 +470,7 @@ String recordOffline(){
 }
 
 /* TIME GREETING */
-bool playLocalMP3(const uint8_t*,const uint8_t*,const String&,bool);
+bool playLocalMP3(const uint8_t*,const uint8_t*,const String&,bool=false);
 uint8_t greetingPeriod(){
  if(!ntpOK)return 255;
  time_t now=time(nullptr);if(now<1704067200)return 255;
