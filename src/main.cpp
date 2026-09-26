@@ -194,6 +194,9 @@ void armUp(){digitalWrite(MOTOR_ARM_A1,LOW);digitalWrite(MOTOR_ARM_A2,HIGH);}
 void gripOpen(){digitalWrite(MOTOR_GRIP_B1,HIGH);digitalWrite(MOTOR_GRIP_B2,LOW);}
 void gripClose(){digitalWrite(MOTOR_GRIP_B1,LOW);digitalWrite(MOTOR_GRIP_B2,HIGH);}
 
+void oledSetStatus(const String&);
+void oledShowText(const String&,const String&);
+
 void initMotors(){
  pinMode(MOTOR_ARM_A1,OUTPUT);pinMode(MOTOR_ARM_A2,OUTPUT);
  pinMode(MOTOR_GRIP_B1,OUTPUT);pinMode(MOTOR_GRIP_B2,OUTPUT);
