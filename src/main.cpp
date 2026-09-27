@@ -26,7 +26,6 @@
 #define MIC_WS 19
 #define MIC_SD 16
 #define AUDIO_DAC_PIN 26
-
 #define CAM_XCLK 4
 #define CAM_SIOD 21
 #define CAM_SIOC 22
@@ -41,7 +40,6 @@
 #define CAM_VSYNC 13
 #define CAM_HREF 14
 #define CAM_PCLK 12
-
 #define MOTOR_ARM_A1 23
 #define MOTOR_ARM_A2 5
 #define MOTOR_GRIP_B1 2
@@ -52,7 +50,6 @@ const uint32_t
  MIC_RATE=16000,RECORD_MIN_MS=500,SILENCE_MS=1000,PREROLL_MS=250,
  OLED_TYPE_MS=39,OLED_WAVE_MS=70,AUDIO_IDLE_MS=2500,OLED_PAGE_MS=2200,
  STREAM_EOF_IDLE_MS=5000,OFFLINE_MAX_MS=4000,ALARM_DURATION_MS=120000;
-
 const int32_t MIC_THRESHOLD=12000,MIC_SILENCE=8000;
 const size_t BUF=256,PREROLL_SAMPLES=MIC_RATE*PREROLL_MS/1000;
 const int MP3_COPY_BUFFER=512;
@@ -62,7 +59,6 @@ const char*STT_HOST="tars-cloud-v1.hilmane34.workers.dev";
 
 enum TarsMode:uint8_t{MODE_OFFLINE,MODE_ONLINE};
 enum Behavior:uint8_t{BEH_IDLE,BEH_ARM_DOWN,BEH_ARM_UP,BEH_GRIP_OPEN,BEH_GRIP_CLOSE};
-
 TarsMode tarsMode=MODE_OFFLINE;
 Behavior behavior=BEH_IDLE;
 
@@ -71,18 +67,14 @@ bool alarmRunning=false,greetingPlaying=false,motorBusy=false;
 bool cameraOK=false,cameraLive=false,oledOK=false,micOK=false,dacOK=false;
 bool playing=false,ntpOK=false,sttConnected=false,sttReady=false;
 bool sttDone=false,sttError=false,dacLinksReady=false;
-
 volatile bool ntpSyncEvent=false;
 volatile uint8_t oledSpecial=0;
 volatile uint32_t oledDeadUntil=0,oledDoorStart=0;
-
 int alarmLastDay=-1;
 uint8_t lastGreetingPeriod=255,behaviorPhase=0;
-
 String sttFinal,sttPartial,oledText,oledStatus="READY";
 uint32_t oledTypePos=0,oledLastType=0,oledLastWave=0;
 uint32_t oledPage=0,oledLastPage=0,behaviorAt=0,behaviorNext=0;
-
 static int32_t rawBuf[BUF/4];
 static int16_t pcmBuf[BUF/4],preBuf[PREROLL_SAMPLES],sendBuf[256];
 static uint8_t visionJpeg[VISION_JPEG_MAX];
@@ -98,11 +90,9 @@ SemaphoreHandle_t cameraMux=nullptr;
 /* ================= EMBEDDED AUDIO ================= */
 extern const uint8_t alarm_start[] asm("_binary_src_alarm_mp3_start");
 extern const uint8_t alarm_end[] asm("_binary_src_alarm_mp3_end");
-
 #define MP3SYM(n) \
 extern const uint8_t n##_start[] asm("_binary_src_"#n"_mp3_start"); \
 extern const uint8_t n##_end[] asm("_binary_src_"#n"_mp3_end");
-
 MP3SYM(follow) MP3SYM(mundur) MP3SYM(maju) MP3SYM(online)
 MP3SYM(offline) MP3SYM(angkat) MP3SYM(hari) MP3SYM(pagi)
 MP3SYM(siang) MP3SYM(sore) MP3SYM(malam)
@@ -117,8 +107,8 @@ bool initCamera(){
  if(camera)return true;
  Serial.println("TARS: OV7670 INIT...");
  camera=new OV7670(OV7670::Mode::QQVGA_RGB565,CAM_SIOD,CAM_SIOC,
-   CAM_VSYNC,CAM_HREF,CAM_XCLK,CAM_PCLK,CAM_D0,CAM_D1,CAM_D2,CAM_D3,
-   CAM_D4,CAM_D5,CAM_D6,CAM_D7);
+  CAM_VSYNC,CAM_HREF,CAM_XCLK,CAM_PCLK,CAM_D0,CAM_D1,CAM_D2,CAM_D3,
+  CAM_D4,CAM_D5,CAM_D6,CAM_D7);
  if(!camera){
   Serial.println("TARS: OV7670 ALLOC ERROR");
   return false;
@@ -199,12 +189,10 @@ String visionAsk(const String&q){
  }
  if(!wifiOK()||!cameraLive||!camera)return "";
  if(cameraMux&&xSemaphoreTake(cameraMux,pdMS_TO_TICKS(1500))!=pdTRUE)return "";
-
  camera->oneFrame();
  size_t jl=0;
  bool ok=camera->frame&&I2SCamera::encodeFrameToJPEG(
-   visionJpeg,&jl,55)&&jl>0&&jl<=VISION_JPEG_MAX;
-
+  visionJpeg,&jl,55)&&jl>0&&jl<=VISION_JPEG_MAX;
  if(cameraMux)xSemaphoreGive(cameraMux);
  if(!ok){
   Serial.println("TARS: VISION JPEG ERROR");return "";
@@ -213,7 +201,6 @@ String visionAsk(const String&q){
  static const char B64[]=
   "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
  String b64;b64.reserve(4*((jl+2)/3)+1);
-
  for(size_t i=0;i<jl;i+=3){
   uint32_t v=(uint32_t)visionJpeg[i]<<16;
   if(i+1<jl)v|=(uint32_t)visionJpeg[i+1]<<8;
@@ -383,9 +370,10 @@ public:
 
 /* ================= AUDIO PIPE ================= */
 class PCMProbeStream:public AudioStream{
- AudioStream*out;uint64_t decBytes=0,dacBytes=0;
+ AudioOutput*out;
+ uint64_t decBytes=0,dacBytes=0;
 public:
- PCMProbeStream(AudioStream&o):out(&o){}
+ PCMProbeStream(AudioOutput&o):out(&o){}
  bool begin()override{return true;}
  void end()override{}
  void reset(){decBytes=dacBytes=0;}
@@ -399,16 +387,20 @@ public:
 
  size_t write(const uint8_t*p,size_t n)override{
   if(!p||!n)return 0;
-  decBytes+=n;size_t d=0;
+  decBytes+=n;
+  size_t d=0;
   while(d<n){
    size_t w=out->write(p+d,n-d);
    if(w)d+=w;
    else{delay(1);yield();}
   }
-  dacBytes+=d;return d;
+  dacBytes+=d;
+  return d;
  }
 
- int availableForWrite()override{return out->availableForWrite();}
+ int availableForWrite()override{
+  return out->availableForWrite();
+ }
 
  void report(){
   Serial.printf("TARS: PCM BYTES=%llu DAC=%llu\n",
@@ -566,7 +558,7 @@ void oledTask(void*){
 
    if(oledText.length()){
     String s=oledText.substring(
-      0,min(oledTypePos,(uint32_t)oledText.length()));
+     0,min(oledTypePos,(uint32_t)oledText.length()));
     uint32_t lineNo=0,target=oledPage*4;
     uint8_t shown=0;String line;bool next=false;
 
@@ -623,7 +615,6 @@ void oledTask(void*){
 
    oled.display();
   }
-
   vTaskDelay(10);
  }
 }
@@ -631,16 +622,6 @@ void oledTask(void*){
 /* ================= ULP DAC ================= */
 bool initDAC(){
  AudioInfo info(22050,1,16);
-
- /*
-  * ULP DAC:
-  * DAC1 = GPIO25
-  * DAC2 = GPIO26
-  *
-  * TARS menggunakan GPIO26.
-  * AudioESP32ULP tidak mengambil I2S0 seperti
-  * AnalogAudioStream.
-  */
  dac.setMonoDAC(ULP_DAC2);
 
  if(!dac.begin(info)){
@@ -663,27 +644,16 @@ bool initDAC(){
 }
 
 bool audioStart(){
- /*
-  * CAMERA TETAP LIVE.
-  * Tidak ada stopCamera().
-  * Tidak ada CAMERA -> DAC.
-  */
  if(dacOK)return true;
-
  if(!initDAC()){
   Serial.println("TARS: DAC START FAILED");
   return false;
  }
-
  Serial.println("TARS: AUDIO ULP DAC -> GPIO26");
  return true;
 }
 
 void audioStop(){
- /*
-  * Hanya hentikan ULP DAC.
-  * OV7670 TIDAK disentuh.
-  */
  if(dacOK){
   dac.end();
   dacOK=false;
@@ -727,7 +697,7 @@ bool initMic(){
 /* ================= WIFI / NTP ================= */
 bool wifiOK(){
  return WiFi.status()==WL_CONNECTED||
-        (wifiManagerConnect(false)&&WiFi.status()==WL_CONNECTED);
+  (wifiManagerConnect(false)&&WiFi.status()==WL_CONNECTED);
 }
 
 void ntpCallback(struct timeval*){ntpSyncEvent=true;}
@@ -738,7 +708,7 @@ bool syncTime(){
  sntp_set_time_sync_notification_cb(ntpCallback);
  sntp_set_sync_status(SNTP_SYNC_STATUS_RESET);
  configTime(7*3600,0,"pool.ntp.org","time.google.com",
-            "time.cloudflare.com");
+  "time.cloudflare.com");
 
  for(int a=1;a<=4;a++){
   Serial.printf("TARS: NTP %d/4\n",a);
@@ -762,7 +732,6 @@ bool syncTime(){
      return true;
     }
    }
-
    delay(100);yield();
   }
 
@@ -832,10 +801,8 @@ void sttEvent(WStype_t type,uint8_t*payload,size_t length){
  }else if(t=="error"){
   sttError=true;
   sttDone=true;
-
   Serial.println(
    "TARS: STT ERROR = "+j["error"].as<String>());
-
   oledSetStatus("STT ERROR");
  }
 }
@@ -863,8 +830,7 @@ bool startSTT(bool offline=false){
  if(!sttReady){
   Serial.println(
    offline?"TARS: OFFLINE STT REALTIME TIMEOUT":
-           "TARS: STT REALTIME TIMEOUT");
-
+   "TARS: STT REALTIME TIMEOUT");
   sttWS.disconnect();
   return false;
  }
@@ -913,8 +879,8 @@ String recordSTT(bool offline){
   size_t bytes=0;
 
   if(i2s_read(
-      MIC_PORT,rawBuf,sizeof(rawBuf),
-      &bytes,pdMS_TO_TICKS(30))!=ESP_OK)
+   MIC_PORT,rawBuf,sizeof(rawBuf),
+   &bytes,pdMS_TO_TICKS(30))!=ESP_OK)
    continue;
 
   size_t count=bytes/4;
@@ -948,11 +914,6 @@ String recordSTT(bool offline){
     voice=true;
     voiceStart=lastVoice=millis();
 
-    /*
-     * CAMERA TETAP LIVE.
-     * Jangan stopCamera() di sini.
-     */
-
     size_t start=
      preCount==PREROLL_SAMPLES?prePos:0;
 
@@ -964,7 +925,7 @@ String recordSTT(bool offline){
 
      if(nsend==256){
       if(!sttWS.sendBIN(
-          (uint8_t*)sendBuf,nsend*2)){
+       (uint8_t*)sendBuf,nsend*2)){
        sttError=true;
        break;
       }
@@ -985,9 +946,8 @@ String recordSTT(bool offline){
    }
 
   }else{
-
    if(!sttWS.sendBIN(
-       (uint8_t*)pcmBuf,count*2)){
+    (uint8_t*)pcmBuf,count*2)){
 
     Serial.println(
      offline?
@@ -1013,11 +973,6 @@ String recordSTT(bool offline){
 
  if(!voice||sttError){
   sttWS.disconnect();
-
-  /*
-   * CAMERA TIDAK PERLU startCamera().
-   * Kamera tetap hidup selama STT.
-   */
 
   if(!voice)
    Serial.println(
@@ -1061,7 +1016,6 @@ uint8_t greetingPeriod(){
  if(t.tm_hour>=5&&t.tm_hour<11)return 0;
  if(t.tm_hour>=11&&t.tm_hour<15)return 1;
  if(t.tm_hour>=15&&t.tm_hour<20)return 2;
-
  return 3;
 }
 
@@ -1076,18 +1030,10 @@ const char*greetingText(uint8_t p){
 
 bool playTimeGreeting(uint8_t p){
  switch(p){
-  case 0:
-   return playLocalMP3(
-    pagi_start,pagi_end,greetingText(p));
-  case 1:
-   return playLocalMP3(
-    siang_start,siang_end,greetingText(p));
-  case 2:
-   return playLocalMP3(
-    sore_start,sore_end,greetingText(p));
-  case 3:
-   return playLocalMP3(
-    malam_start,malam_end,greetingText(p));
+  case 0:return playLocalMP3(pagi_start,pagi_end,greetingText(p));
+  case 1:return playLocalMP3(siang_start,siang_end,greetingText(p));
+  case 2:return playLocalMP3(sore_start,sore_end,greetingText(p));
+  case 3:return playLocalMP3(malam_start,malam_end,greetingText(p));
  }
  return false;
 }
@@ -1212,9 +1158,7 @@ String ask(const String&q){
 }
 
 /* ================= TTS ================= */
-bool streamAudio(
- const String&url,const String&text){
-
+bool streamAudio(const String&url,const String&text){
  if(!wifiOK()||!audioStart())
   return false;
 
@@ -1249,8 +1193,7 @@ bool streamAudio(
 
  int code=h.POST(body);
 
- Serial.printf(
-  "TARS: AUDIO HTTP=%d\n",code);
+ Serial.printf("TARS: AUDIO HTTP=%d\n",code);
 
  if(code<200||code>=300){
   h.end();
@@ -1285,8 +1228,7 @@ bool streamAudio(
  size_t target=AUDIO_PREBUFFER;
 
  if(contentLen>0)
-  target=min(
-   target,(size_t)contentLen);
+  target=min(target,(size_t)contentLen);
 
  uint32_t ps=millis();
 
@@ -1317,11 +1259,9 @@ bool streamAudio(
  bool started=false;
 
  if(!isWav){
-
   dec.begin();
 
-  audio_tools::AudioInfo src=
-   codec.audioInfo();
+  audio_tools::AudioInfo src=codec.audioInfo();
 
   if(!mp3Resample.begin(src,22050)){
    dec.end();
@@ -1344,8 +1284,7 @@ bool streamAudio(
     oledStartSpeak(text);
    }
 
-   if(audioRing.finished()&&
-      !audioRing.available())
+   if(audioRing.finished()&&!audioRing.available())
     break;
 
    if(before==after)
@@ -1357,11 +1296,9 @@ bool streamAudio(
   dec.end();
 
  }else{
-
   wavDec.begin();
 
-  audio_tools::AudioInfo src=
-   wav.audioInfo();
+  audio_tools::AudioInfo src=wav.audioInfo();
 
   if(!wavResample.begin(src,22050)){
    wavDec.end();
@@ -1384,8 +1321,7 @@ bool streamAudio(
    if(copied&&!started)
     started=true;
 
-   if(audioRing.finished()&&
-      !audioRing.available())
+   if(audioRing.finished()&&!audioRing.available())
     break;
 
    if(before==after)
@@ -1490,13 +1426,11 @@ String systemStatus(){
   ", kamera "+
   String(cameraLive?"aktif":"off")+
   ", audio "+
-  String(playing?
-   "sedang berjalan":"idle")+
+  String(playing?"sedang berjalan":"idle")+
   ", motor "+
   String(motorBusy?"aktif":"idle")+
   ", STT "+
-  String(sttReady?
-   "ready":
+  String(sttReady?"ready":
    (sttConnected?"connected":"idle"))+".";
 
  return s;
@@ -1581,7 +1515,6 @@ bool isDoorCmd(const String&s){
 
  while(p<x.length()){
   while(p<x.length()&&x[p]==' ')p++;
-
   if(p>=x.length())break;
 
   int e=x.indexOf(' ',p);
@@ -1624,17 +1557,14 @@ bool playLocalAlarm(){
  playing=true;
  motorStop();
 
- alarmStream.begin(
-  alarm_start,alarm_end);
+ alarmStream.begin(alarm_start,alarm_end);
 
  pcmProbe.reset();
  dec.begin();
 
- audio_tools::AudioInfo src=
-  codec.audioInfo();
+ audio_tools::AudioInfo src=codec.audioInfo();
 
- bool ok=
-  mp3Resample.begin(src,22050);
+ bool ok=mp3Resample.begin(src,22050);
 
  if(ok){
   copier.begin(dec,alarmStream);
@@ -1715,10 +1645,7 @@ bool processOffline(const String&q){
   return true;
  }
 
- if(cmdMatch(
-    s,hari,
-    sizeof(hari)/sizeof(*hari))){
-
+ if(cmdMatch(s,hari,sizeof(hari)/sizeof(*hari))){
   oledShowText("HARI INI","OFFLINE");
 
   playLocalMP3(
@@ -1729,12 +1656,8 @@ bool processOffline(const String&q){
   return true;
  }
 
- if(cmdMatch(
-    s,online,
-    sizeof(online)/sizeof(*online))){
-
-  Serial.println(
-   "TARS: SWITCH OFFLINE -> ONLINE");
+ if(cmdMatch(s,online,sizeof(online)/sizeof(*online))){
+  Serial.println("TARS: SWITCH OFFLINE -> ONLINE");
 
   oledShowText("ONLINE","OFFLINE");
   tarsMode=MODE_ONLINE;
@@ -1747,9 +1670,7 @@ bool processOffline(const String&q){
   return true;
  }
 
- Serial.println(
-  "TARS: OFFLINE REJECTED = "+q);
-
+ Serial.println("TARS: OFFLINE REJECTED = "+q);
  oledSetStatus("READY");
  return true;
 }
@@ -1777,8 +1698,7 @@ void processQuestion(const String&q){
     nq=="tars mode offline"||
     nq=="tars mode off line"){
 
-  Serial.println(
-   "TARS: SWITCH ONLINE -> OFFLINE");
+  Serial.println("TARS: SWITCH ONLINE -> OFFLINE");
 
   tarsMode=MODE_OFFLINE;
 
@@ -1805,16 +1725,14 @@ void processQuestion(const String&q){
 
  /* ================= VISION ONLINE ONLY ================= */
  if(needsVision(q)){
-  Serial.println(
-   "TARS: ONLINE VISION REQUEST");
+  Serial.println("TARS: ONLINE VISION REQUEST");
 
   oledSetStatus("VISION");
 
   String answer=visionAsk(q);
 
   if(!answer.length()){
-   Serial.println(
-    "TARS: VISION FAILED -> ASK");
+   Serial.println("TARS: VISION FAILED -> ASK");
    answer=ask(q);
   }
 
@@ -1831,23 +1749,17 @@ void processQuestion(const String&q){
    String(TARS_CLOUD_URL)+"/tts",
    answer);
 
-  oledSetStatus(
-   ok?"LISTENING":"AUDIO ERROR");
-
+  oledSetStatus(ok?"LISTENING":"AUDIO ERROR");
   behaviorReset();
   return;
  }
 
  /* ================= NORMAL ASK ================= */
  bool status=isStatusQuery(q);
- String answer=status?
-  systemStatus():ask(q);
+ String answer=status?systemStatus():ask(q);
 
  if(!answer.length()){
-  oledSetStatus(
-   status?
-   "STATUS ERROR":"ASK ERROR");
-
+  oledSetStatus(status?"STATUS ERROR":"ASK ERROR");
   behaviorReset();
   return;
  }
@@ -1859,9 +1771,7 @@ void processQuestion(const String&q){
   String(TARS_CLOUD_URL)+"/tts",
   answer);
 
- oledSetStatus(
-  ok?"LISTENING":"AUDIO ERROR");
-
+ oledSetStatus(ok?"LISTENING":"AUDIO ERROR");
  behaviorReset();
 }
 
@@ -1904,31 +1814,20 @@ void setup(){
    (unsigned)(LittleFS.usedBytes()/1024),
    (unsigned)(LittleFS.totalBytes()/1024));
 
- Serial.println(
-  "TARS: DAC GPIO26 ULP DAC2");
-
- Serial.println(
-  "TARS: AUDIO MP3/WAV -> 22050Hz/16bit");
-
- Serial.println(
-  "TARS: INMP441 RIGHT GPIO16");
+ Serial.println("TARS: DAC GPIO26 ULP DAC2");
+ Serial.println("TARS: AUDIO MP3/WAV -> 22050Hz/16bit");
+ Serial.println("TARS: INMP441 RIGHT GPIO16");
 
  Serial.printf(
   "TARS: MIC THRESHOLD=%ld SILENCE=%ld\n",
-  (long)MIC_THRESHOLD,
-  (long)MIC_SILENCE);
+  (long)MIC_THRESHOLD,(long)MIC_SILENCE);
 
  Serial.println(
   "TARS: MIC PEAK=12000/8000 RMS=3000/1800 PREROLL=250 ms BUF=256");
 
- Serial.println(
-  "TARS: STT ONLINE REALTIME PCM");
-
- Serial.println(
-  "TARS: STT OFFLINE REALTIME PCM");
-
- Serial.println(
-  "TARS: VISION ONLINE ONLY");
+ Serial.println("TARS: STT ONLINE REALTIME PCM");
+ Serial.println("TARS: STT OFFLINE REALTIME PCM");
+ Serial.println("TARS: VISION ONLINE ONLY");
 
  Serial.printf(
   "TARS: OV7670 D0..D7=%d,%d,%d,%d,%d,%d,%d,%d XCLK=%d PCLK=%d VSYNC=%d HREF=%d SCCB=%d/%d\n",
@@ -1942,14 +1841,9 @@ void setup(){
   MOTOR_ARM_A1,MOTOR_ARM_A2,
   MOTOR_GRIP_B1,MOTOR_GRIP_B2);
 
- Serial.println(
-  "TARS: GPIO4 RESERVED FOR OV7670 XCLK");
-
- Serial.println(
-  "TARS: BLUETOOTH DISABLED");
-
- Serial.println(
-  "TARS: MODE OFFLINE");
+ Serial.println("TARS: GPIO4 RESERVED FOR OV7670 XCLK");
+ Serial.println("TARS: BLUETOOTH DISABLED");
+ Serial.println("TARS: MODE OFFLINE");
 
  Serial.printf(
   "TARS: AUDIO RING=%u PREBUFFER=%u\n",
@@ -1971,14 +1865,13 @@ void setup(){
 
  /*
   * Kamera langsung hidup dan tetap hidup.
-  * Tidak lagi dimatikan ketika TARS berbicara.
+  * Tidak dimatikan ketika TARS berbicara.
   */
  startCamera();
 
  behaviorReset();
 
- Serial.println(
-  "TARS: LIFE READY");
+ Serial.println("TARS: LIFE READY");
 }
 
 /* ================= LOOP ================= */
