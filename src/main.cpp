@@ -114,6 +114,7 @@ bool initCamera(){
   c.xclk_freq_hz=10000000;
   c.pixel_format=PIXFORMAT_RGB565;
   c.frame_size=FRAMESIZE_QQVGA;
+
   c.jpeg_quality=12;
   c.fb_count=1;
   c.grab_mode=CAMERA_GRAB_WHEN_EMPTY;
@@ -133,56 +134,37 @@ bool initCamera(){
     return false;
   }
 
-  /*
-   * OV7670 QQVGA RGB565
-   * Paksa window 160x120 + downsampling 1/4
-   */
-  s->set_reg(s,0x0C,0xFF,0x04); // COM3
-  s->set_reg(s,0x3E,0xFF,0x1A); // COM14
-
-  s->set_reg(s,0x70,0xFF,0x3A); // SCALING_XSC
-  s->set_reg(s,0x71,0xFF,0x35); // SCALING_YSC
-  s->set_reg(s,0x72,0xFF,0x22); // DCW 1/4
-  s->set_reg(s,0x73,0xFF,0xF2); // PCLK /4
-  s->set_reg(s,0xA2,0xFF,0x02); // PCLK delay
-
-  /*
-   * Frame window resmi OV7670 QQVGA:
-   * HSTART=158
-   * HSTOP =14
-   * VSTART=12
-   * VSTOP =490
-   */
-  s->set_reg(s,0x17,0xFF,0x13); // HSTART
-  s->set_reg(s,0x18,0xFF,0x01); // HSTOP
-  s->set_reg(s,0x32,0xFF,0x78); // HREF
-
-  s->set_reg(s,0x19,0xFF,0x03); // VSTART
-  s->set_reg(s,0x1A,0xFF,0x7A); // VSTOP
-  s->set_reg(s,0x03,0xFF,0x08); // VREF
-
   Serial.printf(
     "TARS: OV7670 PID=0x%02X VER=0x%02X\n",
     s->id.PID,s->id.VER
   );
 
-  Serial.println("TARS: OV7670 QQVGA RGB565 160x120 READY");
+  Serial.println("TARS: OV7670 CAMERA READY");
 
   return true;
 }
 
 void testCameraFrame(){
- if(!cameraOK)return;
- camera_fb_t*fb=esp_camera_fb_get();
- if(!fb){
-  Serial.println("TARS: OV7670 FRAME FAILED");
-  return;
- }
- Serial.printf("TARS: OV7670 FRAME OK %ux%u LEN=%u FORMAT=%d\n",
-  fb->width,fb->height,(unsigned)fb->len,fb->format);
- Serial.printf("TARS: OV7670 PIXEL=%02X %02X %02X %02X\n",
-  fb->buf[0],fb->buf[1],fb->buf[2],fb->buf[3]);
- esp_camera_fb_return(fb);
+  camera_fb_t*fb=esp_camera_fb_get();
+  if(!fb){
+    Serial.println("TARS: CAMERA FRAME NULL");
+    return;
+  }
+  Serial.printf(
+    "TARS: FRAME %ux%u LEN=%u\n",
+    fb->width,
+    fb->height,
+    (unsigned)fb->len
+  );
+  if(fb->len==30720){
+    Serial.println("TARS: CAMERA FRAME OK 160x96 RGB565");
+  }else{
+    Serial.printf(
+      "TARS: FRAME SIZE INVALID=%u\n",
+      (unsigned)fb->len
+    );
+  }
+  esp_camera_fb_return(fb);
 }
 
 /* MP3 STREAM */
