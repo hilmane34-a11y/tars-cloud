@@ -780,11 +780,10 @@ void setup(){
  Serial.println("TARS: MODE ONLINE");
  Serial.println("TARS: BLUETOOTH DISABLED");
 
- wifiManagerBegin();
-
- if(bootWiFi()){
-  if(syncTime())checkTimeGreeting();
- }
+wifiManagerBegin();
+  if(wifiManagerConnect(true)){
+  if(syncTime()) checkTimeGreeting();
+}
 
  Serial.println("TARS: BOOT CONFIG DONE -> CAMERA MODE");
 
