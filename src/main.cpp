@@ -376,6 +376,8 @@ void behaviorUpdate(){
   motorBusy=false;behavior=BEH_IDLE;
   behaviorNext=now+random(10000,26000);
 }
+void oledSetStatus(const String&);
+void oledShowText(const String&, const String&);
 
 void runPickPaper(){
   if(motorBusy)return;
@@ -393,27 +395,21 @@ void runPickPaper(){
   behaviorReset();
   oledSetStatus(tarsMode==MODE_ONLINE?"LISTENING":"READY");
 }
-
 /* ================= OLED ================= */
-
 void oledSetStatus(const String&);
 void oledShowText(const String&,const String&);
-
 void oledSetStatus(const String&s){
   oledStatus=s;oledText="";oledTypePos=0;oledPage=0;oledLastPage=millis();
 }
 void oledSetListening(){oledSetStatus("LISTENING");}
-
 void oledStartSpeak(const String&s){
   oledStatus="SPEAKING";oledText=s;oledTypePos=0;oledPage=0;
   oledLastType=millis();oledLastPage=millis();
 }
-
 void oledShowText(const String&s,const String&status){
   oledStatus=status;oledText=s;oledTypePos=s.length();oledPage=0;
   oledLastType=millis();oledLastPage=millis();
 }
-
 void drawSpecialOLED(uint8_t m){
   oled.clearDisplay();oled.setTextColor(SSD1306_WHITE);
   oled.drawLine(15,55,8,37,SSD1306_WHITE);oled.drawLine(8,37,8,22,SSD1306_WHITE);
@@ -422,7 +418,6 @@ void drawSpecialOLED(uint8_t m){
   oled.drawLine(113,55,120,37,SSD1306_WHITE);oled.drawLine(120,37,120,22,SSD1306_WHITE);
   oled.drawLine(120,22,124,17,SSD1306_WHITE);oled.drawLine(120,22,120,14,SSD1306_WHITE);
   oled.drawLine(120,22,116,15,SSD1306_WHITE);
-
   if(m==1){
     oled.fillCircle(42,25,8,SSD1306_WHITE);oled.fillCircle(86,25,8,SSD1306_WHITE);
     oled.drawLine(45,44,83,44,SSD1306_WHITE);
@@ -442,12 +437,10 @@ void drawSpecialOLED(uint8_t m){
   }
   oled.display();
 }
-
 void oledTask(void*){
   for(;;){
     if(!oledOK){vTaskDelay(50);continue;}
     uint32_t now=millis();
-
     if(oledSpecial){
       if(oledSpecial==2&&now>=oledDeadUntil){
         oledSpecial=0;oledSetStatus(tarsMode==MODE_ONLINE?"LISTENING":"READY");
@@ -455,23 +448,18 @@ void oledTask(void*){
         drawSpecialOLED(oledSpecial);vTaskDelay(20);continue;
       }
     }
-
     if(cameraLive&&!playing&&!oledText.length()){
       drawCameraOLED();vTaskDelay(70);continue;
     }
-
     if(oledText.length()&&oledTypePos<oledText.length()&&now-oledLastType>=OLED_TYPE_MS)
       oledTypePos++,oledLastType=now;
-
     if(now-oledLastWave>=OLED_WAVE_MS){
       oledLastWave=now;oled.clearDisplay();oled.setTextColor(SSD1306_WHITE);
       oled.setTextSize(2);oled.setCursor(36,0);oled.print("TARS");
       oled.setTextSize(1);oled.setCursor(3,17);oled.print(oledStatus);
-
       if(oledText.length()){
         String s=oledText.substring(0,min(oledTypePos,(uint32_t)oledText.length()));
         uint32_t lineNo=0,target=oledPage*4;uint8_t shown=0;String line;bool next=false;
-
         for(size_t i=0;i<=s.length();i++){
           char c=i<s.length()?s[i]:'\0';
           if(c=='\n'||c=='\0'){
