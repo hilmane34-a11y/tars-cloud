@@ -110,6 +110,16 @@ bool initCamera(){
 
   sensor_t*s=esp_camera_sensor_get();
   if(s){
+    Serial.printf("TARS: OV7670 PID=0x%02X VER=0x%02X MIDH=0x%02X MIDL=0x%02X\n",
+      s->id.PID,s->id.VER,s->id.MIDH,s->id.MIDL);
+  }
+
+  Serial.println("TARS: OV7670 CAMERA READY");
+  return true;
+}
+
+  sensor_t*s=esp_camera_sensor_get();
+  if(s){
     s->set_pixformat(s,PIXFORMAT_RGB565);
     s->set_framesize(s,FRAMESIZE_QQVGA);
     Serial.printf("TARS: OV7670 PID=0x%02X VER=0x%02X MIDH=0x%02X MIDL=0x%02X\n",
