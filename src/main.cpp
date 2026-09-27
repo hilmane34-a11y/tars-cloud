@@ -97,8 +97,7 @@ bool initCamera(){
   c.xclk_freq_hz=10000000;
   c.pixel_format=PIXFORMAT_RGB565;
   c.frame_size=FRAMESIZE_QQVGA;
-  c.jpeg_quality=12;
-  c.fb_count=1;
+  c.jpeg_quality=12;c.fb_count=1;
   c.grab_mode=CAMERA_GRAB_WHEN_EMPTY;
   c.fb_location=CAMERA_FB_IN_DRAM;
 
@@ -110,22 +109,12 @@ bool initCamera(){
 
   sensor_t*s=esp_camera_sensor_get();
   if(s){
-    Serial.printf("TARS: OV7670 PID=0x%02X VER=0x%02X MIDH=0x%02X MIDL=0x%02X\n",
-      s->id.PID,s->id.VER,s->id.MIDH,s->id.MIDL);
-  }
-
-  Serial.println("TARS: OV7670 CAMERA READY");
-  return true;
-}
-
-  sensor_t*s=esp_camera_sensor_get();
-  if(s){
     s->set_pixformat(s,PIXFORMAT_RGB565);
     s->set_framesize(s,FRAMESIZE_QQVGA);
-    Serial.printf("TARS: OV7670 PID=0x%02X VER=0x%02X MIDH=0x%02X MIDL=0x%02X\n",
-      s->id.PID,s->id.VER,s->id.MIDH,s->id.MIDL);
   }
 
+  Serial.printf("TARS: OV7670 PID=0x%02X VER=0x%02X MIDH=0x%02X MIDL=0x%02X\n",
+    s->id.PID,s->id.VER,s->id.MIDH,s->id.MIDL);
   Serial.println("TARS: OV7670 CAMERA READY");
   return true;
 }
