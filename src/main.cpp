@@ -14,7 +14,7 @@
 #include <WebSocketsClient.h>
 #include <OV7670.h>
 #include "AudioTools.h"
-#include "AudioLibs/AudioESP32ULP.h"
+#include "AudioTools/AudioLibs/AudioESP32ULP.h"
 #include "AudioTools/AudioCodecs/CodecMP3Helix.h"
 #include "AudioTools/AudioCodecs/CodecWAV.h"
 #include "config.h"
