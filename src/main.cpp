@@ -815,14 +815,16 @@ void setup(){
  }
 
  initMotors();
- dacOK=initDAC();micOK=initMic();
-
- Serial.printf("TARS: DAC=%s MIC=%s\n",dacOK?"READY":"ERROR",micOK?"READY":"ERROR");
-
- /* CAMERA TEST */
+ 
+/* CAMERA TEST */
  Serial.println("TARS: OV7670 INIT...");
  cameraOK=initCamera();
  if(cameraOK)testCameraFrame();
+
+ dacOK=initDAC();
+ micOK=initMic();
+
+ Serial.printf("TARS: DAC=%s MIC=%s\n",dacOK?"READY":"ERROR",micOK?"READY":"ERROR");
 
  if(!LittleFS.begin(true))Serial.println("TARS: LITTLEFS ERROR");
  else Serial.printf("TARS: LITTLEFS READY %u/%u KB\n",
