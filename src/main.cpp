@@ -25,25 +25,20 @@
 #define AUDIO_DAC_PIN 26
 
 /* OV7670 RESERVED — CAMERA ONLY */
-#define OV_D0 36
-#define OV_D1 39
-#define OV_D2 34
-#define OV_D3 35
-#define OV_D4 32
-#define OV_D5 33
-#define OV_D6 25
-#define OV_D7 27
-#define OV_XCLK 4
-#define OV_PCLK 14
-#define OV_VSYNC 13
-#define OV_HREF -1
-#define OV_SIOD 21
-#define OV_SIOC 22
-#define OV_RESET -1
-#define OV_PWDN -1
-
-#define DFPLAYER_RX 17
-#define DFPLAYER_TX -1
+#define CAM_XCLK  4
+#define CAM_SIOD 21
+#define CAM_SIOC 22
+#define CAM_D7   36
+#define CAM_D6   39
+#define CAM_D5   34
+#define CAM_D4   35
+#define CAM_D3   32
+#define CAM_D2   33
+#define CAM_D1   27
+#define CAM_D0   25
+#define CAM_VSYNC 13
+#define CAM_HREF  14
+#define CAM_PCLK  12
 
 /* L9110 */
 #define MOTOR_ARM_A1 23
