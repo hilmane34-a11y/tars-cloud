@@ -9,6 +9,7 @@
 #include <ArduinoJson.h>
 #include <driver/i2s.h>
 #include <esp_sntp.h>
+#include <esp_camera.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <WebSocketsClient.h>
@@ -24,21 +25,21 @@
 #define MIC_SD 16
 #define AUDIO_DAC_PIN 26
 
-/* OV7670 RESERVED — CAMERA ONLY */
-#define CAM_XCLK  4
+/* OV7670 */
+#define CAM_XCLK 4
 #define CAM_SIOD 21
 #define CAM_SIOC 22
-#define CAM_D7   36
-#define CAM_D6   39
-#define CAM_D5   34
-#define CAM_D4   35
-#define CAM_D3   32
-#define CAM_D2   33
-#define CAM_D1   27
-#define CAM_D0   25
+#define CAM_D7 36
+#define CAM_D6 39
+#define CAM_D5 34
+#define CAM_D4 35
+#define CAM_D3 32
+#define CAM_D2 33
+#define CAM_D1 27
+#define CAM_D0 25
 #define CAM_VSYNC 13
-#define CAM_HREF  14
-#define CAM_PCLK  12
+#define CAM_HREF 14
+#define CAM_PCLK 12
 
 /* L9110 */
 #define MOTOR_ARM_A1 23
@@ -59,7 +60,7 @@ const char*STT_HOST="tars-cloud-v1.hilmane34.workers.dev";
 enum TarsMode:uint8_t{MODE_OFFLINE,MODE_ONLINE};
 TarsMode tarsMode=MODE_OFFLINE;
 
-bool alarmRunning=false,greetingPlaying=false,motorBusy=false;
+bool alarmRunning=false,greetingPlaying=false,motorBusy=false,cameraOK=false;
 int alarmLastDay=-1;uint8_t lastGreetingPeriod=255;
 
 extern const uint8_t alarm_start[] asm("_binary_src_alarm_mp3_start");
@@ -83,6 +84,54 @@ uint32_t oledTypePos=0,oledLastType=0,oledLastWave=0,oledPage=0,oledLastPage=0;
 static int32_t rawBuf[BUF/4];
 static int16_t pcmBuf[BUF/4],preBuf[PREROLL_SAMPLES],sendBuf[256];
 
+/* CAMERA */
+bool initCamera(){
+ camera_config_t c={};
+ c.ledc_channel=LEDC_CHANNEL_0;
+ c.ledc_timer=LEDC_TIMER_0;
+ c.pin_d0=CAM_D0;c.pin_d1=CAM_D1;c.pin_d2=CAM_D2;c.pin_d3=CAM_D3;
+ c.pin_d4=CAM_D4;c.pin_d5=CAM_D5;c.pin_d6=CAM_D6;c.pin_d7=CAM_D7;
+ c.pin_xclk=CAM_XCLK;c.pin_pclk=CAM_PCLK;c.pin_vsync=CAM_VSYNC;c.pin_href=CAM_HREF;
+ c.pin_sccb_sda=CAM_SIOD;c.pin_sccb_scl=CAM_SIOC;
+ c.pin_pwdn=-1;c.pin_reset=-1;
+ c.xclk_freq_hz=10000000;
+ c.pixel_format=PIXFORMAT_RGB565;
+ c.frame_size=FRAMESIZE_QQVGA;
+ c.jpeg_quality=12;
+ c.fb_count=1;
+ c.grab_mode=CAMERA_GRAB_WHEN_EMPTY;
+ c.fb_location=CAMERA_FB_IN_DRAM;
+
+ esp_err_t e=esp_camera_init(&c);
+ if(e!=ESP_OK){
+  Serial.printf("TARS: OV7670 INIT ERROR=0x%x\n",e);
+  return false;
+ }
+
+ sensor_t*s=esp_camera_sensor_get();
+ if(s){
+  Serial.printf("TARS: OV7670 PID=0x%02X VER=0x%02X MIDH=0x%02X MIDL=0x%02X\n",
+   s->id.PID,s->id.VER,s->id.MIDH,s->id.MIDL);
+ }
+ Serial.println("TARS: OV7670 CAMERA READY");
+ return true;
+}
+
+void testCameraFrame(){
+ if(!cameraOK)return;
+ camera_fb_t*fb=esp_camera_fb_get();
+ if(!fb){
+  Serial.println("TARS: OV7670 FRAME FAILED");
+  return;
+ }
+ Serial.printf("TARS: OV7670 FRAME OK %ux%u LEN=%u FORMAT=%d\n",
+  fb->width,fb->height,(unsigned)fb->len,fb->format);
+ Serial.printf("TARS: OV7670 PIXEL=%02X %02X %02X %02X\n",
+  fb->buf[0],fb->buf[1],fb->buf[2],fb->buf[3]);
+ esp_camera_fb_return(fb);
+}
+
+/* MP3 STREAM */
 class MemMP3Stream:public Stream{
  const uint8_t*a=nullptr,*z=nullptr;size_t p=0;
  public:
@@ -194,37 +243,29 @@ void oledShowText(const String&,const String&);
 
 void initMotors(){
  pinMode(MOTOR_ARM_A1,OUTPUT);pinMode(MOTOR_ARM_A2,OUTPUT);
- pinMode(MOTOR_GRIP_B1,OUTPUT);pinMode(MOTOR_GRIP_B2,OUTPUT);
- motorStop();
+ pinMode(MOTOR_GRIP_B1,OUTPUT);pinMode(MOTOR_GRIP_B2,OUTPUT);motorStop();
 }
 
 void runPickPaper(){
  if(motorBusy)return;
  motorBusy=true;motorStop();oledShowText("AMBIL KERTAS","MOTOR");
  Serial.println("TARS: PICK PAPER START");
-
  armDown();delay(1200);motorStop();delay(150);
  gripOpen();delay(600);motorStop();delay(150);
  gripClose();delay(800);motorStop();delay(150);
  armUp();delay(1200);motorStop();
-
  Serial.println("TARS: PICK PAPER DONE");
- motorBusy=false;
- oledSetStatus(tarsMode==MODE_ONLINE?"LISTENING":"READY");
+ motorBusy=false;oledSetStatus(tarsMode==MODE_ONLINE?"LISTENING":"READY");
 }
 
 /* OLED */
-void oledSetStatus(const String&s){
- oledStatus=s;oledText="";oledTypePos=0;oledPage=0;oledLastPage=millis();
-}
+void oledSetStatus(const String&s){oledStatus=s;oledText="";oledTypePos=0;oledPage=0;oledLastPage=millis();}
 void oledSetListening(){oledSetStatus("LISTENING");}
 void oledStartSpeak(const String&s){
- oledStatus="SPEAKING";oledText=s;oledTypePos=0;oledPage=0;
- oledLastType=millis();oledLastPage=millis();
+ oledStatus="SPEAKING";oledText=s;oledTypePos=0;oledPage=0;oledLastType=millis();oledLastPage=millis();
 }
 void oledShowText(const String&s,const String&status){
- oledStatus=status;oledText=s;oledTypePos=s.length();oledPage=0;
- oledLastType=millis();oledLastPage=millis();
+ oledStatus=status;oledText=s;oledTypePos=s.length();oledPage=0;oledLastType=millis();oledLastPage=millis();
 }
 
 void drawSpecialOLED(uint8_t m){
@@ -304,8 +345,7 @@ bool initDAC(){
  if(!analog.begin(cfg)){Serial.println("TARS: DAC ERROR");return false;}
  dec.addNotifyAudioChange(mp3Resample);mp3Resample.addNotifyAudioChange(pcmProbe);
  wavDec.addNotifyAudioChange(wavResample);wavResample.addNotifyAudioChange(pcmProbe);
- Serial.println("TARS: DAC GPIO26 RIGHT READY");Serial.println("TARS: AUDIO 22050 Hz / 16 bit");
- return true;
+ Serial.println("TARS: DAC GPIO26 RIGHT READY");Serial.println("TARS: AUDIO 22050 Hz / 16 bit");return true;
 }
 
 /* MIC */
@@ -360,7 +400,7 @@ bool syncTime(){
  Serial.println("TARS: NTP FAILED 4/4");oledSetStatus("NTP FAILED");delay(1500);return false;
 }
 
-/* ONLINE STT */
+/* STT */
 void sttEvent(WStype_t type,uint8_t*payload,size_t length){
  if(type==WStype_CONNECTED){sttConnected=true;Serial.println("TARS: STT WS CONNECTED");oledSetStatus("STT CONNECTED");return;}
  if(type==WStype_DISCONNECTED){sttConnected=false;if(!sttDone)sttError=true;Serial.println("TARS: STT WS DISCONNECTED");oledSetStatus("STT DISCONNECTED");return;}
@@ -508,36 +548,25 @@ uint8_t greetingPeriod(){
 }
 
 const char* greetingText(uint8_t p){
- switch(p){
-  case 0:return "Selamat pagi, tuan.";
-  case 1:return "Selamat siang, tuan.";
-  case 2:return "Selamat sore, tuan.";
-  default:return "Selamat malam, tuan.";
- }
+ switch(p){case 0:return "Selamat pagi, tuan.";case 1:return "Selamat siang, tuan.";
+ case 2:return "Selamat sore, tuan.";default:return "Selamat malam, tuan.";}
 }
 
 bool playTimeGreeting(uint8_t p){
- switch(p){
-  case 0:return playLocalMP3(pagi_start,pagi_end,greetingText(p));
-  case 1:return playLocalMP3(siang_start,siang_end,greetingText(p));
-  case 2:return playLocalMP3(sore_start,sore_end,greetingText(p));
-  case 3:return playLocalMP3(malam_start,malam_end,greetingText(p));
- }
+ switch(p){case 0:return playLocalMP3(pagi_start,pagi_end,greetingText(p));
+ case 1:return playLocalMP3(siang_start,siang_end,greetingText(p));
+ case 2:return playLocalMP3(sore_start,sore_end,greetingText(p));
+ case 3:return playLocalMP3(malam_start,malam_end,greetingText(p));}
  return false;
 }
 
 void checkTimeGreeting(){
  if(!ntpOK||playing||alarmRunning||greetingPlaying)return;
- uint8_t p=greetingPeriod();
- if(p==255||p==lastGreetingPeriod)return;
- greetingPlaying=true;
- Serial.printf("TARS: TIME GREETING PERIOD=%u\n",p);
- Serial.println(String("TARS: ")+greetingText(p));
- oledShowText(greetingText(p),"SALAM");
- bool ok=playTimeGreeting(p);
- if(ok)lastGreetingPeriod=p;
- greetingPlaying=false;
- oledSetStatus(ok?(tarsMode==MODE_ONLINE?"LISTENING":"READY"):"AUDIO ERROR");
+ uint8_t p=greetingPeriod();if(p==255||p==lastGreetingPeriod)return;
+ greetingPlaying=true;Serial.printf("TARS: TIME GREETING PERIOD=%u\n",p);
+ Serial.println(String("TARS: ")+greetingText(p));oledShowText(greetingText(p),"SALAM");
+ bool ok=playTimeGreeting(p);if(ok)lastGreetingPeriod=p;
+ greetingPlaying=false;oledSetStatus(ok?(tarsMode==MODE_ONLINE?"LISTENING":"READY"):"AUDIO ERROR");
 }
 
 /* LOCAL MP3 */
@@ -625,10 +654,9 @@ bool streamAudio(const String&url,const String&text){
 /* STATUS */
 bool isStatusQuery(const String&q){
  String s=normCmd(q);s.replace("statuse","status");
- if(s=="status"||s=="tars status"||s=="status tars"||
-    s=="cek status"||s=="tars cek status"||s=="cek status tars"||
-    s=="status kamu"||s=="tars status kamu"||s=="kondisi kamu"||
-    s=="kondisi tars")return true;
+ if(s=="status"||s=="tars status"||s=="status tars"||s=="cek status"||
+    s=="tars cek status"||s=="cek status tars"||s=="status kamu"||
+    s=="tars status kamu"||s=="kondisi kamu"||s=="kondisi tars")return true;
  return s.indexOf("cek status")>=0||s.indexOf("status tars")>=0||
         s.indexOf("tars status")>=0||s.indexOf("status kamu")>=0||
         s.indexOf("kondisi kamu")>=0||s.indexOf("kondisi tars")>=0;
@@ -645,9 +673,8 @@ String systemStatus(){
  if(WiFi.status()==WL_CONNECTED)s+="; RSSI "+String(WiFi.RSSI())+" dBm; IP "+WiFi.localIP().toString();
  s+=".\nNTP "+String(ntpOK?"valid":"belum valid")+", OLED "+String(oledOK?"aktif":"error")+
    ", mic "+String(micOK?"aktif":"error")+", DAC "+String(dacOK?"aktif":"error")+
-   ", audio "+String(playing?"sedang berjalan":"idle")+
-   ", motor "+String(motorBusy?"aktif":"idle")+
-   ", STT "+String(sttReady?"ready":(sttConnected?"connected":"idle"))+".";
+   ", kamera "+String(cameraOK?"aktif":"error")+", audio "+String(playing?"sedang berjalan":"idle")+
+   ", motor "+String(motorBusy?"aktif":"idle")+", STT "+String(sttReady?"ready":(sttConnected?"connected":"idle"))+".";
  return s;
 }
 
@@ -709,8 +736,7 @@ bool isDoorCmd(const String&s){
 bool isPickPaperCmd(const String&q){
  String s=normCmd(q);
  return s=="ambil kertas"||s=="ambilin kertas"||s=="ambilkan kertas"||
-        s=="tars ambil kertas"||s=="tars ambilin kertas"||
-        s=="tars ambilkan kertas";
+        s=="tars ambil kertas"||s=="tars ambilin kertas"||s=="tars ambilkan kertas";
 }
 
 bool processOffline(const String&q){
@@ -720,10 +746,9 @@ bool processOffline(const String&q){
  static const char*mundur[]={"mundur","tars mundur","mundur tars","surut","tars surut","jalan mundur","balik mundur"};
  static const char*maju[]={"maju","tars maju","maju tars","majulah","tars majulah","jalan maju","terus maju"};
  static const char*angkat[]={"angkat","tars angkat","angkat tangan","tars angkat tangan","angkatlah","tangan","angkat tangan tars"};
- static const char*hari[]={"hari","hari ini","kata hari","kata hari ini","kata kata","kata kata hari ini","kata kata hari","kata kata hari ini tars","kata hari ini tars","tars hari ini","tars kata hari ini"};
+ static const char*hari[]={"hari","hari ini","kata hari","kata hari ini","kata kata","kata kata hari ini","kata kata hari ini tars","kata hari ini tars","tars hari ini","tars kata hari ini"};
 
  if(isPickPaperCmd(q)){runPickPaper();return true;}
-
  if(cmdMatch(s,hari,sizeof(hari)/sizeof(*hari))){
   oledShowText("HARI INI","OFFLINE");playLocalMP3(hari_start,hari_end,"Kata-kata hari ini, tuan.");oledSetStatus("READY");return true;
  }
@@ -753,8 +778,6 @@ bool processOffline(const String&q){
 /* PROCESS */
 void processQuestion(const String&q){
  String nq=normCmd(q);
-
- /* LOCAL HARDWARE COMMAND — no ASK/TTS */
  if(isPickPaperCmd(q)){runPickPaper();return;}
 
  if(tarsMode==MODE_OFFLINE){processOffline(q);return;}
@@ -768,8 +791,7 @@ void processQuestion(const String&q){
  }
 
  oledShowText(q,"STT");Serial.println("TARS: STT FINAL DISPLAY");delay(800);
- bool status=isStatusQuery(q);
- String answer;
+ bool status=isStatusQuery(q);String answer;
  if(status){Serial.println("TARS: STATUS COMMAND DETECTED");answer=systemStatus();}
  else{Serial.println("TARS: STT->ASK DELAY DONE");answer=ask(q);}
  if(!answer.length()){oledSetStatus(status?"STATUS ERROR":"ASK ERROR");return;}
@@ -782,19 +804,29 @@ void processQuestion(const String&q){
 
 /* SETUP */
 void setup(){
- Serial.begin(SERIAL_BAUD);Wire.begin(OLED_SDA,OLED_SCL);Wire.setClock(400000);
+ Serial.begin(SERIAL_BAUD);
+ Wire.begin(OLED_SDA,OLED_SCL);Wire.setClock(400000);
+
  oledOK=oled.begin(SSD1306_SWITCHCAPVCC,OLED_ADDR);
  if(oledOK){
-  oled.clearDisplay();oled.setTextColor(SSD1306_WHITE);oled.setTextSize(2);oled.setCursor(36,0);oled.print("TARS");
-  oled.setTextSize(1);oled.setCursor(3,27);oled.print("BOOT");oled.display();
+  oled.clearDisplay();oled.setTextColor(SSD1306_WHITE);oled.setTextSize(2);
+  oled.setCursor(36,0);oled.print("TARS");oled.setTextSize(1);
+  oled.setCursor(3,27);oled.print("BOOT");oled.display();
  }
 
  initMotors();
  dacOK=initDAC();micOK=initMic();
 
  Serial.printf("TARS: DAC=%s MIC=%s\n",dacOK?"READY":"ERROR",micOK?"READY":"ERROR");
+
+ /* CAMERA TEST */
+ Serial.println("TARS: OV7670 INIT...");
+ cameraOK=initCamera();
+ if(cameraOK)testCameraFrame();
+
  if(!LittleFS.begin(true))Serial.println("TARS: LITTLEFS ERROR");
- else Serial.printf("TARS: LITTLEFS READY %u/%u KB\n",(unsigned)(LittleFS.usedBytes()/1024),(unsigned)(LittleFS.totalBytes()/1024));
+ else Serial.printf("TARS: LITTLEFS READY %u/%u KB\n",
+  (unsigned)(LittleFS.usedBytes()/1024),(unsigned)(LittleFS.totalBytes()/1024));
 
  Serial.println("TARS: DAC GPIO26 INTERNAL DAC RIGHT");
  Serial.println("TARS: AUDIO MP3/WAV -> 22050Hz/16bit");
@@ -804,8 +836,9 @@ void setup(){
  Serial.println("TARS: STT ONLINE REALTIME PCM");
  Serial.println("TARS: STT OFFLINE REALTIME PCM");
 
- Serial.printf("TARS: OV7670 D0..D7=%d,%d,%d,%d,%d,%d,%d,%d XCLK=%d PCLK=%d VSYNC=%d SCCB=%d/%d\n",
-  OV_D0,OV_D1,OV_D2,OV_D3,OV_D4,OV_D5,OV_D6,OV_D7,OV_XCLK,OV_PCLK,OV_VSYNC,OV_SIOD,OV_SIOC);
+ Serial.printf("TARS: OV7670 D0..D7=%d,%d,%d,%d,%d,%d,%d,%d XCLK=%d PCLK=%d VSYNC=%d HREF=%d SCCB=%d/%d\n",
+  CAM_D0,CAM_D1,CAM_D2,CAM_D3,CAM_D4,CAM_D5,CAM_D6,CAM_D7,
+  CAM_XCLK,CAM_PCLK,CAM_VSYNC,CAM_HREF,CAM_SIOD,CAM_SIOC);
 
  Serial.printf("TARS: DFPLAYER RX=%d TX=%d\n",DFPLAYER_RX,DFPLAYER_TX);
  Serial.printf("TARS: L9110 ARM=%d/%d GRIP=%d/%d\n",
