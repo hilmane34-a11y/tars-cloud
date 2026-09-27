@@ -895,7 +895,7 @@ void setup(){
   micOK=initMic();
   Serial.printf("TARS: MIC=%s DAC=OFF CAMERA=WAIT\n",micOK?"READY":"ERROR");
   if(!LittleFS.begin(true))Serial.println("TARS: LITTLEFS ERROR");
-  else Serial.printf("TARS: LITTLEFS READY %u/%u KB\n",(unsigned)(LittleFS.usedBytes()/1024),(unsigned)(LittleFS.totalBytes()/1024);
+  else Serial.printf("TARS: LITTLEFS READY %u/%u KB\n",(unsigned)(LittleFS.usedBytes()/1024),(unsigned)(LittleFS.totalBytes()/1024));
   Serial.println("TARS: DAC GPIO26 INTERNAL DAC");
   Serial.println("TARS: AUDIO MP3/WAV -> 22050Hz/16bit");
   Serial.println("TARS: INMP441 RIGHT GPIO16");
