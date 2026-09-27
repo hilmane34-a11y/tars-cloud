@@ -1,4 +1,4 @@
-from Import("env")
+Import("env")
 
 import os
 import re
@@ -30,11 +30,11 @@ print("LIB :", lib_dir)
 
 if not os.path.isfile(cpp_file):
     print("TARS ERROR: I2SCamera.cpp not found")
-    return
+    env.Exit(1)
 
 if not os.path.isfile(h_file):
     print("TARS ERROR: I2SCamera.h not found")
-    return
+    env.Exit(1)
 
 print("TARS: I2SCamera.cpp FOUND")
 print("TARS: size =", os.path.getsize(cpp_file), "bytes")
@@ -51,7 +51,7 @@ old_gpio_decl = "void gpio_matrix_in(int gpio, int signal_index, bool inverted);
 
 if old_gpio_decl in hdata:
     hdata = hdata.replace(old_gpio_decl, "")
-    
+
     with open(h_file, "w", encoding="utf-8") as f:
         f.write(hdata)
 
@@ -89,6 +89,7 @@ def replace_function(source, signature, replacement):
     for i in range(brace, len(source)):
         if source[i] == "{":
             depth += 1
+
         elif source[i] == "}":
             depth -= 1
 
