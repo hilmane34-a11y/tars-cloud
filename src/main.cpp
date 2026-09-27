@@ -87,33 +87,87 @@ static int16_t pcmBuf[BUF/4],preBuf[PREROLL_SAMPLES],sendBuf[256];
 /* CAMERA */
 bool initCamera(){
   camera_config_t c={};
-  c.ledc_channel=LEDC_CHANNEL_0;c.ledc_timer=LEDC_TIMER_0;
-  c.pin_d0=CAM_D0;c.pin_d1=CAM_D1;c.pin_d2=CAM_D2;c.pin_d3=CAM_D3;
-  c.pin_d4=CAM_D4;c.pin_d5=CAM_D5;c.pin_d6=CAM_D6;c.pin_d7=CAM_D7;
-  c.pin_xclk=CAM_XCLK;c.pin_pclk=CAM_PCLK;
-  c.pin_vsync=CAM_VSYNC;c.pin_href=CAM_HREF;
-  c.pin_sccb_sda=CAM_SIOD;c.pin_sccb_scl=CAM_SIOC;
-  c.pin_pwdn=-1;c.pin_reset=-1;
+
+  c.ledc_channel=LEDC_CHANNEL_0;
+  c.ledc_timer=LEDC_TIMER_0;
+
+  c.pin_d0=CAM_D0;
+  c.pin_d1=CAM_D1;
+  c.pin_d2=CAM_D2;
+  c.pin_d3=CAM_D3;
+  c.pin_d4=CAM_D4;
+  c.pin_d5=CAM_D5;
+  c.pin_d6=CAM_D6;
+  c.pin_d7=CAM_D7;
+
+  c.pin_xclk=CAM_XCLK;
+  c.pin_pclk=CAM_PCLK;
+  c.pin_vsync=CAM_VSYNC;
+  c.pin_href=CAM_HREF;
+
+  c.pin_sccb_sda=CAM_SIOD;
+  c.pin_sccb_scl=CAM_SIOC;
+
+  c.pin_pwdn=-1;
+  c.pin_reset=-1;
+
   c.xclk_freq_hz=10000000;
   c.pixel_format=PIXFORMAT_RGB565;
   c.frame_size=FRAMESIZE_QQVGA;
-  c.jpeg_quality=12;c.fb_count=1;
+  c.jpeg_quality=12;
+  c.fb_count=1;
   c.grab_mode=CAMERA_GRAB_WHEN_EMPTY;
   c.fb_location=CAMERA_FB_IN_DRAM;
 
   esp_err_t e=esp_camera_init(&c);
+
   if(e!=ESP_OK){
     Serial.printf("TARS: OV7670 INIT ERROR=0x%x\n",e);
     return false;
   }
 
   sensor_t*s=esp_camera_sensor_get();
-  if(!s)return false;
 
-  Serial.printf("TARS: OV7670 PID=0x%02X VER=0x%02X\n",
-    s->id.PID,s->id.VER);
+  if(!s){
+    Serial.println("TARS: OV7670 SENSOR ERROR");
+    return false;
+  }
 
-  Serial.println("TARS: OV7670 CAMERA READY");
+  /*
+   * OV7670 QQVGA RGB565
+   * Paksa window 160x120 + downsampling 1/4
+   */
+  s->set_reg(s,0x0C,0xFF,0x04); // COM3
+  s->set_reg(s,0x3E,0xFF,0x1A); // COM14
+
+  s->set_reg(s,0x70,0xFF,0x3A); // SCALING_XSC
+  s->set_reg(s,0x71,0xFF,0x35); // SCALING_YSC
+  s->set_reg(s,0x72,0xFF,0x22); // DCW 1/4
+  s->set_reg(s,0x73,0xFF,0xF2); // PCLK /4
+  s->set_reg(s,0xA2,0xFF,0x02); // PCLK delay
+
+  /*
+   * Frame window resmi OV7670 QQVGA:
+   * HSTART=158
+   * HSTOP =14
+   * VSTART=12
+   * VSTOP =490
+   */
+  s->set_reg(s,0x17,0xFF,0x13); // HSTART
+  s->set_reg(s,0x18,0xFF,0x01); // HSTOP
+  s->set_reg(s,0x32,0xFF,0x78); // HREF
+
+  s->set_reg(s,0x19,0xFF,0x03); // VSTART
+  s->set_reg(s,0x1A,0xFF,0x7A); // VSTOP
+  s->set_reg(s,0x03,0xFF,0x08); // VREF
+
+  Serial.printf(
+    "TARS: OV7670 PID=0x%02X VER=0x%02X\n",
+    s->id.PID,s->id.VER
+  );
+
+  Serial.println("TARS: OV7670 QQVGA RGB565 160x120 READY");
+
   return true;
 }
 
