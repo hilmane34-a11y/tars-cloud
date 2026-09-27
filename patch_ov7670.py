@@ -1,254 +1,258 @@
-Import("env")
+from Import("env")
 
 import os
 import re
 
-LIB = os.path.join(
+# ============================================================
+# TARS - OV7670 PATCH
+# ESP32-OV7670-no-FIFO
+#
+# Patch:
+# 1. gpio_matrix_in compatibility
+# 2. Proper I2S0/DMA/interrupt cleanup
+# 3. Proper I2S0 peripheral release
+# 4. Proper init() error handling
+# ============================================================
+
+lib_dir = os.path.join(
     env.subst("$PROJECT_LIBDEPS_DIR"),
     env.subst("$PIOENV"),
     "ESP32-OV7670-no-FIFO",
     "src"
 )
 
-CPP = os.path.join(LIB, "I2SCamera.cpp")
-HPP = os.path.join(LIB, "I2SCamera.h")
+cpp_file = os.path.join(lib_dir, "I2SCamera.cpp")
+h_file = os.path.join(lib_dir, "I2SCamera.h")
 
-print("\n========== TARS OV7670 PATCH ==========")
-print("LIB :", LIB)
+print("")
+print("========== TARS OV7670 PATCH ==========")
+print("LIB :", lib_dir)
 
-if not os.path.isfile(CPP):
-    print("TARS: I2SCamera.cpp NOT FOUND")
-    Exit(1)
+if not os.path.isfile(cpp_file):
+    print("TARS ERROR: I2SCamera.cpp not found")
+    return
 
-if not os.path.isfile(HPP):
-    print("TARS: I2SCamera.h NOT FOUND")
-    Exit(1)
-
-with open(CPP, "r", encoding="utf-8") as f:
-    cpp = f.read()
-
-with open(HPP, "r", encoding="utf-8") as f:
-    hpp = f.read()
+if not os.path.isfile(h_file):
+    print("TARS ERROR: I2SCamera.h not found")
+    return
 
 print("TARS: I2SCamera.cpp FOUND")
-print("TARS: size =", len(cpp), "bytes")
+print("TARS: size =", os.path.getsize(cpp_file), "bytes")
 
-# =========================================================
-# EXISTING gpio_matrix_in COMPATIBILITY PATCH
-# =========================================================
 
-old = "void gpio_matrix_in(int gpio, int signal_index, bool inverted);"
+# ============================================================
+# 1. PATCH HEADER gpio_matrix_in
+# ============================================================
 
-if old in hpp:
-    hpp = hpp.replace(old, "")
+with open(h_file, "r", encoding="utf-8") as f:
+    hdata = f.read()
 
-    with open(HPP, "w", encoding="utf-8") as f:
-        f.write(hpp)
+old_gpio_decl = "void gpio_matrix_in(int gpio, int signal_index, bool inverted);"
+
+if old_gpio_decl in hdata:
+    hdata = hdata.replace(old_gpio_decl, "")
+    
+    with open(h_file, "w", encoding="utf-8") as f:
+        f.write(hdata)
 
     print("TARS: gpio_matrix_in conflict patched")
 else:
     print("TARS: gpio_matrix_in patch not needed")
 
-# =========================================================
-# I2S0 RESOURCE SCAN
-# =========================================================
 
-print("\nTARS: I2S0 RESOURCE SCAN")
+# ============================================================
+# 2. READ I2SCamera.cpp
+# ============================================================
 
-checks = {
-    "I2S0": r"\bI2S0\b",
-    "I2S0.conf": r"I2S0\s*\.\s*conf",
-    "I2S0.conf2": r"I2S0\s*\.\s*conf2",
-    "I2S0.int_ena": r"I2S0\s*\.\s*int_ena",
-    "I2S0.int_clr": r"I2S0\s*\.\s*int_clr",
+with open(cpp_file, "r", encoding="utf-8") as f:
+    data = f.read()
 
-    "esp_intr_alloc": r"\besp_intr_alloc\s*\(",
-    "esp_intr_disable": r"\besp_intr_disable\s*\(",
-    "esp_intr_enable": r"\besp_intr_enable\s*\(",
-    "esp_intr_free": r"\besp_intr_free\s*\(",
 
-    "gpio_isr_register": r"\bgpio_isr_register\s*\(",
-    "gpio_isr_handler": r"\bgpio_isr_handler",
+# ============================================================
+# Helper: replace complete C++ function body
+# ============================================================
 
-    "dma": r"\bdma\b",
-    "malloc": r"\bmalloc\s*\(",
-    "free": r"\bfree\s*\(",
+def replace_function(source, signature, replacement):
+    start = source.find(signature)
 
-    "heap_caps_malloc": r"\bheap_caps_malloc\s*\(",
-    "heap_caps_free": r"\bheap_caps_free\s*\(",
+    if start < 0:
+        return source, False
 
-    "periph_module_enable": r"\bperiph_module_enable\s*\(",
-    "periph_module_disable": r"\bperiph_module_disable\s*\(",
-
-    "i2s_driver_install": r"\bi2s_driver_install\s*\(",
-    "i2s_driver_uninstall": r"\bi2s_driver_uninstall\s*\(",
-}
-
-for name, pattern in checks.items():
-    found = bool(re.search(pattern, cpp, re.I))
-    print("  %-30s %s" % (name, "YES" if found else "NO"))
-
-# =========================================================
-# SHOW ALL FUNCTION DEFINITIONS
-# =========================================================
-
-print("\nTARS: ALL I2SCAMERA FUNCTIONS")
-
-func_pattern = re.compile(
-    r"(?:void|bool|int|uint32_t|uint16_t|uint8_t|"
-    r"size_t|esp_err_t|static\s+void|static\s+bool|"
-    r"static\s+int|static\s+uint32_t)"
-    r"\s+"
-    r"(?:I2SCamera::)?"
-    r"([A-Za-z_][A-Za-z0-9_]*)"
-    r"\s*\([^;{]*\)\s*\{",
-    re.I
-)
-
-funcs = list(func_pattern.finditer(cpp))
-
-if not funcs:
-    print("  NONE FOUND")
-else:
-    for m in funcs:
-        print("  ", m.group(1))
-
-# =========================================================
-# IMPORTANT FUNCTION BODIES
-# =========================================================
-
-print("\nTARS: IMPORTANT FUNCTION BODIES")
-
-keywords = re.compile(
-    r"(init|begin|start|stop|end|deinit|release|"
-    r"cleanup|destroy|free|reset|i2s|dma|interrupt|"
-    r"camera|capture|frame)",
-    re.I
-)
-
-for m in funcs:
-
-    name = m.group(1)
-
-    if not keywords.search(name):
-        continue
-
-    start = m.start()
-    brace = cpp.find("{", start)
+    brace = source.find("{", start)
 
     if brace < 0:
-        continue
+        return source, False
 
     depth = 0
-    end = None
+    end = -1
 
-    for p in range(brace, len(cpp)):
-
-        if cpp[p] == "{":
+    for i in range(brace, len(source)):
+        if source[i] == "{":
             depth += 1
-
-        elif cpp[p] == "}":
+        elif source[i] == "}":
             depth -= 1
 
             if depth == 0:
-                end = p + 1
+                end = i + 1
                 break
 
-    if end is None:
-        continue
+    if end < 0:
+        return source, False
 
-    body = cpp[start:end]
+    return source[:start] + replacement + source[end:], True
 
-    print("\n----- FUNCTION:", name, "-----")
-    print(body)
 
-# =========================================================
-# SOURCE LINES 45-150
-# =========================================================
+# ============================================================
+# 3. PATCH deinit()
+# ============================================================
 
-print("\nTARS: I2SCamera.cpp CLEANUP SECTION")
+new_deinit = r'''void I2SCamera::deinit()
+{
+    // Stop I2S0 RX/DMA immediately
+    I2S0.conf.rx_start = 0;
+    I2S0.in_link.start = 0;
 
-lines = cpp.splitlines()
+    // Disable all I2S0 interrupts
+    I2S0.int_ena.val = 0;
+    I2S0.int_clr.val = I2S0.int_raw.val;
 
-for start, end in [
-    (45, 150),
-    (230, 265)
-]:
+    // Disable camera / parallel mode
+    I2S0.conf2.camera_en = 0;
+    I2S0.conf2.lcd_en = 0;
 
-    print(
-        "\n----- SOURCE LINES %d-%d -----"
-        % (start, end)
-    )
+    // Disable DMA descriptor mode
+    I2S0.fifo_conf.dscr_en = 0;
 
-    for n in range(
-        start,
-        min(end + 1, len(lines) + 1)
-    ):
-        print(
-            "%04d: %s"
-            % (n, lines[n - 1])
-        )
+    // Reset I2S0 configuration
+    i2sConfReset();
 
-# =========================================================
-# HEADER CLASS / DESTRUCTOR
-# =========================================================
+    // Release DMA buffers
+    dmaBufferDeinit();
 
-print("\nTARS: I2SCamera.h CLASS / DESTRUCTOR")
+    // Release frame buffer
+    if (frame) {
+        free(frame);
+        frame = nullptr;
+    }
 
-hlines = hpp.splitlines()
+    // Release I2S0 interrupt
+    if (i2sInterruptHandle) {
+        esp_intr_disable(i2sInterruptHandle);
+        esp_intr_free(i2sInterruptHandle);
+        i2sInterruptHandle = 0;
+    }
 
-for n, line in enumerate(hlines, 1):
+    // Release VSYNC interrupt
+    if (vSyncInterruptHandle) {
+        esp_intr_disable(vSyncInterruptHandle);
+        esp_intr_free(vSyncInterruptHandle);
+        vSyncInterruptHandle = 0;
+    }
 
-    if re.search(
-        r"class\s+I2SCamera|"
-        r"~I2SCamera|"
-        r"I2SCamera\s*\(|"
-        r"virtual|"
-        r"public:|"
-        r"protected:|"
-        r"private:",
-        line,
-        re.I
-    ):
+    // IMPORTANT:
+    // Camera directly enabled I2S0 peripheral,
+    // therefore release it here before AudioTools/DAC uses I2S0.
+    periph_module_disable(PERIPH_I2S0_MODULE);
+}'''
 
-        print(
-            "%04d: %s"
-            % (n, line)
-        )
+data, deinit_ok = replace_function(
+    data,
+    "void I2SCamera::deinit()",
+    new_deinit
+)
 
-# =========================================================
-# CRITICAL RESOURCE LINES
-# =========================================================
+if deinit_ok:
+    print("TARS: deinit() patched")
+else:
+    print("TARS ERROR: deinit() function not found")
 
-print("\nTARS: CRITICAL RESOURCE LINES")
 
-for n, line in enumerate(lines, 1):
+# ============================================================
+# 4. PATCH init()
+# ============================================================
 
-    if re.search(
-        r"I2S0|"
-        r"esp_intr_|"
-        r"gpio_isr_|"
-        r"dma|DMA|"
-        r"malloc|free|"
-        r"heap_caps_|"
-        r"periph_module_|"
-        r"I2S_CONF|"
-        r"I2S_INT",
-        line,
-        re.I
-    ):
+new_init = r'''bool I2SCamera::init(const int XRES, const int YRES, const int VSYNC,
+                     const int HREF, const int XCLK, const int PCLK,
+                     const int D0, const int D1, const int D2, const int D3,
+                     const int D4, const int D5, const int D6, const int D7)
+{
+    xres = XRES;
+    yres = YRES;
+    frameBytes = XRES * YRES * 2;
 
-        print(
-            "%04d: %s"
-            % (n, line)
-        )
+    frame = (unsigned char*)malloc(frameBytes);
 
-# =========================================================
-# STATUS
-# =========================================================
+    if (!frame) {
+        DEBUG_PRINTLN("Not enough memory for frame buffer!");
+        return false;
+    }
 
-print("\nTARS: PATCH STATUS")
-print("TARS: camera source inspected")
-print("TARS: diagnostic output generated")
-print("TARS: NO I2S0 CLEANUP MODIFICATION APPLIED")
-print("TARS: =================================\n")
+    // Initialize I2S0.
+    // IMPORTANT: check the result because esp_intr_alloc()
+    // can fail when I2S0 resources are still occupied.
+    if (!i2sInit(VSYNC, HREF, PCLK,
+                 D0, D1, D2, D3, D4, D5, D6, D7)) {
+
+        DEBUG_PRINTLN("I2S initialization failed!");
+
+        free(frame);
+        frame = nullptr;
+
+        return false;
+    }
+
+    // Allocate DMA buffers
+    dmaBufferInit(xres * 2 * 2);
+
+    // Initialize VSYNC interrupt
+    if (!initVSync(VSYNC)) {
+
+        DEBUG_PRINTLN("VSYNC initialization failed!");
+
+        deinit();
+
+        return false;
+    }
+
+    return true;
+}'''
+
+data, init_ok = replace_function(
+    data,
+    "bool I2SCamera::init(const int XRES",
+    new_init
+)
+
+if init_ok:
+    print("TARS: init() patched")
+else:
+    print("TARS ERROR: init() function not found")
+
+
+# ============================================================
+# 5. WRITE ONLY IF CHANGES WERE MADE
+# ============================================================
+
+if deinit_ok or init_ok:
+    with open(cpp_file, "w", encoding="utf-8") as f:
+        f.write(data)
+
+    print("TARS: I2SCamera.cpp updated")
+else:
+    print("TARS: no source changes written")
+
+
+# ============================================================
+# 6. FINAL STATUS
+# ============================================================
+
+print("")
+print("========== TARS OV7670 PATCH DONE ==========")
+print("gpio_matrix_in : patched/checked")
+print("deinit()       :", "patched" if deinit_ok else "NOT FOUND")
+print("init()         :", "patched" if init_ok else "NOT FOUND")
+print("I2S0 release   :", "ENABLED")
+print("DMA cleanup    :", "ENABLED")
+print("IRQ cleanup    :", "ENABLED")
+print("Camera mode    :", "DISABLED")
+print("============================================")
