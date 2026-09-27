@@ -1168,47 +1168,40 @@ bool streamAudio(const String&url,const String&text){
 
  HTTPClient h;
  uint32_t total=millis();
-
+ if(!dec.begin()){
+  Serial.printf("TARS: HELIX START FAILED HEAP=%u MAX=%u\n",
+    ESP.getFreeHeap(),ESP.getMaxAllocHeap());
+  audioStop();
+  return false;
+}
  if(!h.begin(c,url)){
   audioStop();
   return false;
  }
-
  h.setTimeout(20000);
  h.addHeader("Content-Type","application/json");
-
  const char*keys[]={
   "Content-Type",
   "X-TARS-TTS",
   "X-TARS-TTS-FORMAT"
  };
-
  h.collectHeaders(keys,3);
-
  JsonDocument j;
  j["text"]=text;
-
  String body;
  serializeJson(j,body);
-
  int code=h.POST(body);
-
  Serial.printf("TARS: AUDIO HTTP=%d\n",code);
-
  if(code<200||code>=300){
   h.end();
   audioStop();
   return false;
  }
-
  String ct=h.header("Content-Type");
  String fmt=h.header("X-TARS-TTS");
  String engine=h.header("X-TARS-TTS-FORMAT");
-
  ct.toLowerCase();
-
  WiFiClient*stream=h.getStreamPtr();
-
  if(!stream){
   h.end();
   audioStop();
@@ -1257,10 +1250,7 @@ bool streamAudio(const String&url,const String&text){
 
  pcmProbe.reset();
  bool started=false;
-
- if(!isWav){
-  dec.begin();
-
+ 
   audio_tools::AudioInfo src=codec.audioInfo();
 
   if(!mp3Resample.begin(src,22050)){
