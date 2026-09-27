@@ -1191,6 +1191,8 @@ bool streamAudio(const String&url,const String&text){
  String body;
  serializeJson(j,body);
  int code=h.POST(body);
+ body="";
+ body.shrinkToFit();
  Serial.printf("TARS: AUDIO HTTP=%d\n",code);
  if(code<200||code>=300){
   h.end();
