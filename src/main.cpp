@@ -86,35 +86,38 @@ static int16_t pcmBuf[BUF/4],preBuf[PREROLL_SAMPLES],sendBuf[256];
 
 /* CAMERA */
 bool initCamera(){
- camera_config_t c={};
- c.ledc_channel=LEDC_CHANNEL_0;
- c.ledc_timer=LEDC_TIMER_0;
- c.pin_d0=CAM_D0;c.pin_d1=CAM_D1;c.pin_d2=CAM_D2;c.pin_d3=CAM_D3;
- c.pin_d4=CAM_D4;c.pin_d5=CAM_D5;c.pin_d6=CAM_D6;c.pin_d7=CAM_D7;
- c.pin_xclk=CAM_XCLK;c.pin_pclk=CAM_PCLK;c.pin_vsync=CAM_VSYNC;c.pin_href=CAM_HREF;
- c.pin_sccb_sda=CAM_SIOD;c.pin_sccb_scl=CAM_SIOC;
- c.pin_pwdn=-1;c.pin_reset=-1;
- c.xclk_freq_hz=10000000;
- c.pixel_format=PIXFORMAT_RGB565;
- c.frame_size=FRAMESIZE_QQVGA;
- c.jpeg_quality=12;
- c.fb_count=1;
- c.grab_mode=CAMERA_GRAB_WHEN_EMPTY;
- c.fb_location=CAMERA_FB_IN_DRAM;
+  camera_config_t c={};
+  c.ledc_channel=LEDC_CHANNEL_0;c.ledc_timer=LEDC_TIMER_0;
+  c.pin_d0=CAM_D0;c.pin_d1=CAM_D1;c.pin_d2=CAM_D2;c.pin_d3=CAM_D3;
+  c.pin_d4=CAM_D4;c.pin_d5=CAM_D5;c.pin_d6=CAM_D6;c.pin_d7=CAM_D7;
+  c.pin_xclk=CAM_XCLK;c.pin_pclk=CAM_PCLK;
+  c.pin_vsync=CAM_VSYNC;c.pin_href=CAM_HREF;
+  c.pin_sccb_sda=CAM_SIOD;c.pin_sccb_scl=CAM_SIOC;
+  c.pin_pwdn=-1;c.pin_reset=-1;
+  c.xclk_freq_hz=10000000;
+  c.pixel_format=PIXFORMAT_RGB565;
+  c.frame_size=FRAMESIZE_QQVGA;
+  c.jpeg_quality=12;
+  c.fb_count=1;
+  c.grab_mode=CAMERA_GRAB_WHEN_EMPTY;
+  c.fb_location=CAMERA_FB_IN_DRAM;
 
- esp_err_t e=esp_camera_init(&c);
- if(e!=ESP_OK){
-  Serial.printf("TARS: OV7670 INIT ERROR=0x%x\n",e);
-  return false;
- }
+  esp_err_t e=esp_camera_init(&c);
+  if(e!=ESP_OK){
+    Serial.printf("TARS: OV7670 INIT ERROR=0x%x\n",e);
+    return false;
+  }
 
- sensor_t*s=esp_camera_sensor_get();
- if(s){
-  Serial.printf("TARS: OV7670 PID=0x%02X VER=0x%02X MIDH=0x%02X MIDL=0x%02X\n",
-   s->id.PID,s->id.VER,s->id.MIDH,s->id.MIDL);
- }
- Serial.println("TARS: OV7670 CAMERA READY");
- return true;
+  sensor_t*s=esp_camera_sensor_get();
+  if(s){
+    s->set_pixformat(s,PIXFORMAT_RGB565);
+    s->set_framesize(s,FRAMESIZE_QQVGA);
+    Serial.printf("TARS: OV7670 PID=0x%02X VER=0x%02X MIDH=0x%02X MIDL=0x%02X\n",
+      s->id.PID,s->id.VER,s->id.MIDH,s->id.MIDL);
+  }
+
+  Serial.println("TARS: OV7670 CAMERA READY");
+  return true;
 }
 
 void testCameraFrame(){
