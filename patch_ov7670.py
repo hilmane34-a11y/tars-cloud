@@ -278,7 +278,7 @@ new_init = r'''bool I2SCamera::init(const int XRES, const int YRES, const int VS
 
 data, ok = replace_function(
     data,
-    "bool I2SCamera::init(const int XRES",
+    "bool I2SCamera::init(",
     new_init
 )
 
