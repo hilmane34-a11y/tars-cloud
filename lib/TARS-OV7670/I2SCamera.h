@@ -37,25 +37,56 @@ public:
   static int framesReceived;
   static int xres;
   static int yres;
+
   static intr_handle_t i2sInterruptHandle;
   static intr_handle_t vSyncInterruptHandle;
+
   static int dmaBufferCount;
   static int dmaBufferActive;
   static DMABuffer **dmaBuffer;
+
+  /*
+   * Tidak digunakan lagi sebagai framebuffer kamera.
+   * Tetap dipertahankan agar kompatibel dengan struktur
+   * library lama.
+   */
   static unsigned char* frame;
   static int framePointer;
   static int frameBytes;
+
   static volatile bool stopSignal;
 
-  static void start(){ i2sRun(); }
-  static void stop()
+  /*
+   * Mulai capture secara NON-BLOCKING.
+   *
+   * Capture akan berjalan di ISR.
+   * encodeFrameToJPEG() kemudian mengambil block
+   * hasil capture sambil frame masih berlangsung.
+   */
+  static void start()
   {
-    stopSignal = true;
-    while(stopSignal) delay(1);
+    i2sRun();
   }
 
-  // Mulai capture, encodeFrameToJPEG() yang akan mengonsumsi hasilnya.
-  static void oneFrame(){ i2sRun(); }
+  /*
+   * Hentikan capture.
+   */
+  static void stop()
+  {
+    i2sStop();
+    stopSignal=false;
+  }
+
+  /*
+   * Mulai satu frame.
+   *
+   * Tidak menunggu sampai frame selesai.
+   * encodeFrameToJPEG() yang mengonsumsi block.
+   */
+  static void oneFrame()
+  {
+    i2sRun();
+  }
 
   static void i2sStop();
   static void i2sRun();
@@ -71,29 +102,51 @@ public:
   static void IRAM_ATTR vSyncInterrupt(void* arg);
 
   static bool i2sInit(
-    const int VSYNC,const int HREF,const int PCLK,
-    const int D0,const int D1,const int D2,const int D3,
-    const int D4,const int D5,const int D6,const int D7
+    const int VSYNC,
+    const int HREF,
+    const int PCLK,
+    const int D0,
+    const int D1,
+    const int D2,
+    const int D3,
+    const int D4,
+    const int D5,
+    const int D6,
+    const int D7
   );
 
   static bool init(
-    const int XRES,const int YRES,
-    const int VSYNC,const int HREF,const int XCLK,const int PCLK,
-    const int D0,const int D1,const int D2,const int D3,
-    const int D4,const int D5,const int D6,const int D7
+    const int XRES,
+    const int YRES,
+    const int VSYNC,
+    const int HREF,
+    const int XCLK,
+    const int PCLK,
+    const int D0,
+    const int D1,
+    const int D2,
+    const int D3,
+    const int D4,
+    const int D5,
+    const int D6,
+    const int D7
   );
 
   static inline void i2sConfReset()
   {
     const uint32_t lc_conf_reset_flags =
-      I2S_IN_RST_M|I2S_AHBM_RST_M|I2S_AHBM_FIFO_RST_M;
+      I2S_IN_RST_M |
+      I2S_AHBM_RST_M |
+      I2S_AHBM_FIFO_RST_M;
 
     I2S0.lc_conf.val |= lc_conf_reset_flags;
     I2S0.lc_conf.val &= ~lc_conf_reset_flags;
 
     const uint32_t conf_reset_flags =
-      I2S_RX_RESET_M|I2S_RX_FIFO_RESET_M|
-      I2S_TX_RESET_M|I2S_TX_FIFO_RESET_M;
+      I2S_RX_RESET_M |
+      I2S_RX_FIFO_RESET_M |
+      I2S_TX_RESET_M |
+      I2S_TX_FIFO_RESET_M;
 
     I2S0.conf.val |= conf_reset_flags;
     I2S0.conf.val &= ~conf_reset_flags;
