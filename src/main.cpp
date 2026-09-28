@@ -486,7 +486,9 @@ bool syncTime(){
 }
 
 /* STT */
-uint32_t sttRetryAt=0;bool sttRetryShown=false;
+uint32_t sttRetryAt=0; bool sttRetryShown=false;
+bool sttCooling(){ return millis()<sttRetryAt;
+}
 
 void sttEvent(WStype_t type,uint8_t*payload,size_t length){
  if(type==WStype_CONNECTED){
