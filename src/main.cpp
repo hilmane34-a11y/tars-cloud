@@ -70,6 +70,13 @@ String sttFinal,sttPartial,oledText,oledStatus="READY";
 uint32_t oledTypePos=0,oledLastType=0,oledLastWave=0;
 uint32_t oledPage=0,oledLastPage=0,behaviorAt=0,behaviorNext=0,ramDiagAt=0;
 
+/* STT LIFECYCLE */
+uint32_t sttRetryAt=0;
+const uint32_t STT_NORMAL_COOLDOWN=1000;
+const uint32_t STT_ERROR_COOLDOWN=6000;
+const uint32_t STT_QUOTA_COOLDOWN=15000;
+const uint32_t STT_RECONNECT_GUARD=60000;
+
 static int32_t rawBuf[BUF/4];
 static int16_t pcmBuf[BUF/4],preBuf[PREROLL_SAMPLES],sendBuf[256];
 static uint8_t visionJpeg[VISION_JPEG_MAX];
@@ -459,23 +466,39 @@ bool syncTime(){
 }
 
 /* STT */
+bool sttCooling(){return (int32_t)(millis()-sttRetryAt)<0;}
+
 void sttEvent(WStype_t type,uint8_t*payload,size_t length){
  if(type==WStype_CONNECTED){
   sttConnected=true;Serial.println("TARS: STT WS CONNECTED");oledSetStatus("STT CONNECTED");return;
  }
  if(type==WStype_DISCONNECTED){
   sttConnected=false;
-  if(!sttClosing&&!sttDone)sttError=true;
+  sttWS.setReconnectInterval(STT_RECONNECT_GUARD);
+  if(!sttClosing&&!sttDone){
+   sttError=true;
+   sttRetryAt=millis()+STT_ERROR_COOLDOWN;
+  }
   Serial.println(sttClosing?"TARS: STT WS DISCONNECTED (NORMAL)":"TARS: STT WS DISCONNECTED");
   return;
  }
  if(type==WStype_ERROR){
-  if(!sttClosing)sttError=true;
+  sttWS.setReconnectInterval(STT_RECONNECT_GUARD);
+  if(!sttClosing){
+   sttError=true;
+   sttRetryAt=millis()+STT_ERROR_COOLDOWN;
+  }
   Serial.println("TARS: STT WS ERROR");oledSetStatus("STT ERROR");return;
  }
  if(type!=WStype_TEXT)return;
- String msg;msg.reserve(length+1);for(size_t i=0;i<length;i++)msg+=(char)payload[i];
- JsonDocument j;if(deserializeJson(j,msg))return;String t=j["type"].as<String>();
+
+ String msg;msg.reserve(length+1);
+ for(size_t i=0;i<length;i++)msg+=(char)payload[i];
+
+ JsonDocument j;
+ if(deserializeJson(j,msg))return;
+ String t=j["type"].as<String>();
+
  if(t=="ready"){
   sttReady=true;Serial.println("TARS: STT REALTIME READY");oledSetStatus("STT READY");
  }else if(t=="partial"){
@@ -485,64 +508,119 @@ void sttEvent(WStype_t type,uint8_t*payload,size_t length){
   sttFinal=j["text"].as<String>();sttFinal.trim();sttDone=true;
   Serial.println("TARS: YOU SAID = "+sttFinal);
  }else if(t=="error"){
-  sttError=true;sttDone=true;Serial.println("TARS: STT ERROR = "+j["error"].as<String>());oledSetStatus("STT ERROR");
+  String e=j["error"].as<String>();e.trim();
+  sttError=true;sttDone=true;
+  sttWS.setReconnectInterval(STT_RECONNECT_GUARD);
+  if(e.indexOf("Concurrent Quota")>=0||e.indexOf("concurrent quota")>=0)
+   sttRetryAt=millis()+STT_QUOTA_COOLDOWN;
+  else
+   sttRetryAt=millis()+STT_ERROR_COOLDOWN;
+  Serial.println("TARS: STT ERROR = "+e);oledSetStatus("STT ERROR");
  }
 }
 
-void closeSTT(){
- sttClosing=true;sttWS.disconnect();
+void closeSTT(uint32_t cooldown=STT_NORMAL_COOLDOWN){
+ sttClosing=true;
+ sttWS.setReconnectInterval(STT_RECONNECT_GUARD);
+ sttWS.disconnect();
  uint32_t st=millis();
- while(millis()-st<120){sttWS.loop();delay(2);yield();}
- sttClosing=false;sttConnected=false;
+ while(millis()-st<150){sttWS.loop();delay(2);yield();}
+ sttConnected=false;sttReady=false;sttClosing=false;
+ sttRetryAt=millis()+cooldown;
 }
 
 bool startSTT(bool offline=false){
  if(!wifiOK()||!micOK)return false;
+ if(sttCooling())return false;
 
- closeSTT();
+ closeSTT(0);
  sttReady=false;sttDone=false;sttError=false;sttFinal="";sttPartial="";
- sttWS.onEvent(sttEvent);sttWS.setReconnectInterval(0);sttWS.enableHeartbeat(15000,5000,2);
+ sttWS.onEvent(sttEvent);
+ sttWS.setReconnectInterval(5000);
+ sttWS.enableHeartbeat(15000,5000,2);
  sttWS.beginSSL(STT_HOST,443,"/stt");
 
  uint32_t st=millis();
- while(!sttReady&&!sttError&&millis()-st<20000){sttWS.loop();delay(2);yield();}
+ while(!sttReady&&!sttError&&millis()-st<20000){
+  sttWS.loop();delay(2);yield();
+ }
+
  if(!sttReady){
   Serial.println(offline?"TARS: OFFLINE STT REALTIME TIMEOUT":"TARS: STT REALTIME TIMEOUT");
-  closeSTT();return false;
+  closeSTT(STT_ERROR_COOLDOWN);
+  return false;
  }
  return true;
 }
 
 String stopSTT(uint32_t samples,bool offline=false){
- if(!sttConnected&&!sttDone)return "";
- JsonDocument j;j["type"]="end";j["timestamp"]=(double)samples/MIC_RATE;
- String msg;serializeJson(j,msg);sttWS.sendTXT(msg);
+ if(!sttConnected&&!sttDone){
+  closeSTT(STT_ERROR_COOLDOWN);return "";
+ }
+
+ JsonDocument j;
+ j["type"]="end";
+ j["timestamp"]=(double)samples/MIC_RATE;
+ String msg;serializeJson(j,msg);
+
+ if(!sttWS.sendTXT(msg)){
+  Serial.println("TARS: STT END SEND FAILED");
+  closeSTT(STT_ERROR_COOLDOWN);return "";
+ }
+
  uint32_t st=millis();
- while(!sttDone&&!sttError&&millis()-st<6000){sttWS.loop();delay(2);yield();}
- String r=sttFinal;closeSTT();return r;
+ while(!sttDone&&!sttError&&millis()-st<6000){
+  sttWS.loop();delay(2);yield();
+ }
+
+ String r=sttFinal;
+ bool ok=sttDone&&!sttError&&r.length();
+ closeSTT(ok?STT_NORMAL_COOLDOWN:STT_ERROR_COOLDOWN);
+ return r;
 }
 
 String recordSTT(bool offline){
+ if(sttCooling())return "";
  if(!startSTT(offline))return "";
+
  if(offline)oledSetStatus("READY");else oledSetListening();
 
- size_t prePos=0,preCount=0;uint32_t voiceStart=0,lastVoice=0,samples=0;bool voice=false;
+ size_t prePos=0,preCount=0;
+ uint32_t voiceStart=0,lastVoice=0,samples=0;
+ bool voice=false;
+
  for(;;){
-  sttWS.loop();if(sttError)break;
+  sttWS.loop();
+  if(sttError)break;
+
   size_t bytes=0;
   if(i2s_read(MIC_PORT,rawBuf,sizeof(rawBuf),&bytes,pdMS_TO_TICKS(30))!=ESP_OK)continue;
-  size_t count=bytes/4;int32_t peak=0;uint64_t sum=0;
+
+  size_t count=bytes/4;
+  int32_t peak=0;
+  uint64_t sum=0;
+
   for(size_t i=0;i<count;i++){
-   int32_t v=constrain(rawBuf[i]>>16,-32768,32767);pcmBuf[i]=(int16_t)v;
-   int32_t a=abs(v);if(a>peak)peak=a;sum+=(uint64_t)a*a;
+   int32_t v=constrain(rawBuf[i]>>16,-32768,32767);
+   pcmBuf[i]=(int16_t)v;
+   int32_t a=abs(v);
+   if(a>peak)peak=a;
+   sum+=(uint64_t)a*a;
   }
+
   uint32_t rms=count?(uint32_t)sqrt((double)sum/count):0;
 
   if(!voice){
-   for(size_t i=0;i<count;i++){preBuf[prePos]=pcmBuf[i];prePos=(prePos+1)%PREROLL_SAMPLES;if(preCount<PREROLL_SAMPLES)preCount++;}
+   for(size_t i=0;i<count;i++){
+    preBuf[prePos]=pcmBuf[i];
+    prePos=(prePos+1)%PREROLL_SAMPLES;
+    if(preCount<PREROLL_SAMPLES)preCount++;
+   }
+
    if(peak>=MIC_THRESHOLD||rms>=3000){
     voice=true;voiceStart=lastVoice=millis();
     size_t start=preCount==PREROLL_SAMPLES?prePos:0,nsend=0;
+
     for(size_t i=0;i<preCount;i++){
      sendBuf[nsend++]=preBuf[(start+i)%PREROLL_SAMPLES];
      if(nsend==256){
@@ -550,6 +628,7 @@ String recordSTT(bool offline){
       nsend=0;
      }
     }
+
     if(nsend&&!sttError)sttWS.sendBIN((uint8_t*)sendBuf,nsend*2);
     samples+=preCount;
     Serial.printf("TARS: %s VOICE PEAK=%ld RMS=%lu\n",offline?"OFFLINE":"ONLINE",(long)peak,(unsigned long)rms);
@@ -559,6 +638,7 @@ String recordSTT(bool offline){
     Serial.println(offline?"TARS: OFFLINE STT PCM SEND FAILED":"TARS: STT PCM SEND FAILED");
     sttError=true;break;
    }
+
    samples+=count;
    if(peak>=MIC_SILENCE||rms>=1800)lastVoice=millis();
    if(millis()-voiceStart>=RECORD_MIN_MS&&millis()-lastVoice>=SILENCE_MS)break;
@@ -567,12 +647,16 @@ String recordSTT(bool offline){
  }
 
  if(!voice||sttError){
-  closeSTT();
+  uint32_t cd=sttRetryAt>millis()?sttRetryAt-millis():0;
+  if(cd<STT_QUOTA_COOLDOWN)cd=STT_ERROR_COOLDOWN;
+  closeSTT(cd);
   if(!voice)Serial.println(offline?"TARS: OFFLINE MIC AUDIO TOO LOW":"TARS: MIC AUDIO TOO LOW");
   return "";
  }
+
  return stopSTT(samples,offline);
 }
+
 String recordRealtime(){return recordSTT(false);}
 String recordOffline(){return recordSTT(true);}
 
@@ -941,6 +1025,11 @@ void loop(){
  if(playing){behaviorReset();delay(1);return;}
 
  behaviorUpdate();behaviorTask();
+
+ if(sttCooling()){
+  if(!specialActive())oledSetStatus(tarsMode==MODE_ONLINE?"LISTENING":"READY");
+  delay(100);return;
+ }
 
  String q=tarsMode==MODE_ONLINE?recordRealtime():recordOffline();
 
