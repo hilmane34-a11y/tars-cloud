@@ -170,7 +170,6 @@ String visionAsk(const String&q){
  if(!wifiOK()||!cameraLive||!camera)return "";
  if(cameraMux&&xSemaphoreTake(cameraMux,pdMS_TO_TICKS(1500))!=pdTRUE)return "";
  size_t jl=0;
- camera->oneFrame();
  bool ok=I2SCamera::encodeFrameToJPEG(visionJpeg,&jl,45)&&jl>0&&jl<=VISION_JPEG_MAX;
  if(cameraMux)xSemaphoreGive(cameraMux);
  if(!ok){Serial.println("TARS: VISION JPEG ERROR");return "";}
