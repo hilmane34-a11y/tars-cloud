@@ -2,29 +2,21 @@ Import("env")
 import os
 
 # ============================================================
-# TARS - OV7670 CLEANUP PATCH
-# ESP32-OV7670-no-FIFO
-#
-# Tujuan:
-# - Compatibility gpio_matrix_in
-# - Tetap I2S0
-# - Cleanup frame + DMA + interrupt saat delete camera
-# - Aman camera OFF -> ON
-# - Tidak mengubah resolusi QQVGA 160x120
+# TARS - OV7670 LOCAL CLEANUP PATCH
+# Target: lib/TARS-OV7670
 # ============================================================
 
 lib_dir = os.path.join(
-    env.subst("$PROJECT_LIBDEPS_DIR"),
-    env.subst("$PIOENV"),
-    "ESP32-OV7670-no-FIFO",
-    "src"
+    env.subst("$PROJECT_DIR"),
+    "lib",
+    "TARS-OV7670"
 )
 
 cpp_file = os.path.join(lib_dir, "I2SCamera.cpp")
 h_file = os.path.join(lib_dir, "I2SCamera.h")
 
 print("")
-print("========== TARS OV7670 CLEANUP PATCH ==========")
+print("========== TARS OV7670 LOCAL PATCH ==========")
 print("LIB :", lib_dir)
 
 if not os.path.isfile(cpp_file):
@@ -38,33 +30,11 @@ if not os.path.isfile(h_file):
 print("TARS: I2SCamera.cpp FOUND")
 print("TARS: size =", os.path.getsize(cpp_file), "bytes")
 
-
-# ============================================================
-# READ FILES
-# ============================================================
-
 with open(h_file, "r", encoding="utf-8") as f:
     hdata = f.read()
 
 with open(cpp_file, "r", encoding="utf-8") as f:
     data = f.read()
-
-
-# ============================================================
-# gpio_matrix_in compatibility
-# ============================================================
-
-old_gpio_decl = "void gpio_matrix_in(int gpio, int signal_index, bool inverted);"
-
-if old_gpio_decl in hdata:
-    hdata = hdata.replace(old_gpio_decl, "")
-
-    with open(h_file, "w", encoding="utf-8") as f:
-        f.write(hdata)
-
-    print("TARS: gpio_matrix_in conflict patched")
-else:
-    print("TARS: gpio_matrix_in patch not needed")
 
 
 # ============================================================
@@ -83,31 +53,34 @@ def replace_function(source, signature, replacement):
         return source, False
 
     depth = 0
-    end = -1
 
     for i in range(brace, len(source)):
-
         if source[i] == "{":
             depth += 1
-
         elif source[i] == "}":
             depth -= 1
-
             if depth == 0:
-                end = i + 1
-                break
+                return source[:start] + replacement + source[i + 1:], True
 
-    if end < 0:
-        return source, False
-
-    return source[:start] + replacement + source[end:], True
+    return source, False
 
 
 # ============================================================
-# ADD DESTRUCTOR
+# gpio_matrix_in compatibility
 # ============================================================
 
-destructor = "  ~I2SCamera(){deinit();}\n"
+old_gpio_decl = "void gpio_matrix_in(int gpio, int signal_index, bool inverted);"
+
+if old_gpio_decl in hdata:
+    hdata = hdata.replace(old_gpio_decl, "")
+    print("TARS: gpio_matrix_in conflict patched")
+else:
+    print("TARS: gpio_matrix_in patch not needed")
+
+
+# ============================================================
+# Destructor
+# ============================================================
 
 if "~I2SCamera()" not in hdata:
 
@@ -116,10 +89,9 @@ if "~I2SCamera()" not in hdata:
     if marker in hdata:
         hdata = hdata.replace(
             marker,
-            marker + destructor,
+            marker + "  ~I2SCamera(){deinit();}\n",
             1
         )
-
         print("TARS: I2SCamera destructor added")
     else:
         print("TARS ERROR: I2SCamera class marker not found")
@@ -151,12 +123,11 @@ data, ok = replace_function(
     new_i2s_stop
 )
 
-print(
-    "TARS: i2sStop() patched"
-    if ok
-    else
-    "TARS ERROR: i2sStop() not found"
-)
+if ok:
+    print("TARS: i2sStop() patched")
+else:
+    print("TARS ERROR: i2sStop() not found")
+    env.Exit(1)
 
 
 # ============================================================
@@ -199,12 +170,11 @@ data, ok = replace_function(
     new_dma_init
 )
 
-print(
-    "TARS: dmaBufferInit() patched"
-    if ok
-    else
-    "TARS ERROR: dmaBufferInit() not found"
-)
+if ok:
+    print("TARS: dmaBufferInit() patched")
+else:
+    print("TARS ERROR: dmaBufferInit() not found")
+    env.Exit(1)
 
 
 # ============================================================
@@ -244,12 +214,11 @@ data, ok = replace_function(
     new_deinit
 )
 
-print(
-    "TARS: deinit() patched"
-    if ok
-    else
-    "TARS ERROR: deinit() not found"
-)
+if ok:
+    print("TARS: deinit() patched")
+else:
+    print("TARS ERROR: deinit() not found")
+    env.Exit(1)
 
 
 # ============================================================
@@ -261,7 +230,6 @@ new_init = r'''bool I2SCamera::init(const int XRES, const int YRES, const int VS
                      const int D0, const int D1, const int D2, const int D3,
                      const int D4, const int D5, const int D6, const int D7)
 {
-    // Always clean stale camera resources first.
     deinit();
 
     xres = XRES;
@@ -314,48 +282,29 @@ data, ok = replace_function(
     new_init
 )
 
-print(
-    "TARS: init() patched"
-    if ok
-    else
-    "TARS ERROR: init() not found"
-)
-
-
-# ============================================================
-# WRITE FILES
-# ============================================================
-
 if ok:
-
-    with open(h_file, "w", encoding="utf-8") as f:
-        f.write(hdata)
-
-    with open(cpp_file, "w", encoding="utf-8") as f:
-        f.write(data)
-
-    print("TARS: I2SCamera.h updated")
-    print("TARS: I2SCamera.cpp updated")
-
+    print("TARS: init() patched")
 else:
-
-    print("TARS: source changes NOT written")
+    print("TARS ERROR: init() not found")
     env.Exit(1)
 
 
 # ============================================================
-# DONE
+# WRITE
 # ============================================================
 
+with open(h_file, "w", encoding="utf-8") as f:
+    f.write(hdata)
+
+with open(cpp_file, "w", encoding="utf-8") as f:
+    f.write(data)
+
+print("TARS: I2SCamera.h updated")
+print("TARS: I2SCamera.cpp updated")
+
 print("")
-print("========== TARS OV7670 CLEANUP DONE ==========")
-print("gpio_matrix_in : patched/checked")
-print("destructor     : enabled")
-print("i2sStop()      : safe")
-print("DMA cleanup    : enabled")
-print("frame cleanup  : enabled")
-print("ISR cleanup    : enabled")
-print("init cleanup   : enabled")
-print("CAMERA MODE    : QQVGA RGB565")
-print("CAMERA SIZE    : 160x120")
-print("================================================")
+print("========== TARS OV7670 LOCAL PATCH DONE ==========")
+print("TARGET        : lib/TARS-OV7670")
+print("CAMERA MODE   : QQVGA RGB565")
+print("CAMERA SIZE   : 160x120")
+print("===================================================")
