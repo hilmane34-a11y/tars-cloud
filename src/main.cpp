@@ -142,13 +142,17 @@ void startCamera(){
  Serial.println("TARS: OV7670 LIVE");
 }
 void drawCameraOLED(){
- if(!cameraLive||!camera||!oledOK||playing)return;
- if(cameraMux&&xSemaphoreTake(cameraMux,pdMS_TO_TICKS(1000))!=pdTRUE)return;
- static uint8_t img[128*64];
- bool ok=camera->capturePreview(img);
+ if(!cameraLive||!camera||!oledOK)return;
+ static uint8_t preview[128*64];
+ if(cameraMux&&xSemaphoreTake(cameraMux,pdMS_TO_TICKS(2500))!=pdTRUE)return;
+ bool ok=I2SCamera::capturePreview(preview);
  if(ok){
   oled.clearDisplay();
-  for(int y=0;y<64;y++)for(int x=0;x<128;x++)if(img[y*128+x])oled.drawPixel(x,y,SSD1306_WHITE);
+  for(int y=0;y<64;y++){
+   for(int x=0;x<128;x++){
+    if(preview[y*128+x])oled.drawPixel(x,y,SSD1306_WHITE);
+   }
+  }
   oled.display();
  }
  if(cameraMux)xSemaphoreGive(cameraMux);
