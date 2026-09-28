@@ -136,9 +136,13 @@ void stopCamera(){
 void startCamera(){
  if(cameraLive)return;
  delay(40);
- if(!initCamera())return;
+ Serial.println("TARS: CAMERA START 1");
+ if(!initCamera()){Serial.println("TARS: CAMERA START INIT FAIL");return;}
+ Serial.println("TARS: CAMERA START 2");
  if(cameraMux)xSemaphoreTake(cameraMux,portMAX_DELAY);
+ Serial.println("TARS: CAMERA START 3 BEFORE FRAME");
  camera->oneFrame();
+ Serial.println("TARS: CAMERA START 4 AFTER FRAME");
  if(cameraMux)xSemaphoreGive(cameraMux);
  cameraLive=true;
  Serial.println("TARS: OV7670 LIVE");
