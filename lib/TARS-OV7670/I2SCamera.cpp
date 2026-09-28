@@ -108,14 +108,15 @@ void I2SCamera::i2sStop()
   I2S0.conf.rx_start=0;
 }
 
-void I2SCamera::i2sRun()
-{
+void I2SCamera::i2sRun(){
+  DEBUG_PRINTLN("TARS: I2SRUN 1 ENTER");
+
   i2sStop();
+  DEBUG_PRINTLN("TARS: I2SRUN 2 AFTER STOP");
 
   blocksReceived=0;
   dmaBufferActive=0;
   framePointer=0;
-
   streamFill=0;
   streamLine=0;
   streamReady=0;
@@ -126,24 +127,82 @@ void I2SCamera::i2sRun()
     streamState[i]=0;
 
   streamState[0]=1;
+  DEBUG_PRINTLN("TARS: I2SRUN 3 STATE READY");
+
+  if(!dmaBuffer){
+    DEBUG_PRINTLN("TARS: I2SRUN ERROR DMA=NULL");
+    return;
+  }
+
+  DEBUG_PRINT("TARS: I2SRUN 4 DMA COUNT=");
+  DEBUG_PRINTLN(dmaBufferCount);
+
+  if(dmaBufferCount<=0){
+    DEBUG_PRINTLN("TARS: I2SRUN ERROR DMA COUNT");
+    return;
+  }
+
+  if(!dmaBuffer[0]){
+    DEBUG_PRINTLN("TARS: I2SRUN ERROR DMA0=NULL");
+    return;
+  }
+
+  DEBUG_PRINTLN("TARS: I2SRUN 5 DMA0 OK");
+
+  if(!dmaBuffer[0]->valid()){
+    DEBUG_PRINTLN("TARS: I2SRUN ERROR DMA0 INVALID");
+    return;
+  }
+
+  DEBUG_PRINT("TARS: I2SRUN 6 DMA BYTES=");
+  DEBUG_PRINTLN(dmaBuffer[0]->len);
+
+  DEBUG_PRINT("TARS: I2SRUN 7 SAMPLE=");
+  DEBUG_PRINTLN(dmaBuffer[0]->sampleCount());
+
+  DEBUG_PRINTLN("TARS: I2SRUN 8 VSYNC WAIT");
 
   while(gpio_get_level(vSyncPin)==0);
   while(gpio_get_level(vSyncPin)!=0);
 
+  DEBUG_PRINTLN("TARS: I2SRUN 9 VSYNC OK");
+
   I2S0.rx_eof_num=dmaBuffer[0]->sampleCount();
+  DEBUG_PRINTLN("TARS: I2SRUN 10 RX EOF OK");
+
   I2S0.in_link.addr=(uint32_t)&dmaBuffer[0]->descriptor;
+  DEBUG_PRINTLN("TARS: I2SRUN 11 LINK ADDR OK");
+
   I2S0.in_link.start=1;
+  DEBUG_PRINTLN("TARS: I2SRUN 12 LINK START OK");
+
   I2S0.int_clr.val=I2S0.int_raw.val;
+  DEBUG_PRINTLN("TARS: I2SRUN 13 INT CLEAR OK");
+
   I2S0.int_ena.val=0;
   I2S0.int_ena.in_done=1;
+  DEBUG_PRINTLN("TARS: I2SRUN 14 INT ENABLE OK");
 
-  if(i2sInterruptHandle)
+  if(i2sInterruptHandle){
+    DEBUG_PRINTLN("TARS: I2SRUN 15 INTR ENABLE");
     esp_intr_enable(i2sInterruptHandle);
+    DEBUG_PRINTLN("TARS: I2SRUN 16 INTR ENABLED");
+  }else{
+    DEBUG_PRINTLN("TARS: I2SRUN ERROR INTR=NULL");
+    return;
+  }
 
-  if(vSyncInterruptHandle)
+  if(vSyncInterruptHandle){
+    DEBUG_PRINTLN("TARS: I2SRUN 17 VSYNC ENABLE");
     esp_intr_enable(vSyncInterruptHandle);
+    DEBUG_PRINTLN("TARS: I2SRUN 18 VSYNC ENABLED");
+  }else{
+    DEBUG_PRINTLN("TARS: I2SRUN ERROR VSYNC INTR=NULL");
+    return;
+  }
 
   I2S0.conf.rx_start=1;
+  DEBUG_PRINTLN("TARS: I2SRUN 19 RX START");
 }
 
 bool I2SCamera::initVSync(int pin)
