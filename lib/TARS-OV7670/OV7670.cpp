@@ -37,6 +37,11 @@ OV7670::OV7670(Mode m, const int SIOD, const int SIOC, const int VSYNC, const in
     default:
     xres = 0;
     yres = 0;
+    case QVGA_RGB565:
+    xres = 320;
+    yres = 240;
+    QVGA();
+    break;
   }
 
   I2SCamera::init(xres, yres, VSYNC, HREF, XCLK, PCLK, D0, D1, D2, D3, D4, D5, D6, D7);
