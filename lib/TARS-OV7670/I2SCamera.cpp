@@ -624,3 +624,34 @@ bool I2SCamera::encodeFrameToJPEG(
 
   return true;
 }
+
+bool I2SCamera::capturePreview(uint8_t*out){
+ if(!out||xres!=320||yres!=240)return false;
+ memset(out,0,1024);
+ i2sRun();
+ uint32_t st=millis();
+ while(!streamFrameDone&&!streamError&&millis()-st<1500){
+  for(int b=0;b<STREAM_BLOCKS;b++){
+   if(streamState[b]!=2)continue;
+   streamState[b]=3;
+   uint16_t*f=(uint16_t*)streamBlock[b];
+   int y0=b*STREAM_LINES;
+   for(int oy=0;oy<64;oy++){
+    int sy=oy*240/64;
+    if(sy<y0||sy>=y0+STREAM_LINES)continue;
+    int ly=sy-y0;
+    for(int ox=0;ox<128;ox++){
+     int sx=ox*320/128;
+     uint16_t p=f[ly*320+sx];
+     int r=(p>>11)&31,g=(p>>5)&63,bl=p&31;
+     if((r*255/31+g*255/63+bl*255/31)/3>120)out[oy*128+ox]=1;
+    }
+   }
+   streamState[b]=0;
+   if(streamReady>0)streamReady--;
+  }
+  delay(1);
+ }
+ i2sStop();
+ return streamFrameDone&&!streamError;
+}
