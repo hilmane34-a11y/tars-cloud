@@ -413,17 +413,33 @@ bool I2SCamera::encodeFrameToJPEG(uint8_t*outBuffer,size_t*outLen,int quality){
 }
 
 bool I2SCamera::capturePreview(uint8_t*out){
- if(!out||xres!=320||yres!=240)return false;
+ if(!out||xres!=320||yres!=240){
+  DEBUG_PRINTLN("TARS: PREVIEW INVALID ARG");
+  return false;
+ }
 
  memset(out,0,128*64);
 
  DEBUG_PRINTLN("TARS: PREVIEW CAPTURE START");
+ DEBUG_PRINT("TARS: PREVIEW RES=");
+ DEBUG_PRINT(xres);
+ DEBUG_PRINT("x");
+ DEBUG_PRINTLN(yres);
+ DEBUG_PRINT("TARS: PREVIEW RAM=");
+ DEBUG_PRINTLN(ESP.getFreeHeap());
 
  i2sRun();
 
+ DEBUG_PRINT("TARS: PREVIEW AFTER I2SRUN error=");
+ DEBUG_PRINT(streamError);
+ DEBUG_PRINT(" done=");
+ DEBUG_PRINT(streamFrameDone);
+ DEBUG_PRINT(" ready=");
+ DEBUG_PRINTLN(streamReady);
+
  if(streamError){
-  i2sStop();
   DEBUG_PRINTLN("TARS: PREVIEW STREAM START ERROR");
+  i2sStop();
   return false;
  }
 
@@ -432,6 +448,15 @@ bool I2SCamera::capturePreview(uint8_t*out){
 
  while((!streamFrameDone||streamReady>0)&&!streamError){
   if(millis()-started>CAMERA_CAPTURE_TIMEOUT){
+   DEBUG_PRINTLN("TARS: PREVIEW TIMEOUT");
+   DEBUG_PRINT("TARS: PREVIEW TIME=");
+   DEBUG_PRINT(millis()-started);
+   DEBUG_PRINT(" ready=");
+   DEBUG_PRINT(streamReady);
+   DEBUG_PRINT(" done=");
+   DEBUG_PRINT(streamFrameDone);
+   DEBUG_PRINT(" error=");
+   DEBUG_PRINTLN(streamError);
    streamError=true;
    break;
   }
@@ -444,7 +469,15 @@ bool I2SCamera::capturePreview(uint8_t*out){
   int b=readyQueue[readyHead];
   readyHead=(readyHead+1)%STREAM_BLOCKS;
 
+  DEBUG_PRINT("TARS: PREVIEW BLOCK QUEUE b=");
+  DEBUG_PRINT(b);
+  DEBUG_PRINT(" state=");
+  DEBUG_PRINT(streamState[b]);
+  DEBUG_PRINT(" y=");
+  DEBUG_PRINTLN(streamBlockY[b]);
+
   if(streamState[b]!=2){
+   DEBUG_PRINTLN("TARS: PREVIEW BAD BLOCK STATE");
    streamError=true;
    break;
   }
@@ -454,69 +487,75 @@ bool I2SCamera::capturePreview(uint8_t*out){
   int y0=streamBlockY[b];
   uint16_t*f=(uint16_t*)streamBlock[b];
 
+  if(!f){
+   DEBUG_PRINTLN("TARS: PREVIEW NULL BLOCK");
+   streamError=true;
+   break;
+  }
+
   if(y0<0||y0>=yres){
+   DEBUG_PRINT("TARS: PREVIEW BAD Y=");
+   DEBUG_PRINTLN(y0);
    streamError=true;
    break;
   }
 
   for(int oy=0;oy<64;oy++){
    int sy=oy*240/64;
-
    if(sy<y0||sy>=y0+STREAM_LINES)continue;
 
    int ly=sy-y0;
 
    for(int ox=0;ox<128;ox++){
     int sx=ox*320/128;
-
     uint16_t p=f[ly*320+sx];
 
     int r=(p>>11)&31;
     int g=(p>>5)&63;
     int bl=p&31;
 
-    int gray=
-      (r*255/31+
-       g*255/63+
-       bl*255/31)/3;
+    int gray=(r*255/31+g*255/63+bl*255/31)/3;
 
-    if(gray>120)
-     out[oy*128+ox]=1;
+    if(gray>120)out[oy*128+ox]=1;
    }
   }
 
   streamState[b]=0;
-
-  if(streamReady>0)
-   streamReady--;
+  if(streamReady>0)streamReady--;
 
   processedBlocks++;
 
-  DEBUG_PRINT("TARS: PREVIEW BLOCK ");
+  DEBUG_PRINT("TARS: PREVIEW BLOCK DONE #");
   DEBUG_PRINT(processedBlocks);
-  DEBUG_PRINT(" Y=");
-  DEBUG_PRINTLN(y0);
+  DEBUG_PRINT(" y=");
+  DEBUG_PRINT(y0);
+  DEBUG_PRINT(" ready=");
+  DEBUG_PRINTLN(streamReady);
  }
 
  i2sStop();
 
- bool ok=
-   streamFrameDone&&
-   !streamError&&
-   processedBlocks==(yres/STREAM_LINES);
+ DEBUG_PRINTLN("TARS: PREVIEW I2S STOP");
+
+ bool ok=streamFrameDone&&!streamError&&processedBlocks==(yres/STREAM_LINES);
+
+ DEBUG_PRINT("TARS: PREVIEW RESULT=");
+ DEBUG_PRINT(ok?"OK":"FAIL");
+ DEBUG_PRINT(" blocks=");
+ DEBUG_PRINT(processedBlocks);
+ DEBUG_PRINT("/");
+ DEBUG_PRINT(yres/STREAM_LINES);
+ DEBUG_PRINT(" ready=");
+ DEBUG_PRINT(streamReady);
+ DEBUG_PRINT(" done=");
+ DEBUG_PRINT(streamFrameDone);
+ DEBUG_PRINT(" error=");
+ DEBUG_PRINTLN(streamError);
 
  if(ok){
-  DEBUG_PRINT("TARS: PREVIEW FRAME OK BLOCKS=");
-  DEBUG_PRINTLN(processedBlocks);
+  DEBUG_PRINTLN("TARS: PREVIEW FRAME COMPLETE");
  }else{
-  DEBUG_PRINT("TARS: PREVIEW FRAME ERROR BLOCKS=");
-  DEBUG_PRINT(processedBlocks);
-  DEBUG_PRINT(" READY=");
-  DEBUG_PRINT(streamReady);
-  DEBUG_PRINT(" DONE=");
-  DEBUG_PRINT(streamFrameDone);
-  DEBUG_PRINT(" ERROR=");
-  DEBUG_PRINTLN(streamError);
+  DEBUG_PRINTLN("TARS: PREVIEW FRAME FAILED");
  }
 
  return ok;
