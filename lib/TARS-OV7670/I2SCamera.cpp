@@ -82,10 +82,75 @@ void IRAM_ATTR I2SCamera::i2sInterrupt(void*arg){
  }
 }
 
-void IRAM_ATTR I2SCamera::vSyncInterrupt(void*arg){
- GPIO.status1_w1tc.val=GPIO.status1.val;
- GPIO.status_w1tc=GPIO.status;
- if(gpio_get_level(vSyncPin)){
+void IRAM_ATTR I2SCamera::i2sInterrupt(void*arg){
+ I2S0.int_clr.val=I2S0.int_raw.val;
+
+ if(streamError||streamFrameDone)return;
+
+ if(!dmaBuffer||dmaBufferCount<=0){
+  streamError=true;
+  return;
+ }
+
+ DMABuffer*d=dmaBuffer[dmaBufferActive];
+
+ if(!d||!d->buffer){
+  streamError=true;
+  return;
+ }
+
+ unsigned char*buf=d->buffer;
+
+ dmaBufferActive=(dmaBufferActive+1)%dmaBufferCount;
+
+ int block=streamFill;
+ uint8_t*dst=streamBlock[block];
+
+ if(!dst){
+  streamError=true;
+  return;
+ }
+
+ int p=streamLine*xres*2;
+
+ for(int i=0;i<xres*4;i+=4){
+  dst[p++]=buf[i+2];
+  dst[p++]=buf[i];
+ }
+
+ streamLine++;
+ blocksReceived++;
+
+ if(streamLine>=STREAM_LINES){
+  streamBlockY[block]=blocksReceived-STREAM_LINES;
+  streamState[block]=2;
+
+  if(streamReady<STREAM_BLOCKS){
+   readyQueue[readyTail]=block;
+   readyTail=(readyTail+1)%STREAM_BLOCKS;
+   streamReady++;
+  }else{
+   streamError=true;
+   return;
+  }
+
+  streamLine=0;
+
+  if(blocksReceived>=yres){
+   framesReceived++;
+   streamFrameDone=true;
+   return;
+  }
+
+  int next=(block+1)%STREAM_BLOCKS;
+
+  if(streamState[next]!=0){
+   streamError=true;
+   return;
+  }
+
+  streamFill=next;
+  streamState[next]=1;
  }
 }
 
