@@ -414,46 +414,110 @@ bool I2SCamera::encodeFrameToJPEG(uint8_t*outBuffer,size_t*outLen,int quality){
 
 bool I2SCamera::capturePreview(uint8_t*out){
  if(!out||xres!=320||yres!=240)return false;
+
  memset(out,0,128*64);
+
+ DEBUG_PRINTLN("TARS: PREVIEW CAPTURE START");
+
  i2sRun();
- if(streamError)return false;
+
+ if(streamError){
+  i2sStop();
+  DEBUG_PRINTLN("TARS: PREVIEW STREAM START ERROR");
+  return false;
+ }
+
  uint32_t started=millis();
- while(!streamFrameDone&&!streamError){
+ int processedBlocks=0;
+
+ while((!streamFrameDone||streamReady>0)&&!streamError){
   if(millis()-started>CAMERA_CAPTURE_TIMEOUT){
    streamError=true;
    break;
   }
+
   if(streamReady<=0){
    delay(1);
    continue;
   }
+
   int b=readyQueue[readyHead];
   readyHead=(readyHead+1)%STREAM_BLOCKS;
+
   if(streamState[b]!=2){
    streamError=true;
    break;
   }
+
   streamState[b]=3;
+
   int y0=streamBlockY[b];
   uint16_t*f=(uint16_t*)streamBlock[b];
+
+  if(y0<0||y0>=yres){
+   streamError=true;
+   break;
+  }
+
   for(int oy=0;oy<64;oy++){
    int sy=oy*240/64;
+
    if(sy<y0||sy>=y0+STREAM_LINES)continue;
+
    int ly=sy-y0;
+
    for(int ox=0;ox<128;ox++){
     int sx=ox*320/128;
+
     uint16_t p=f[ly*320+sx];
+
     int r=(p>>11)&31;
     int g=(p>>5)&63;
     int bl=p&31;
-    if((r*255/31+g*255/63+bl*255/31)/3>120)
+
+    int gray=
+      (r*255/31+
+       g*255/63+
+       bl*255/31)/3;
+
+    if(gray>120)
      out[oy*128+ox]=1;
    }
   }
+
   streamState[b]=0;
-  if(streamReady>0)streamReady--;
+
+  if(streamReady>0)
+   streamReady--;
+
+  processedBlocks++;
+
+  DEBUG_PRINT("TARS: PREVIEW BLOCK ");
+  DEBUG_PRINT(processedBlocks);
+  DEBUG_PRINT(" Y=");
+  DEBUG_PRINTLN(y0);
  }
+
  i2sStop();
- bool ok=streamFrameDone&&!streamError;
+
+ bool ok=
+   streamFrameDone&&
+   !streamError&&
+   processedBlocks==(yres/STREAM_LINES);
+
+ if(ok){
+  DEBUG_PRINT("TARS: PREVIEW FRAME OK BLOCKS=");
+  DEBUG_PRINTLN(processedBlocks);
+ }else{
+  DEBUG_PRINT("TARS: PREVIEW FRAME ERROR BLOCKS=");
+  DEBUG_PRINT(processedBlocks);
+  DEBUG_PRINT(" READY=");
+  DEBUG_PRINT(streamReady);
+  DEBUG_PRINT(" DONE=");
+  DEBUG_PRINT(streamFrameDone);
+  DEBUG_PRINT(" ERROR=");
+  DEBUG_PRINTLN(streamError);
+ }
+
  return ok;
 }
