@@ -23,6 +23,7 @@ public:
     FORMAT_BMP,
     FORMAT_JPEG
   };
+  static bool capturePreview(uint8_t*out);
 
   static ImageFormat imageFormat;
 
