@@ -110,72 +110,100 @@ bool wifiOK();
 String normCmd(String);
 bool playLocalMP3(const uint8_t*,const uint8_t*,const String&,bool=false);
 
-/* CAMERA */
+/* CAMERA DIAGNOSTIC */
+void camDiag(const char*tag){
+ Serial.printf("TARS: CAM[%s] live=%d ok=%d ptr=%p oled=%d play=%d text=%u RAM=%u/%u KB\n",
+ tag,cameraLive,cameraOK,camera,oledOK,playing,(unsigned)oledText.length(),
+ ESP.getFreeHeap()/1024,ESP.getMaxAllocHeap()/1024);
+}
+
 bool initCamera(){
- if(camera)return true;
- Serial.println("TARS: OV7670 INIT...");
+ if(camera){Serial.println("TARS: CAM INIT SKIP ptr already valid");return true;}
+ Serial.println("TARS: CAM INIT START");
+ Serial.printf("TARS: CAM CONFIG QVGA RGB565 D0..D7=%d,%d,%d,%d,%d,%d,%d,%d XCLK=%d PCLK=%d VSYNC=%d HREF=%d SCCB=%d/%d\n",
+ CAM_D0,CAM_D1,CAM_D2,CAM_D3,CAM_D4,CAM_D5,CAM_D6,CAM_D7,CAM_XCLK,CAM_PCLK,CAM_VSYNC,CAM_HREF,CAM_SIOD,CAM_SIOC);
  camera=new OV7670(OV7670::Mode::QVGA_RGB565,CAM_SIOD,CAM_SIOC,CAM_VSYNC,CAM_HREF,CAM_XCLK,CAM_PCLK,CAM_D0,CAM_D1,CAM_D2,CAM_D3,CAM_D4,CAM_D5,CAM_D6,CAM_D7);
- if(!camera){Serial.println("TARS: OV7670 ALLOC ERROR");return false;}
+ if(!camera){Serial.println("TARS: CAM INIT FAIL ALLOC");cameraOK=cameraLive=false;return false;}
+ Serial.printf("TARS: CAM OBJECT ptr=%p res=%dx%d\n",camera,camera->xres,camera->yres);
  cameraOK=camera->xres==320&&camera->yres==240;
  if(!cameraOK){
-  Serial.printf("TARS: OV7670 INVALID %dx%d\n",camera->xres,camera->yres);
+  Serial.println("TARS: CAM INIT FAIL INVALID RES");
   delete camera;camera=nullptr;return false;
  }
  cameraLive=true;
- Serial.printf("TARS: OV7670 READY %dx%d\n",camera->xres,camera->yres);
+ Serial.println("TARS: CAM INIT OK QVGA 320x240");
+ camDiag("LIVE");
  return true;
 }
+
 void stopCamera(){
- if(!camera)return;
+ Serial.println("TARS: CAM STOP START");
+ camDiag("BEFORE-OFF");
+ if(!camera){cameraLive=false;cameraOK=false;Serial.println("TARS: CAM STOP SKIP NULL");return;}
  cameraLive=false;
- if(cameraMux)xSemaphoreTake(cameraMux,portMAX_DELAY);
+ if(cameraMux){
+  Serial.println("TARS: CAM STOP MUTEX WAIT");
+  if(xSemaphoreTake(cameraMux,portMAX_DELAY)!=pdTRUE){Serial.println("TARS: CAM STOP MUTEX FAIL");return;}
+ }
  delete camera;camera=nullptr;cameraOK=false;
  if(cameraMux)xSemaphoreGive(cameraMux);
- delay(40);Serial.println("TARS: OV7670 OFF");
-}
-void startCamera(){
- if(cameraLive)return;
  delay(40);
- Serial.println("TARS: CAMERA START 1");
- if(!initCamera()){Serial.println("TARS: CAMERA START INIT FAIL");return;}
- cameraLive=true;
- Serial.println("TARS: OV7670 LIVE");
+ camDiag("OFF");
+ Serial.println("TARS: CAM STOP DONE");
 }
+
+void startCamera(){
+ Serial.println("TARS: CAM START REQUEST");
+ camDiag("START-BEFORE");
+ if(cameraLive){Serial.println("TARS: CAM START SKIP ALREADY LIVE");return;}
+ delay(40);
+ if(!initCamera()){Serial.println("TARS: CAM START FAIL");return;}
+ cameraLive=true;
+ Serial.println("TARS: CAM LIVE");
+ camDiag("START-DONE");
+}
+
 void drawCameraOLED(){
- Serial.printf("TARS: OLED CAMERA CHECK live=%d ptr=%p ok=%d oled=%d playing=%d text=%d\n",cameraLive,camera,cameraOK,oledOK,playing,oledText.length());
- if(!cameraLive||!camera||!oledOK){
-  Serial.println("TARS: OLED CAMERA SKIP");
+ Serial.printf("TARS: OLED CAM CHECK live=%d ok=%d ptr=%p oled=%d play=%d text=%u\n",
+ cameraLive,cameraOK,camera,oledOK,playing,(unsigned)oledText.length());
+
+ if(!cameraLive||!camera||!cameraOK||!oledOK){
+  Serial.println("TARS: OLED CAM SKIP CONDITION");
   return;
  }
+
  static uint8_t preview[128*64];
- Serial.println("TARS: OLED CAMERA ENTER");
+ Serial.println("TARS: OLED CAM DRAW START");
+
  if(cameraMux){
-  Serial.println("TARS: OLED CAMERA MUTEX WAIT");
+  Serial.println("TARS: OLED CAM MUTEX WAIT");
   if(xSemaphoreTake(cameraMux,pdMS_TO_TICKS(2500))!=pdTRUE){
-   Serial.println("TARS: OLED CAMERA MUTEX TIMEOUT");
+   Serial.println("TARS: OLED CAM MUTEX TIMEOUT");
    return;
   }
-  Serial.println("TARS: OLED CAMERA MUTEX OK");
+  Serial.println("TARS: OLED CAM MUTEX OK");
  }
- Serial.printf("TARS: OLED CAPTURE CALL RAM=%u MAX=%u\n",ESP.getFreeHeap(),ESP.getMaxAllocHeap());
+
+ Serial.printf("TARS: OLED CAM CAPTURE CALL RAM=%u/%u KB\n",
+ ESP.getFreeHeap()/1024,ESP.getMaxAllocHeap()/1024);
+
+ uint32_t t=millis();
  bool ok=I2SCamera::capturePreview(preview);
- Serial.printf("TARS: OLED CAPTURE RETURN=%s RAM=%u MAX=%u\n",ok?"OK":"FAIL",ESP.getFreeHeap(),ESP.getMaxAllocHeap());
+ uint32_t dt=millis()-t;
+
+ Serial.printf("TARS: OLED CAM CAPTURE %s time=%lu ms RAM=%u/%u KB\n",
+ ok?"OK":"FAIL",(unsigned long)dt,ESP.getFreeHeap()/1024,ESP.getMaxAllocHeap()/1024);
+
  if(ok){
   int pixels=0;
   oled.clearDisplay();
-  for(int y=0;y<64;y++){
-   for(int x=0;x<128;x++){
-    if(preview[y*128+x]){
-     oled.drawPixel(x,y,SSD1306_WHITE);
-     pixels++;
-    }
-   }
+  for(int y=0;y<64;y++)for(int x=0;x<128;x++)if(preview[y*128+x]){
+   oled.drawPixel(x,y,SSD1306_WHITE);pixels++;
   }
   oled.display();
-  Serial.printf("TARS: OLED DISPLAY OK pixels=%d\n",pixels);
- }else{
-  Serial.println("TARS: OLED DISPLAY SKIP CAPTURE FAILED");
- }
+  Serial.printf("TARS: OLED CAM DISPLAY OK pixels=%d\n",pixels);
+ }else Serial.println("TARS: OLED CAM DISPLAY SKIP CAPTURE FAIL");
+
  if(cameraMux)xSemaphoreGive(cameraMux);
 }
 
@@ -187,23 +215,48 @@ bool needsVision(String q){
  return false;
 }
 String visionAsk(const String&q){
+ Serial.printf("TARS: VISION START q=%u mode=%d\n",(unsigned)q.length(),tarsMode);
+ camDiag("VISION");
  if(tarsMode!=MODE_ONLINE){Serial.println("TARS: VISION BLOCKED OFFLINE");return "";}
- if(!wifiOK()||!cameraLive||!camera)return "";
- if(cameraMux&&xSemaphoreTake(cameraMux,pdMS_TO_TICKS(1500))!=pdTRUE)return "";
+ if(!wifiOK()){Serial.println("TARS: VISION FAIL WIFI");return "";}
+ if(!cameraLive||!camera||!cameraOK){Serial.println("TARS: VISION FAIL CAMERA NOT LIVE");return "";}
+ if(cameraMux){
+  Serial.println("TARS: VISION MUTEX WAIT");
+  if(xSemaphoreTake(cameraMux,pdMS_TO_TICKS(1500))!=pdTRUE){
+   Serial.println("TARS: VISION MUTEX TIMEOUT");return "";
+  }
+  Serial.println("TARS: VISION MUTEX OK");
+ }
+
  size_t jl=0;
- bool ok=I2SCamera::encodeFrameToJPEG(visionJpeg,&jl,45)&&jl>0&&jl<=VISION_JPEG_MAX;
+ uint32_t st=millis();
+ Serial.printf("TARS: VISION JPEG START RAM=%u/%u KB\n",ESP.getFreeHeap()/1024,ESP.getMaxAllocHeap()/1024);
+ bool ok=I2SCamera::encodeFrameToJPEG(visionJpeg,&jl,45);
+ Serial.printf("TARS: VISION JPEG RETURN=%s size=%u time=%lu ms RAM=%u/%u KB\n",
+ ok?"OK":"FAIL",(unsigned)jl,(unsigned long)(millis()-st),ESP.getFreeHeap()/1024,ESP.getMaxAllocHeap()/1024);
+
  if(cameraMux)xSemaphoreGive(cameraMux);
+
  if(!ok){Serial.println("TARS: VISION JPEG ERROR");return "";}
+ if(!jl){Serial.println("TARS: VISION JPEG ERROR SIZE=0");return "";}
+ if(jl>VISION_JPEG_MAX){Serial.printf("TARS: VISION JPEG ERROR TOO LARGE=%u\n",(unsigned)jl);return "";}
+
  static const char B64[]="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
  WiFiClientSecure c;c.setInsecure();HTTPClient h;
- if(!h.begin(c,String(TARS_CLOUD_URL)+"/vision"))return "";
+ String url=String(TARS_CLOUD_URL)+"/vision";
+ Serial.println("TARS: VISION HTTP START");
+
+ if(!h.begin(c,url)){Serial.println("TARS: VISION HTTP BEGIN FAIL");return "";}
  h.setTimeout(30000);h.addHeader("Content-Type","application/json");
+
  String body;body.reserve(16+q.length()+24+((jl+2)/3)*4);
  body="{\"question\":";
  {
-  String qs;qs.reserve(q.length()+4);JsonDocument jq;jq.set(q);serializeJson(jq,qs);body+=qs;
+  String qs;qs.reserve(q.length()+4);JsonDocument jq;jq.set(q);
+  serializeJson(jq,qs);body+=qs;
  }
  body+=",\"image\":\"data:image/jpeg;base64,";
+
  for(size_t i=0;i<jl;i+=3){
   uint32_t v=(uint32_t)visionJpeg[i]<<16;
   if(i+1<jl)v|=(uint32_t)visionJpeg[i+1]<<8;
@@ -213,21 +266,29 @@ String visionAsk(const String&q){
   body+=i+2<jl?B64[v&63]:'=';
  }
  body+="\"}";
- Serial.printf("TARS: VISION JPEG=%u JSON=%u\n",(unsigned)jl,(unsigned)body.length());
+
+ Serial.printf("TARS: VISION POST JPEG=%u JSON=%u RAM=%u/%u KB\n",
+ (unsigned)jl,(unsigned)body.length(),ESP.getFreeHeap()/1024,ESP.getMaxAllocHeap()/1024);
+
  int code=h.POST(body);body="";
+ Serial.printf("TARS: VISION HTTP CODE=%d\n",code);
+
  String response=code>=200&&code<300?h.getString():"";
  h.end();
+
  if(!response.length()){
-  Serial.printf("TARS: VISION HTTP=%d EMPTY\n",code);
+  Serial.printf("TARS: VISION HTTP EMPTY code=%d\n",code);
   return "";
  }
+
  JsonDocument r;
  if(deserializeJson(r,response)){
-  Serial.println("TARS: VISION JSON ERROR");
+  Serial.printf("TARS: VISION JSON ERROR len=%u\n",(unsigned)response.length());
   return "";
  }
+
  String ans=r["response"].as<String>();ans.trim();
- Serial.printf("TARS: VISION HTTP=%d RESPONSE=%u\n",code,(unsigned)ans.length());
+ Serial.printf("TARS: VISION DONE answer=%u chars\n",(unsigned)ans.length());
  return ans;
 }
 
