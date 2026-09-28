@@ -126,3 +126,14 @@ void OV7670::QQQVGARGB565()
   i2c.writeRegister(ADDR, 0x13, 0xe7);
   i2c.writeRegister(ADDR, 0x6f, 0x9f);
 }
+
+void OV7670::QVGA()
+{
+  i2c.writeRegister(ADDR, REG_COM3, 0x04);
+  i2c.writeRegister(ADDR, REG_COM14, 0x19);
+  i2c.writeRegister(ADDR, REG_SCALING_XSC, 0x3a);
+  i2c.writeRegister(ADDR, REG_SCALING_YSC, 0x35);
+  i2c.writeRegister(ADDR, REG_SCALING_DCWCTR, 0x11);
+  i2c.writeRegister(ADDR, REG_SCALING_PCLK_DIV, 0xf1);
+  i2c.writeRegister(ADDR, REG_SCALING_PCLK_DELAY, 0x02);
+}
