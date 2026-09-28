@@ -142,18 +142,39 @@ void startCamera(){
  Serial.println("TARS: OV7670 LIVE");
 }
 void drawCameraOLED(){
- if(!cameraLive||!camera||!oledOK)return;
+ Serial.printf("TARS: OLED CAMERA CHECK live=%d ptr=%p ok=%d oled=%d playing=%d text=%d\n",cameraLive,camera,cameraOK,oledOK,playing,oledText.length());
+ if(!cameraLive||!camera||!oledOK){
+  Serial.println("TARS: OLED CAMERA SKIP");
+  return;
+ }
  static uint8_t preview[128*64];
- if(cameraMux&&xSemaphoreTake(cameraMux,pdMS_TO_TICKS(2500))!=pdTRUE)return;
+ Serial.println("TARS: OLED CAMERA ENTER");
+ if(cameraMux){
+  Serial.println("TARS: OLED CAMERA MUTEX WAIT");
+  if(xSemaphoreTake(cameraMux,pdMS_TO_TICKS(2500))!=pdTRUE){
+   Serial.println("TARS: OLED CAMERA MUTEX TIMEOUT");
+   return;
+  }
+  Serial.println("TARS: OLED CAMERA MUTEX OK");
+ }
+ Serial.printf("TARS: OLED CAPTURE CALL RAM=%u MAX=%u\n",ESP.getFreeHeap(),ESP.getMaxAllocHeap());
  bool ok=I2SCamera::capturePreview(preview);
+ Serial.printf("TARS: OLED CAPTURE RETURN=%s RAM=%u MAX=%u\n",ok?"OK":"FAIL",ESP.getFreeHeap(),ESP.getMaxAllocHeap());
  if(ok){
+  int pixels=0;
   oled.clearDisplay();
   for(int y=0;y<64;y++){
    for(int x=0;x<128;x++){
-    if(preview[y*128+x])oled.drawPixel(x,y,SSD1306_WHITE);
+    if(preview[y*128+x]){
+     oled.drawPixel(x,y,SSD1306_WHITE);
+     pixels++;
+    }
    }
   }
   oled.display();
+  Serial.printf("TARS: OLED DISPLAY OK pixels=%d\n",pixels);
+ }else{
+  Serial.println("TARS: OLED DISPLAY SKIP CAPTURE FAILED");
  }
  if(cameraMux)xSemaphoreGive(cameraMux);
 }
