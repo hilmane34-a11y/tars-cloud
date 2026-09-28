@@ -8,14 +8,6 @@
 #include "soc/gpio_struct.h"
 #include "soc/gpio_reg.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-void gpio_matrix_in(int gpio, int signal_index, bool inverted);
-#ifdef __cplusplus
-}
-#endif
-
 #include "driver/gpio.h"
 #include "driver/periph_ctrl.h"
 #include "rom/lldesc.h"
@@ -40,7 +32,6 @@ public:
     int quality = 80
   );
 
-public:
   static gpio_num_t vSyncPin;
   static int blocksReceived;
   static int framesReceived;
@@ -56,50 +47,15 @@ public:
   static int frameBytes;
   static volatile bool stopSignal;
 
-  typedef enum {
-    SM_0A0B_0B0C = 0,
-    SM_0A0B_0C0D = 1,
-    SM_0A00_0B00 = 3,
-  } i2s_sampling_mode_t;
-
-  static inline void i2sConfReset()
-  {
-    const uint32_t lc_conf_reset_flags =
-      I2S_IN_RST_M |
-      I2S_AHBM_RST_M |
-      I2S_AHBM_FIFO_RST_M;
-
-    I2S0.lc_conf.val |= lc_conf_reset_flags;
-    I2S0.lc_conf.val &= ~lc_conf_reset_flags;
-
-    const uint32_t conf_reset_flags =
-      I2S_RX_RESET_M |
-      I2S_RX_FIFO_RESET_M |
-      I2S_TX_RESET_M |
-      I2S_TX_FIFO_RESET_M;
-
-    I2S0.conf.val |= conf_reset_flags;
-    I2S0.conf.val &= ~conf_reset_flags;
-
-    while (I2S0.state.rx_fifo_reset_back);
-  }
-
-  void start()
-  {
-    i2sRun();
-  }
-
-  void stop()
+  static void start(){ i2sRun(); }
+  static void stop()
   {
     stopSignal = true;
-    while(stopSignal);
+    while(stopSignal) delay(1);
   }
 
-  void oneFrame()
-  {
-    start();
-    stop();
-  }
+  // Mulai capture, encodeFrameToJPEG() yang akan mengonsumsi hasilnya.
+  static void oneFrame(){ i2sRun(); }
 
   static void i2sStop();
   static void i2sRun();
@@ -115,33 +71,33 @@ public:
   static void IRAM_ATTR vSyncInterrupt(void* arg);
 
   static bool i2sInit(
-    const int VSYNC,
-    const int HREF,
-    const int PCLK,
-    const int D0,
-    const int D1,
-    const int D2,
-    const int D3,
-    const int D4,
-    const int D5,
-    const int D6,
-    const int D7
+    const int VSYNC,const int HREF,const int PCLK,
+    const int D0,const int D1,const int D2,const int D3,
+    const int D4,const int D5,const int D6,const int D7
   );
 
   static bool init(
-    const int XRES,
-    const int YRES,
-    const int VSYNC,
-    const int HREF,
-    const int XCLK,
-    const int PCLK,
-    const int D0,
-    const int D1,
-    const int D2,
-    const int D3,
-    const int D4,
-    const int D5,
-    const int D6,
-    const int D7
+    const int XRES,const int YRES,
+    const int VSYNC,const int HREF,const int XCLK,const int PCLK,
+    const int D0,const int D1,const int D2,const int D3,
+    const int D4,const int D5,const int D6,const int D7
   );
+
+  static inline void i2sConfReset()
+  {
+    const uint32_t lc_conf_reset_flags =
+      I2S_IN_RST_M|I2S_AHBM_RST_M|I2S_AHBM_FIFO_RST_M;
+
+    I2S0.lc_conf.val |= lc_conf_reset_flags;
+    I2S0.lc_conf.val &= ~lc_conf_reset_flags;
+
+    const uint32_t conf_reset_flags =
+      I2S_RX_RESET_M|I2S_RX_FIFO_RESET_M|
+      I2S_TX_RESET_M|I2S_TX_FIFO_RESET_M;
+
+    I2S0.conf.val |= conf_reset_flags;
+    I2S0.conf.val &= ~conf_reset_flags;
+
+    while(I2S0.state.rx_fifo_reset_back);
+  }
 };
