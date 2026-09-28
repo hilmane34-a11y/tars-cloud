@@ -49,7 +49,7 @@ const uint32_t MIC_RATE=16000,RECORD_MIN_MS=500,SILENCE_MS=1000,PREROLL_MS=250,O
 const int32_t MIC_THRESHOLD=12000,MIC_SILENCE=8000;
 const size_t BUF=256,PREROLL_SAMPLES=MIC_RATE*PREROLL_MS/1000;
 const int MP3_COPY_BUFFER=512;
-const size_t AUDIO_RING_SIZE=8192,AUDIO_PREBUFFER=2048,VISION_JPEG_MAX=45000;
+const size_t AUDIO_RING_SIZE=8192,AUDIO_PREBUFFER=2048,VISION_JPEG_MAX=24000;
 const char*STT_HOST="tars-cloud-v1.hilmane34.workers.dev";
 
 enum TarsMode:uint8_t{MODE_OFFLINE,MODE_ONLINE};
@@ -172,32 +172,53 @@ String visionAsk(const String&q){
  if(tarsMode!=MODE_ONLINE){Serial.println("TARS: VISION BLOCKED OFFLINE");return "";}
  if(!wifiOK()||!cameraLive||!camera)return "";
  if(cameraMux&&xSemaphoreTake(cameraMux,pdMS_TO_TICKS(1500))!=pdTRUE)return "";
- camera->oneFrame();size_t jl=0;
- bool ok=camera->frame&&I2SCamera::encodeFrameToJPEG(visionJpeg,&jl,55)&&jl>0&&jl<=VISION_JPEG_MAX;
+ camera->oneFrame();
+ size_t jl=0;
+ bool ok=camera->frame&&I2SCamera::encodeFrameToJPEG(visionJpeg,&jl,45)&&jl>0&&jl<=VISION_JPEG_MAX;
  if(cameraMux)xSemaphoreGive(cameraMux);
  if(!ok){Serial.println("TARS: VISION JPEG ERROR");return "";}
  static const char B64[]="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
- String b64;b64.reserve(4*((jl+2)/3)+1);
- for(size_t i=0;i<jl;i+=3){
-  uint32_t v=(uint32_t)visionJpeg[i]<<16;
-  if(i+1<jl)v|=(uint32_t)visionJpeg[i+1]<<8;
-  if(i+2<jl)v|=visionJpeg[i+2];
-  b64+=B64[(v>>18)&63];b64+=B64[(v>>12)&63];
-  b64+=i+1<jl?B64[(v>>6)&63]:'=';
-  b64+=i+2<jl?B64[v&63]:'=';
- }
  WiFiClientSecure c;c.setInsecure();HTTPClient h;
  if(!h.begin(c,String(TARS_CLOUD_URL)+"/vision"))return "";
  h.setTimeout(30000);h.addHeader("Content-Type","application/json");
  String body;
- {JsonDocument j;j["question"]=q;j["image"]="data:image/jpeg;base64,"+b64;serializeJson(j,body);}
+ body.reserve(16+q.length()+24+((jl+2)/3)*4);
+ body="{\"question\":";
+ {
+  String qs;
+  qs.reserve(q.length()+4);
+  JsonDocument jq;
+  jq.set(q);
+  serializeJson(jq,qs);
+  body+=qs;
+ }
+ body+=",\"image\":\"data:image/jpeg;base64,";
+ for(size_t i=0;i<jl;i+=3){
+  uint32_t v=(uint32_t)visionJpeg[i]<<16;
+  if(i+1<jl)v|=(uint32_t)visionJpeg[i+1]<<8;
+  if(i+2<jl)v|=(uint32_t)visionJpeg[i+2];
+  body+=B64[(v>>18)&63];
+  body+=B64[(v>>12)&63];
+  body+=i+1<jl?B64[(v>>6)&63]:'=';
+  body+=i+2<jl?B64[v&63]:'=';
+ }
+ body+="\"}";
  Serial.printf("TARS: VISION JPEG=%u JSON=%u\n",(unsigned)jl,(unsigned)body.length());
- int code=h.POST(body);body="";
- String response=code>=200&&code<300?h.getString():"";h.end();
- if(!response.length()){Serial.printf("TARS: VISION HTTP=%d EMPTY\n",code);return "";}
+ int code=h.POST(body);
+ body="";
+ String response=code>=200&&code<300?h.getString():"";
+ h.end();
+ if(!response.length()){
+  Serial.printf("TARS: VISION HTTP=%d EMPTY\n",code);
+  return "";
+ }
  JsonDocument r;
- if(deserializeJson(r,response)){Serial.println("TARS: VISION JSON ERROR");return "";}
- String ans=r["response"].as<String>();ans.trim();
+ if(deserializeJson(r,response)){
+  Serial.println("TARS: VISION JSON ERROR");
+  return "";
+ }
+ String ans=r["response"].as<String>();
+ ans.trim();
  Serial.printf("TARS: VISION HTTP=%d RESPONSE=%u\n",code,(unsigned)ans.length());
  return ans;
 }
