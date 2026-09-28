@@ -71,7 +71,6 @@ uint32_t oledTypePos=0,oledLastType=0,oledLastWave=0;
 uint32_t oledPage=0,oledLastPage=0,behaviorAt=0,behaviorNext=0,ramDiagAt=0;
 
 /* STT LIFECYCLE */
-uint32_t sttRetryAt=0;
 const uint32_t STT_NORMAL_COOLDOWN=1000;
 const uint32_t STT_ERROR_COOLDOWN=6000;
 const uint32_t STT_QUOTA_COOLDOWN=15000;
