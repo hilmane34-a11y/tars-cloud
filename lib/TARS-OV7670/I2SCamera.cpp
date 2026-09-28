@@ -37,30 +37,43 @@ void IRAM_ATTR I2SCamera::i2sInterrupt(void* arg)
 
   if(streamError||streamFrameDone)return;
 
+  if(!dmaBuffer||dmaBufferCount<=0)return;
+
   unsigned char* buf=dmaBuffer[dmaBufferActive]->buffer;
   dmaBufferActive=(dmaBufferActive+1)%dmaBufferCount;
 
-  uint8_t* dst=streamBlock[streamFill];
+  int block=streamFill;
+  uint8_t* dst=streamBlock[block];
+
   if(!dst){
     streamError=true;
     return;
   }
 
+  int p=streamLine*xres*2;
+
   for(int i=0;i<xres*4;i+=4){
-    int p=streamLine*xres*2+(i>>1);
-    dst[p]=buf[i+2];
-    dst[p+1]=buf[i];
+    dst[p++]=buf[i+2];
+    dst[p++]=buf[i];
   }
 
   streamLine++;
   blocksReceived++;
 
   if(streamLine>=STREAM_LINES){
-    streamState[streamFill]=2;
+    streamState[block]=2;
     streamReady++;
+
     streamLine=0;
 
-    int next=(streamFill+1)%STREAM_BLOCKS;
+    if(blocksReceived>=yres){
+      framesReceived++;
+      streamFrameDone=true;
+      streamFill=block;
+      return;
+    }
+
+    int next=(block+1)%STREAM_BLOCKS;
 
     if(streamState[next]!=0){
       streamError=true;
@@ -68,13 +81,12 @@ void IRAM_ATTR I2SCamera::i2sInterrupt(void* arg)
     }
 
     streamFill=next;
-    streamState[streamFill]=1;
+    streamState[next]=1;
   }
 
   if(blocksReceived>=yres){
     framesReceived++;
     streamFrameDone=true;
-    stopSignal=false;
   }
 }
 
@@ -86,8 +98,12 @@ void IRAM_ATTR I2SCamera::vSyncInterrupt(void* arg)
 
 void I2SCamera::i2sStop()
 {
-  if(i2sInterruptHandle)esp_intr_disable(i2sInterruptHandle);
-  if(vSyncInterruptHandle)esp_intr_disable(vSyncInterruptHandle);
+  if(i2sInterruptHandle)
+    esp_intr_disable(i2sInterruptHandle);
+
+  if(vSyncInterruptHandle)
+    esp_intr_disable(vSyncInterruptHandle);
+
   i2sConfReset();
   I2S0.conf.rx_start=0;
 }
@@ -121,8 +137,11 @@ void I2SCamera::i2sRun()
   I2S0.int_ena.val=0;
   I2S0.int_ena.in_done=1;
 
-  if(i2sInterruptHandle)esp_intr_enable(i2sInterruptHandle);
-  if(vSyncInterruptHandle)esp_intr_enable(vSyncInterruptHandle);
+  if(i2sInterruptHandle)
+    esp_intr_enable(i2sInterruptHandle);
+
+  if(vSyncInterruptHandle)
+    esp_intr_enable(vSyncInterruptHandle);
 
   I2S0.conf.rx_start=1;
 }
@@ -130,13 +149,18 @@ void I2SCamera::i2sRun()
 bool I2SCamera::initVSync(int pin)
 {
   vSyncPin=(gpio_num_t)pin;
-  gpio_set_intr_type(vSyncPin,GPIO_INTR_POSEDGE);
+
+  gpio_set_intr_type(
+    vSyncPin,
+    GPIO_INTR_POSEDGE
+  );
 
   if(gpio_isr_register(
     &I2SCamera::vSyncInterrupt,
     (void*)"vSyncInterrupt",
     ESP_INTR_FLAG_INTRDISABLED|ESP_INTR_FLAG_IRAM,
-    &vSyncInterruptHandle)!=ESP_OK)
+    &vSyncInterruptHandle
+  )!=ESP_OK)
     return false;
 
   gpio_intr_enable(vSyncPin);
@@ -155,6 +179,7 @@ void I2SCamera::deinitVSync()
 void I2SCamera::deinit()
 {
   i2sStop();
+
   dmaBufferDeinit();
 
   for(int i=0;i<STREAM_BLOCKS;i++){
@@ -162,6 +187,7 @@ void I2SCamera::deinit()
       free(streamBlock[i]);
       streamBlock[i]=0;
     }
+
     streamState[i]=0;
   }
 
@@ -182,6 +208,12 @@ void I2SCamera::deinit()
 
   framePointer=0;
   frameBytes=0;
+
+  streamFill=0;
+  streamLine=0;
+  streamReady=0;
+  streamFrameDone=false;
+  streamError=false;
 }
 
 bool I2SCamera::init(
@@ -194,24 +226,36 @@ bool I2SCamera::init(
 
   xres=XRES;
   yres=YRES;
+
   frameBytes=0;
   frame=0;
 
   if(xres!=320||yres!=240){
-    DEBUG_PRINTLN("TARS: streaming camera requires 320x240");
+    DEBUG_PRINTLN(
+      "TARS: streaming camera requires 320x240"
+    );
     return false;
   }
 
+  const size_t blockBytes=
+    (size_t)xres*STREAM_LINES*2;
+
   for(int i=0;i<STREAM_BLOCKS;i++){
-    streamBlock[i]=(uint8_t*)malloc(xres*STREAM_LINES*2);
+    streamBlock[i]=(uint8_t*)malloc(blockBytes);
+
     if(!streamBlock[i]){
-      DEBUG_PRINTLN("TARS: stream buffer allocation failed");
+      DEBUG_PRINTLN(
+        "TARS: stream buffer allocation failed"
+      );
       deinit();
       return false;
     }
   }
 
-  if(!i2sInit(VSYNC,HREF,PCLK,D0,D1,D2,D3,D4,D5,D6,D7)){
+  if(!i2sInit(
+    VSYNC,HREF,PCLK,
+    D0,D1,D2,D3,D4,D5,D6,D7
+  )){
     deinit();
     return false;
   }
@@ -228,6 +272,15 @@ bool I2SCamera::init(
     return false;
   }
 
+  DEBUG_PRINT("TARS: STREAM CAMERA ");
+  DEBUG_PRINT(xres);
+  DEBUG_PRINT("x");
+  DEBUG_PRINT(yres);
+  DEBUG_PRINT(" BLOCK=");
+  DEBUG_PRINT(STREAM_LINES);
+  DEBUG_PRINT("x");
+  DEBUG_PRINTLN(STREAM_BLOCKS);
+
   return true;
 }
 
@@ -236,7 +289,10 @@ bool I2SCamera::i2sInit(
   const int D0,const int D1,const int D2,const int D3,
   const int D4,const int D5,const int D6,const int D7)
 {
-  int pins[]={VSYNC,HREF,PCLK,D0,D1,D2,D3,D4,D5,D6,D7};
+  int pins[]={
+    VSYNC,HREF,PCLK,
+    D0,D1,D2,D3,D4,D5,D6,D7
+  };
 
   gpio_config_t conf={
     .pin_bit_mask=0,
@@ -246,7 +302,9 @@ bool I2SCamera::i2sInit(
     .intr_type=GPIO_INTR_DISABLE
   };
 
-  for(int i=0;i<(int)(sizeof(pins)/sizeof(pins[0]));i++){
+  for(int i=0;
+      i<(int)(sizeof(pins)/sizeof(pins[0]));
+      i++){
     conf.pin_bit_mask=1ULL<<pins[i];
     gpio_config(&conf);
   }
@@ -275,6 +333,7 @@ bool I2SCamera::i2sInit(
   gpio_matrix_in(PCLK,I2S0I_WS_IN_IDX,false);
 
   periph_module_enable(PERIPH_I2S0_MODULE);
+
   i2sConfReset();
 
   I2S0.conf.rx_slave_mod=1;
@@ -300,14 +359,18 @@ bool I2SCamera::i2sInit(
 
   esp_err_t r=esp_intr_alloc(
     ETS_I2S0_INTR_SOURCE,
-    ESP_INTR_FLAG_INTRDISABLED|ESP_INTR_FLAG_LEVEL1|ESP_INTR_FLAG_IRAM,
+    ESP_INTR_FLAG_INTRDISABLED|
+    ESP_INTR_FLAG_LEVEL1|
+    ESP_INTR_FLAG_IRAM,
     &I2SCamera::i2sInterrupt,
     NULL,
     &i2sInterruptHandle
   );
 
   if(r!=ESP_OK){
-    DEBUG_PRINTLN("TARS: I2S interrupt allocation failed");
+    DEBUG_PRINTLN(
+      "TARS: I2S interrupt allocation failed"
+    );
     return false;
   }
 
@@ -319,7 +382,10 @@ void I2SCamera::dmaBufferInit(int bytes)
   dmaBufferDeinit();
 
   dmaBufferCount=2;
-  dmaBuffer=(DMABuffer**)malloc(sizeof(DMABuffer*)*dmaBufferCount);
+
+  dmaBuffer=(DMABuffer**)malloc(
+    sizeof(DMABuffer*)*dmaBufferCount
+  );
 
   if(!dmaBuffer){
     dmaBufferCount=0;
@@ -328,39 +394,66 @@ void I2SCamera::dmaBufferInit(int bytes)
 
   for(int i=0;i<dmaBufferCount;i++){
     dmaBuffer[i]=new DMABuffer(bytes);
+
     if(!dmaBuffer[i]){
       dmaBufferDeinit();
       return;
     }
-    if(i)dmaBuffer[i-1]->next(dmaBuffer[i]);
+
+    if(i)
+      dmaBuffer[i-1]->next(dmaBuffer[i]);
   }
 
-  dmaBuffer[dmaBufferCount-1]->next(dmaBuffer[0]);
+  dmaBuffer[dmaBufferCount-1]->next(
+    dmaBuffer[0]
+  );
 }
 
 void I2SCamera::dmaBufferDeinit()
 {
-  if(!dmaBuffer)return;
+  if(!dmaBuffer)
+    return;
 
-  for(int i=0;i<dmaBufferCount;i++)
-    delete dmaBuffer[i];
+  for(int i=0;i<dmaBufferCount;i++){
+    if(dmaBuffer[i])
+      delete dmaBuffer[i];
+  }
 
   free(dmaBuffer);
+
   dmaBuffer=0;
   dmaBufferCount=0;
 }
 
 bool I2SCamera::encodeFrameToJPEG(
-  uint8_t* outBuffer,size_t* outLen,int quality)
+  uint8_t* outBuffer,
+  size_t* outLen,
+  int quality)
 {
-  if(!OV7670_ENABLE_JPEG||!outBuffer||!outLen)
+  if(!OV7670_ENABLE_JPEG||
+     !outBuffer||
+     !outLen)
     return false;
 
   if(!JPEGEncoderWrapper::available())
     return false;
 
-  if(!streamBlock[0])
+  /*
+   * Capture harus sudah dimulai oleh oneFrame().
+   * Kamera tetap berjalan sementara block diproses.
+   */
+  if(!JPEGEncoderWrapper::begin(
+    outBuffer,
+    OV7670_MAX_JPEG_SIZE,
+    xres,
+    yres,
+    quality
+  )){
+    i2sStop();
     return false;
+  }
+
+  int encodedBlocks=0;
 
   while(!streamFrameDone&&!streamError){
     int b=-1;
@@ -377,17 +470,98 @@ bool I2SCamera::encodeFrameToJPEG(
       continue;
     }
 
-    // Wrapper sekarang masih frame-based, jadi blok dikompres
-    // langsung di sini menggunakan encoder streaming versi baru.
-    break;
+    /*
+     * Tandai sedang dikonsumsi.
+     * ISR tidak akan memakai block ini lagi sampai
+     * encoder selesai memprosesnya.
+     */
+    streamState[b]=3;
+
+    if(!JPEGEncoderWrapper::addBlock(
+      streamBlock[b],
+      xres,
+      STREAM_LINES
+    )){
+      streamError=true;
+      break;
+    }
+
+    streamState[b]=0;
+
+    if(streamReady>0)
+      streamReady--;
+
+    encodedBlocks++;
   }
 
+  /*
+   * Frame terakhir bisa selesai di ISR dengan block
+   * yang belum sempat masuk state=2 apabila jumlah
+   * baris tepat habis pada block tersebut.
+   *
+   * Pastikan semua block yang sudah READY diproses.
+   */
+  if(!streamError){
+    for(int pass=0;pass<STREAM_BLOCKS;pass++){
+      int b=-1;
+
+      for(int i=0;i<STREAM_BLOCKS;i++){
+        if(streamState[i]==2){
+          b=i;
+          break;
+        }
+      }
+
+      if(b<0)
+        break;
+
+      streamState[b]=3;
+
+      if(!JPEGEncoderWrapper::addBlock(
+        streamBlock[b],
+        xres,
+        STREAM_LINES
+      )){
+        streamError=true;
+        break;
+      }
+
+      streamState[b]=0;
+
+      if(streamReady>0)
+        streamReady--;
+
+      encodedBlocks++;
+    }
+  }
+
+  i2sStop();
+
   if(streamError){
-    i2sStop();
+    DEBUG_PRINTLN(
+      "TARS: STREAM JPEG ERROR"
+    );
     return false;
   }
 
-  return JPEGEncoderWrapper::encode(
-    nullptr,xres,yres,quality,outBuffer,outLen
-  );
+  if(!streamFrameDone){
+    DEBUG_PRINTLN(
+      "TARS: STREAM FRAME TIMEOUT"
+    );
+    return false;
+  }
+
+  if(!JPEGEncoderWrapper::finish(outLen)){
+    DEBUG_PRINTLN(
+      "TARS: JPEG FINISH ERROR"
+    );
+    return false;
+  }
+
+  DEBUG_PRINT("TARS: STREAM JPEG BLOCKS=");
+  DEBUG_PRINT(encodedBlocks);
+  DEBUG_PRINT(" SIZE=");
+  DEBUG_PRINTLN((unsigned)*outLen);
+
+  return true;
 }
