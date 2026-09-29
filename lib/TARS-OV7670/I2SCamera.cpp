@@ -437,7 +437,18 @@ void I2SCamera::dmaBufferDeinit(){
     dmaBuffer=0;
     dmaBufferCount=0;
 }
+void I2SCamera::dmaDiagnostic(){
+    if(!dmaBuffer||dmaBufferCount<=0||!dmaBuffer[0]||!dmaBuffer[0]->buffer){
+        return;
+    }
 
+    Serial.print("TARS: DMA RAW=");
+    for(int i=0;i<32;i++){
+        Serial.printf("%02X",dmaBuffer[0]->buffer[i]);
+        if(i<31)Serial.print(" ");
+    }
+    Serial.println();
+}
 bool I2SCamera::encodeFrameToJPEG(uint8_t*outBuffer,size_t*outLen,int quality){
     if(!OV7670_ENABLE_JPEG||!outBuffer||!outLen)return false;
     *outLen=0;
