@@ -176,28 +176,31 @@ void I2SCamera::deinit()
 }
 
 bool I2SCamera::init(
-  const int XRES, const int YRES,
-  const int VSYNC, const int HREF,
-  const int XCLK, const int PCLK,
-  const int D0, const int D1, const int D2, const int D3,
-  const int D4, const int D5, const int D6, const int D7)
+  const int XRES,const int YRES,
+  const int VSYNC,const int HREF,
+  const int XCLK,const int PCLK,
+  const int D0,const int D1,const int D2,const int D3,
+  const int D4,const int D5,const int D6,const int D7)
 {
+  xres=XRES;
+  yres=YRES;
   frame=nullptr;
   frameBytes=0;
 
-i2sInit(VSYNC,HREF,PCLK,D0,D1,D2,D3,D4,D5,D6,D7);
-dmaBufferInit(xres*2*2);
-initVSync(VSYNC);
+  i2sInit(VSYNC,HREF,PCLK,D0,D1,D2,D3,D4,D5,D6,D7);
+  dmaBufferInit(xres*2*2);
+  initVSync(VSYNC);
 
-for(int i=0;i<STREAM_BLOCKS;i++){
-  streamBlock[i]=(uint8_t*)malloc(XRES*STREAM_LINES*2);
-  if(!streamBlock[i]){
-    DEBUG_PRINTLN("STREAM BLOCK ALLOC FAIL");
-    return false;
+  for(int i=0;i<STREAM_BLOCKS;i++){
+    streamBlock[i]=(uint8_t*)malloc(XRES*STREAM_LINES*2);
+    if(!streamBlock[i]){
+      DEBUG_PRINTLN("STREAM BLOCK ALLOC FAIL");
+      return false;
+    }
   }
-}
 
-return true;
+  return true;
+}
 
 bool I2SCamera::i2sInit(
   const int VSYNC, const int HREF, const int PCLK,
