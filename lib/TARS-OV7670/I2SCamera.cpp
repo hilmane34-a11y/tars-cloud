@@ -356,6 +356,10 @@ bool I2SCamera::encodeFrameToJPEG(uint8_t* outBuffer,size_t* outLen,int quality)
   uint32_t start=millis();
 
   while(blocksDone<blocksNeeded){
+    if(streamError){
+  i2sStop();
+  return false;
+    }
     if(millis()-start>CAMERA_CAPTURE_TIMEOUT){
       i2sStop();
       JPEGEncoderWrapper::finish(outLen);
