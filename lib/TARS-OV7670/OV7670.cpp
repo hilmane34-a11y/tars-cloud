@@ -223,12 +223,6 @@ void OV7670::QVGARGB565()
 
   QVGA();
 
-  /*
-   * QVGA 320x240 window.
-   * HSTART/HSTOP/VSTART/VSTOP
-   * menggunakan window yang sesuai
-   * dengan konfigurasi QVGA OV7670.
-   */
   frameControl(
     168,
     24,
