@@ -54,8 +54,8 @@ void IRAM_ATTR I2SCamera::i2sInterrupt(void* arg)
   // Pertahankan format pixel DMA framebuffer Al-Chris:
   // setiap 4 byte DMA -> 2 byte RGB565.
   for(int i=0;i<xres*4;i+=4){
-    dst[p++]=buf[i];
     dst[p++]=buf[i+2];
+    dst[p++]=buf[i];
   }
 
   streamLine++;
