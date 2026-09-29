@@ -460,13 +460,6 @@ void oledTask(void*){
    vTaskDelay(70);
    continue;
   }
-
-  if(now-lastCamDiag>=5000&&cameraLive){
-   lastCamDiag=now;
-   Serial.printf("TARS: OLED TASK CAMERA BLOCKED play=%d text=%u special=%d\n",
-   playing,(unsigned)oledText.length(),oledSpecial);
-  }
-
   if(oledText.length()&&oledTypePos<oledText.length()&&now-oledLastType>=OLED_TYPE_MS)
    oledTypePos++,oledLastType=now;
 
