@@ -456,10 +456,6 @@ void oledTask(void*){
   }
 
   if(cameraLive&&!playing&&!oledText.length()){
-   if(now-lastCamDiag>=2000){
-    lastCamDiag=now;
-    Serial.printf("TARS: OLED TASK -> CAMERA live=%d ptr=%p ok=%d\n",cameraLive,camera,cameraOK);
-   }
    drawCameraOLED();
    vTaskDelay(70);
    continue;
