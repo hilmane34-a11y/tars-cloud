@@ -90,7 +90,10 @@ void IRAM_ATTR I2SCamera::i2sInterrupt(void*arg){
   streamState[next]=1;
  }
 }
-
+void IRAM_ATTR I2SCamera::vSyncInterrupt(void*arg){
+ GPIO.status1_w1tc.val=GPIO.status1.val;
+ GPIO.status_w1tc=GPIO.status;
+}
 void I2SCamera::i2sStop(){
  if(i2sInterruptHandle)esp_intr_disable(i2sInterruptHandle);
  if(vSyncInterruptHandle)esp_intr_disable(vSyncInterruptHandle);
