@@ -40,91 +40,33 @@ static volatile bool streamError=false;
 void IRAM_ATTR I2SCamera::i2sInterrupt(void*arg){
  I2S0.int_clr.val=I2S0.int_raw.val;
  if(streamError||streamFrameDone)return;
- if(!dmaBuffer||dmaBufferCount<=0)return;
- DMABuffer*d=dmaBuffer[dmaBufferActive];
- if(!d||!d->buffer){streamError=true;return;}
- unsigned char*buf=d->buffer;
- dmaBufferActive=(dmaBufferActive+1)%dmaBufferCount;
- int block=streamFill;
- uint8_t*dst=streamBlock[block];
- if(!dst){streamError=true;return;}
- int p=streamLine*xres*2;
- for(int i=0;i<xres*4;i+=4){
-  dst[p++]=buf[i+2];
-  dst[p++]=buf[i];
- }
- streamLine++;
- blocksReceived++;
- if(streamLine>=STREAM_LINES){
-  streamBlockY[block]=blocksReceived-STREAM_LINES;
-  streamState[block]=2;
-  if(streamReady<STREAM_BLOCKS){
-   readyQueue[readyTail]=block;
-   readyTail=(readyTail+1)%STREAM_BLOCKS;
-   streamReady++;
-  }else{
-   streamError=true;
-   return;
-  }
-  streamLine=0;
-  if(blocksReceived>=yres){
-   framesReceived++;
-   streamFrameDone=true;
-   return;
-  }
-  int next=(block+1)%STREAM_BLOCKS;
-  if(streamState[next]!=0){
-   streamError=true;
-   return;
-  }
-  streamFill=next;
-  streamState[next]=1;
- }
-}
-
-void IRAM_ATTR I2SCamera::i2sInterrupt(void*arg){
- I2S0.int_clr.val=I2S0.int_raw.val;
-
- if(streamError||streamFrameDone)return;
-
  if(!dmaBuffer||dmaBufferCount<=0){
   streamError=true;
   return;
  }
-
  DMABuffer*d=dmaBuffer[dmaBufferActive];
-
  if(!d||!d->buffer){
   streamError=true;
   return;
  }
-
  unsigned char*buf=d->buffer;
-
  dmaBufferActive=(dmaBufferActive+1)%dmaBufferCount;
-
  int block=streamFill;
  uint8_t*dst=streamBlock[block];
-
  if(!dst){
   streamError=true;
   return;
  }
-
  int p=streamLine*xres*2;
-
  for(int i=0;i<xres*4;i+=4){
   dst[p++]=buf[i+2];
   dst[p++]=buf[i];
  }
-
  streamLine++;
  blocksReceived++;
-
  if(streamLine>=STREAM_LINES){
   streamBlockY[block]=blocksReceived-STREAM_LINES;
   streamState[block]=2;
-
   if(streamReady<STREAM_BLOCKS){
    readyQueue[readyTail]=block;
    readyTail=(readyTail+1)%STREAM_BLOCKS;
@@ -133,22 +75,17 @@ void IRAM_ATTR I2SCamera::i2sInterrupt(void*arg){
    streamError=true;
    return;
   }
-
   streamLine=0;
-
   if(blocksReceived>=yres){
    framesReceived++;
    streamFrameDone=true;
    return;
   }
-
   int next=(block+1)%STREAM_BLOCKS;
-
   if(streamState[next]!=0){
    streamError=true;
    return;
   }
-
   streamFill=next;
   streamState[next]=1;
  }
@@ -157,8 +94,8 @@ void IRAM_ATTR I2SCamera::i2sInterrupt(void*arg){
 void I2SCamera::i2sStop(){
  if(i2sInterruptHandle)esp_intr_disable(i2sInterruptHandle);
  if(vSyncInterruptHandle)esp_intr_disable(vSyncInterruptHandle);
- i2sConfReset();
  I2S0.conf.rx_start=0;
+ i2sConfReset();
 }
 
 void I2SCamera::i2sRun(){
@@ -184,12 +121,18 @@ void I2SCamera::i2sRun(){
  }
  uint32_t startWait=millis();
  while(gpio_get_level(vSyncPin)==0){
-  if(millis()-startWait>500){streamError=true;return;}
+  if(millis()-startWait>500){
+   streamError=true;
+   return;
+  }
   delay(1);
  }
  startWait=millis();
  while(gpio_get_level(vSyncPin)!=0){
-  if(millis()-startWait>500){streamError=true;return;}
+  if(millis()-startWait>500){
+   streamError=true;
+   return;
+  }
   delay(1);
  }
  I2S0.rx_eof_num=dmaBuffer[0]->sampleCount();
@@ -482,9 +425,7 @@ bool I2SCamera::capturePreview(uint8_t*out){
   DEBUG_PRINTLN("TARS: PREVIEW INVALID ARG");
   return false;
  }
-
  memset(out,0,128*64);
-
  DEBUG_PRINTLN("TARS: PREVIEW CAPTURE START");
  DEBUG_PRINT("TARS: PREVIEW RES=");
  DEBUG_PRINT(xres);
@@ -492,25 +433,20 @@ bool I2SCamera::capturePreview(uint8_t*out){
  DEBUG_PRINTLN(yres);
  DEBUG_PRINT("TARS: PREVIEW RAM=");
  DEBUG_PRINTLN(ESP.getFreeHeap());
-
  i2sRun();
-
  DEBUG_PRINT("TARS: PREVIEW AFTER I2SRUN error=");
  DEBUG_PRINT(streamError);
  DEBUG_PRINT(" done=");
  DEBUG_PRINT(streamFrameDone);
  DEBUG_PRINT(" ready=");
  DEBUG_PRINTLN(streamReady);
-
  if(streamError){
   DEBUG_PRINTLN("TARS: PREVIEW STREAM START ERROR");
   i2sStop();
   return false;
  }
-
  uint32_t started=millis();
  int processedBlocks=0;
-
  while((!streamFrameDone||streamReady>0)&&!streamError){
   if(millis()-started>CAMERA_CAPTURE_TIMEOUT){
    DEBUG_PRINTLN("TARS: PREVIEW TIMEOUT");
@@ -525,71 +461,54 @@ bool I2SCamera::capturePreview(uint8_t*out){
    streamError=true;
    break;
   }
-
   if(streamReady<=0){
    delay(1);
    continue;
   }
-
   int b=readyQueue[readyHead];
   readyHead=(readyHead+1)%STREAM_BLOCKS;
-
   DEBUG_PRINT("TARS: PREVIEW BLOCK QUEUE b=");
   DEBUG_PRINT(b);
   DEBUG_PRINT(" state=");
   DEBUG_PRINT(streamState[b]);
   DEBUG_PRINT(" y=");
   DEBUG_PRINTLN(streamBlockY[b]);
-
   if(streamState[b]!=2){
    DEBUG_PRINTLN("TARS: PREVIEW BAD BLOCK STATE");
    streamError=true;
    break;
   }
-
   streamState[b]=3;
-
   int y0=streamBlockY[b];
   uint16_t*f=(uint16_t*)streamBlock[b];
-
   if(!f){
    DEBUG_PRINTLN("TARS: PREVIEW NULL BLOCK");
    streamError=true;
    break;
   }
-
   if(y0<0||y0>=yres){
    DEBUG_PRINT("TARS: PREVIEW BAD Y=");
    DEBUG_PRINTLN(y0);
    streamError=true;
    break;
   }
-
   for(int oy=0;oy<64;oy++){
    int sy=oy*240/64;
    if(sy<y0||sy>=y0+STREAM_LINES)continue;
-
    int ly=sy-y0;
-
    for(int ox=0;ox<128;ox++){
     int sx=ox*320/128;
     uint16_t p=f[ly*320+sx];
-
     int r=(p>>11)&31;
     int g=(p>>5)&63;
     int bl=p&31;
-
     int gray=(r*255/31+g*255/63+bl*255/31)/3;
-
     if(gray>120)out[oy*128+ox]=1;
    }
   }
-
   streamState[b]=0;
   if(streamReady>0)streamReady--;
-
   processedBlocks++;
-
   DEBUG_PRINT("TARS: PREVIEW BLOCK DONE #");
   DEBUG_PRINT(processedBlocks);
   DEBUG_PRINT(" y=");
@@ -597,13 +516,9 @@ bool I2SCamera::capturePreview(uint8_t*out){
   DEBUG_PRINT(" ready=");
   DEBUG_PRINTLN(streamReady);
  }
-
  i2sStop();
-
  DEBUG_PRINTLN("TARS: PREVIEW I2S STOP");
-
  bool ok=streamFrameDone&&!streamError&&processedBlocks==(yres/STREAM_LINES);
-
  DEBUG_PRINT("TARS: PREVIEW RESULT=");
  DEBUG_PRINT(ok?"OK":"FAIL");
  DEBUG_PRINT(" blocks=");
@@ -616,12 +531,7 @@ bool I2SCamera::capturePreview(uint8_t*out){
  DEBUG_PRINT(streamFrameDone);
  DEBUG_PRINT(" error=");
  DEBUG_PRINTLN(streamError);
-
- if(ok){
-  DEBUG_PRINTLN("TARS: PREVIEW FRAME COMPLETE");
- }else{
-  DEBUG_PRINTLN("TARS: PREVIEW FRAME FAILED");
- }
-
+ if(ok)DEBUG_PRINTLN("TARS: PREVIEW FRAME COMPLETE");
+ else DEBUG_PRINTLN("TARS: PREVIEW FRAME FAILED");
  return ok;
 }
