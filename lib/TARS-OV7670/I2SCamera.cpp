@@ -631,7 +631,7 @@ bool I2SCamera::capturePreview(uint8_t*out){
                 int bl=p&31;
                 int gray=(r*255/31+g*255/63+bl*255/31)/3;
 
-                if(gray>120)out[oy*128+ox]=1;
+                if(gray>20)out[oy*128+ox]=1;
             }
         }
 
