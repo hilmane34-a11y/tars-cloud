@@ -33,7 +33,6 @@ static volatile int readyQueue[STREAM_BLOCKS]={0};
 static volatile int readyHead=0,readyTail=0;
 static volatile bool streamFrameDone=false,streamError=false;
 
-/* ===== CAMERA DIAGNOSTIC ===== */
 static volatile uint32_t diagBytes=0;
 static volatile uint32_t diagNonZero=0;
 static volatile uint8_t diagMin=255;
@@ -41,7 +40,6 @@ static volatile uint8_t diagMax=0;
 static volatile uint8_t diagRaw[16]={0};
 static volatile uint16_t diagRGB[8]={0};
 static volatile bool diagCaptured=false;
-/* ============================== */
 
 static void cameraI2SConfig(){
     I2S0.conf.rx_slave_mod=1;
@@ -74,7 +72,6 @@ void IRAM_ATTR I2SCamera::i2sInterrupt(void*arg){
     unsigned char*buf=d->buffer;
     dmaBufferActive=(dmaBufferActive+1)%dmaBufferCount;
 
-    /* Capture raw DMA diagnostic only once per frame. */
     if(!diagCaptured){
         for(int i=0;i<16;i++)diagRaw[i]=buf[i];
         for(int i=0;i<8;i++)diagRGB[i]=(uint16_t)(((uint16_t)buf[i*4+2]<<8)|buf[i*4]);
@@ -164,7 +161,6 @@ void I2SCamera::i2sRun(){
     streamFrameDone=false;
     streamError=false;
 
-    /* Reset camera diagnostic. */
     diagBytes=0;
     diagNonZero=0;
     diagMin=255;
@@ -631,12 +627,12 @@ bool I2SCamera::capturePreview(uint8_t*out){
 
     i2sStop();
 
-    /* ===== CAMERA DIAGNOSTIC OUTPUT ===== */
     DEBUG_PRINT("TARS: CAM RAW ");
 
     for(int i=0;i<16;i++){
-        if(diagRaw[i]<16)DEBUG_PRINT("0");
-        DEBUG_PRINT(diagRaw[i],HEX);
+        char hex[3];
+        sprintf(hex,"%02X",(unsigned)diagRaw[i]);
+        DEBUG_PRINT(hex);
         if(i<15)DEBUG_PRINT(" ");
     }
 
@@ -645,10 +641,9 @@ bool I2SCamera::capturePreview(uint8_t*out){
     DEBUG_PRINT("TARS: CAM RGB565 ");
 
     for(int i=0;i<8;i++){
-        if(diagRGB[i]<0x1000)DEBUG_PRINT("0");
-        if(diagRGB[i]<0x0100)DEBUG_PRINT("0");
-        if(diagRGB[i]<0x0010)DEBUG_PRINT("0");
-        DEBUG_PRINT(diagRGB[i],HEX);
+        char hex[5];
+        sprintf(hex,"%04X",(unsigned)diagRGB[i]);
+        DEBUG_PRINT(hex);
         if(i<7)DEBUG_PRINT(" ");
     }
 
@@ -663,7 +658,6 @@ bool I2SCamera::capturePreview(uint8_t*out){
     DEBUG_PRINT(" max=");
     DEBUG_PRINT((int)diagMax);
     DEBUG_PRINTLN("");
-    /* ==================================== */
 
     bool ok=streamFrameDone&&!streamError&&processedBlocks==(yres/STREAM_LINES);
 
