@@ -18,34 +18,63 @@ int I2SCamera::framePointer = 0;
 int I2SCamera::frameBytes = 0;
 volatile bool I2SCamera::stopSignal = false;
 
+#define STREAM_LINES 16
+#define STREAM_BLOCKS 4
+#define CAMERA_CAPTURE_TIMEOUT 2000
+
+static uint8_t* streamBlock[STREAM_BLOCKS]={0};
+static volatile uint8_t streamState[STREAM_BLOCKS]={0};
+static volatile int streamBlockY[STREAM_BLOCKS]={0};
+static volatile int streamFill=0,streamLine=0,streamReady=0;
+static volatile int readyQueue[STREAM_BLOCKS]={0};
+static volatile int readyHead=0,readyTail=0;
+static volatile bool streamFrameDone=false,streamError=false;
+
 void IRAM_ATTR I2SCamera::i2sInterrupt(void* arg)
 {
-  I2S0.int_clr.val = I2S0.int_raw.val;
+  I2S0.int_clr.val=I2S0.int_raw.val;
+  unsigned char* buf=dmaBuffer[dmaBufferActive]->buffer;
+  dmaBufferActive=(dmaBufferActive+1)%dmaBufferCount;
+
+  int idx=streamFill;
+  if(idx<0||idx>=STREAM_BLOCKS)return;
+
+  uint8_t* dst=streamBlock[idx];
+  int line=streamLine;
+  if(line>=STREAM_LINES)return;
+
+  int p=line*xres*2;
+
+  for(int i=0;i<xres*4;i+=4){
+    dst[p++]=buf[i+2];
+    dst[p++]=buf[i];
+  }
+
+  streamLine++;
+
+  if(streamLine>=STREAM_LINES){
+    streamBlockY[idx]=streamLine;
+    streamState[idx]=1;
+    readyQueue[readyHead]=idx;
+    readyHead=(readyHead+1)%STREAM_BLOCKS;
+    streamReady++;
+    streamFill=(streamFill+1)%STREAM_BLOCKS;
+    streamLine=0;
+  }
+
   blocksReceived++;
-  unsigned char* buf = dmaBuffer[dmaBufferActive]->buffer;
-  dmaBufferActive = (dmaBufferActive + 1) % dmaBufferCount;
 
-  if(framePointer < frameBytes)
-    for(int i = 0; i < xres * 4; i += 4)
-    {
-      frame[framePointer++] = buf[i + 2];
-      frame[framePointer++] = buf[i];
-    }
-
-  if(blocksReceived == yres)
-  {
-    framePointer = 0;
-    blocksReceived = 0;
+  if(blocksReceived>=yres){
+    blocksReceived=0;
     framesReceived++;
+    streamFrameDone=true;
 
-    if(stopSignal)
-    {
+    if(stopSignal){
       i2sStop();
-      stopSignal = false;
+      stopSignal=false;
     }
   }
 }
-
 void IRAM_ATTR I2SCamera::vSyncInterrupt(void* arg)
 {
   gpio_intr_disable(vSyncPin);
