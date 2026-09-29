@@ -86,22 +86,17 @@ void IRAM_ATTR I2SCamera::i2sInterrupt(void*arg){
 
 for(int i=0;i<xres*4;i+=4){
     uint8_t b0=buf[i];
-    uint8_t b1=buf[i+1];
     uint8_t b2=buf[i+2];
-    uint8_t b3=buf[i+3];
 
+    dst[p++]=b2;
     dst[p++]=b0;
-    dst[p++]=b1;
 
     diagBytes+=2;
-    if(b0||b1)diagNonZero++;
+    if(b2||b0)diagNonZero++;
+    if(b2<diagMin)diagMin=b2;
     if(b0<diagMin)diagMin=b0;
-    if(b1<diagMin)diagMin=b1;
+    if(b2>diagMax)diagMax=b2;
     if(b0>diagMax)diagMax=b0;
-    if(b1>diagMax)diagMax=b1;
-
-    (void)b2;
-    (void)b3;
 }
 
     streamLine++;
