@@ -285,22 +285,41 @@ void I2SCamera::dmaBufferDeinit()
   dmaBufferCount = 0;
 }
 
-bool I2SCamera::encodeFrameToJPEG(uint8_t* outBuffer, size_t* outLen, int quality)
+bool I2SCamera::encodeFrameToJPEG(uint8_t* outBuffer,size_t* outLen,int quality)
 {
-  if (!OV7670_ENABLE_JPEG) {
-    DEBUG_PRINTLN("I2SCamera::encodeFrameToJPEG: JPEG support compiled out");
+  if(!outBuffer||!outLen)return false;
+  if(!JPEGEncoderWrapper::begin(outBuffer,OV7670_MAX_JPEG_SIZE,xres,yres,quality))
+    return false;
+  if(!i2sRun()){
+    JPEGEncoderWrapper::finish(outLen);
     return false;
   }
-
-  if(!JPEGEncoderWrapper::available()) {
-    DEBUG_PRINTLN("I2SCamera::encodeFrameToJPEG: no JPEG encoder available");
-    return false;
+  for(int b=0;b<STREAM_BLOCKS;b++){
+    int idx=-1;
+    uint32_t start=millis();
+    while(millis()-start<CAMERA_CAPTURE_TIMEOUT){
+      if(streamReady>0){
+        idx=readyQueue[readyTail];
+        readyTail=(readyTail+1)%STREAM_BLOCKS;
+        streamReady--;
+        break;
+      }
+      delay(1);
+    }
+    if(idx<0){
+      JPEGEncoderWrapper::finish(outLen);
+      return false;
+    }
+    if(!JPEGEncoderWrapper::addBlock(
+      streamBlock[idx],
+      xres,
+      STREAM_LINES
+    )){
+      JPEGEncoderWrapper::finish(outLen);
+      return false;
+    }
+    streamState[idx]=0;
   }
-
-  if (!outBuffer || !outLen) {
-    DEBUG_PRINTLN("I2SCamera::encodeFrameToJPEG: invalid output buffer");
-    return false;
-  }
-
-  return JPEGEncoderWrapper::encode(frame, xres, yres, quality, outBuffer, outLen);
+  streamFrameDone=true;
+  return JPEGEncoderWrapper::finish(outLen);
 }
