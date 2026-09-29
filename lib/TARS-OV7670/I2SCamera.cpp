@@ -205,7 +205,7 @@ bool I2SCamera::init(
   frameBytes=0;
 
   i2sInit(VSYNC,HREF,PCLK,D0,D1,D2,D3,D4,D5,D6,D7);
-  dmaBufferInit(xres*2*2);
+  dmaBufferInit(xres*2*4);
   initVSync(VSYNC);
 
   for(int i=0;i<STREAM_BLOCKS;i++){
