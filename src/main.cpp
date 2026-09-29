@@ -88,6 +88,7 @@ MP3DecoderHelix codec;
 WAVDecoder wav;
 WebSocketsClient sttWS;
 OV7670*camera=nullptr;
+bool visionCameraHeldOff=false;
 SemaphoreHandle_t cameraMux=nullptr;
 
 void ramDiag(const char*tag){
