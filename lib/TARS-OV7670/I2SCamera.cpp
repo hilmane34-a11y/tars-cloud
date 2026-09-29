@@ -275,11 +275,11 @@ bool I2SCamera::i2sInit(
   I2S0.clkm_conf.clkm_div_num = 2;
 
   I2S0.fifo_conf.dscr_en = 1;
-  I2S0.fifo_conf.rx_fifo_mod =0;
+  I2S0.fifo_conf.rx_fifo_mod =1;
   I2S0.fifo_conf.rx_fifo_mod_force_en = 1;
   I2S0.conf_chan.rx_chan_mod = 1;
 
-  I2S0.sample_rate_conf.rx_bits_mod = 0;
+  I2S0.sample_rate_conf.rx_bits_mod = 16;
   I2S0.conf.rx_right_first = 0;
   I2S0.conf.rx_msb_right = 0;
   I2S0.conf.rx_msb_shift = 0;
@@ -385,59 +385,45 @@ bool I2SCamera::capturePreview(uint8_t* out)
   for(int i=0;i<STREAM_BLOCKS;i++)streamState[i]=0;
 
   i2sRun();
-
   const int blocksNeeded=(yres+STREAM_LINES-1)/STREAM_LINES;
   int blocksDone=0;
   uint32_t start=millis();
-
   while(blocksDone<blocksNeeded){
     if(millis()-start>CAMERA_CAPTURE_TIMEOUT){
       i2sStop();
       return false;
     }
-
     if(streamReady<=0){
       delay(1);
       continue;
     }
-
     int idx=readyQueue[readyTail];
     readyTail=(readyTail+1)%STREAM_BLOCKS;
     streamReady--;
-
     uint16_t* src=(uint16_t*)streamBlock[idx];
     int blockY=blocksDone*STREAM_LINES;
-
     for(int y=0;y<STREAM_LINES;y++){
       int oy=(blockY+y)*64/yres;
       if(oy>=64)continue;
-
       for(int x=0;x<xres;x++){
         int ox=x*128/xres;
         if(ox>=128)continue;
-
         uint16_t p=src[y*xres+x];
-
         uint8_t r=((p>>11)&0x1F)*255/31;
         uint8_t g=((p>>5)&0x3F)*255/63;
         uint8_t b=(p&0x1F)*255/31;
-
-        uint8_t gray=(uint8_t)((r*30+g*59+b*11)/100);
-
-        if(gray>55)
-          out[oy*128+ox]=1;
+        uint8_t gray=(uint8_t)((77*r+150*g+29*b)>>8);
+  if(gray<=55)
+  out[oy*128+ox]=1;
       }
     }
-
     streamState[idx]=0;
     blocksDone++;
     start=millis();
   }
-
   i2sStop();
   return true;
 }
-
 void I2SCamera::dmaDiagnostic()
 {
   DEBUG_PRINT("TARS: DMA blocks=");
