@@ -203,6 +203,7 @@ bool needsVision(String q){
  if(tarsMode!=MODE_ONLINE){Serial.println("TARS: VISION BLOCKED OFFLINE");return "";}
  if(!wifiOK()){Serial.println("TARS: VISION FAIL WIFI");return "";}
  if(!cameraLive||!camera||!cameraOK){Serial.println("TARS: VISION FAIL CAMERA NOT LIVE");return "";}
+
  if(cameraMux){
   Serial.println("TARS: VISION MUTEX WAIT");
   if(xSemaphoreTake(cameraMux,pdMS_TO_TICKS(1500))!=pdTRUE){
@@ -210,6 +211,7 @@ bool needsVision(String q){
   }
   Serial.println("TARS: VISION MUTEX OK");
  }
+
  size_t jl=0;
  uint32_t st=millis();
  Serial.printf("TARS: VISION JPEG START RAM=%u/%u KB\n",ESP.getFreeHeap()/1024,ESP.getMaxAllocHeap()/1024);
@@ -217,38 +219,50 @@ bool needsVision(String q){
  Serial.printf("TARS: VISION JPEG RETURN=%s size=%u time=%lu ms RAM=%u/%u KB\n",
   ok?"OK":"FAIL",(unsigned)jl,(unsigned long)(millis()-st),
   ESP.getFreeHeap()/1024,ESP.getMaxAllocHeap()/1024);
+
  if(cameraMux)xSemaphoreGive(cameraMux);
+
  if(!ok){Serial.println("TARS: VISION JPEG ERROR");return "";}
  if(!jl){Serial.println("TARS: VISION JPEG ERROR SIZE=0");return "";}
  if(jl>VISION_JPEG_MAX){
   Serial.printf("TARS: VISION JPEG ERROR TOO LARGE=%u\n",(unsigned)jl);return "";
  }
+
  Serial.println("TARS: VISION JPEG COMPLETE");
  delay(100);
+
  Serial.println("TARS: VISION CAMERA OFF");
  stopCamera();
  delay(150);
  visionCameraHeldOff=true;
  ramDiag("VISION-CAM-OFF");
+
  static const char B64[]="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
  WiFiClientSecure c;
  c.setInsecure();
  c.setTimeout(20000);
+
  HTTPClient h;
  String url=String(TARS_CLOUD_URL)+"/vision";
+
  Serial.println("TARS: VISION HTTPS BEGIN");
  if(!h.begin(c,url)){
   Serial.println("TARS: VISION HTTP BEGIN FAIL");
   return "";
  }
+
  h.setTimeout(30000);
  h.addHeader("Content-Type","application/json");
+
  size_t b64len=((jl+2)/3)*4;
  size_t bodyLen=16+q.length()+24+b64len+3;
+
  Serial.printf("TARS: VISION BODY RESERVE=%u RAM=%u/%u KB\n",
   (unsigned)bodyLen,ESP.getFreeHeap()/1024,ESP.getMaxAllocHeap()/1024);
+
  String body;
  body.reserve(bodyLen);
+
  body="{\"question\":";
  {
   String qs;
@@ -259,45 +273,60 @@ bool needsVision(String q){
   body+=qs;
  }
  body+=",\"image\":\"data:image/jpeg;base64,";
+
  for(size_t i=0;i<jl;i+=3){
   uint32_t v=(uint32_t)visionJpeg[i]<<16;
   if(i+1<jl)v|=(uint32_t)visionJpeg[i+1]<<8;
   if(i+2<jl)v|=(uint32_t)visionJpeg[i+2];
+
   body+=B64[(v>>18)&63];
   body+=B64[(v>>12)&63];
   body+=(i+1<jl)?B64[(v>>6)&63]:'=';
   body+=(i+2<jl)?B64[v&63]:'=';
  }
+
  body+="\"}";
+
  Serial.printf("TARS: VISION POST JPEG=%u JSON=%u RAM=%u/%u KB\n",
   (unsigned)jl,(unsigned)body.length(),
   ESP.getFreeHeap()/1024,ESP.getMaxAllocHeap()/1024);
+
  Serial.println("TARS: VISION POST SEND...");
+
  int code=h.POST((uint8_t*)body.c_str(),body.length());
+
  Serial.printf("TARS: VISION POST RETURN code=%d\n",code);
+
  if(code<0){
   Serial.printf("TARS: VISION HTTP ERROR=%s\n",h.errorToString(code).c_str());
  }
+
  String response;
  if(code>=200&&code<300)response=h.getString();
+
  h.end();
  body="";
  body.shrinkToFit();
+
  if(!response.length()){
   Serial.printf("TARS: VISION HTTP EMPTY code=%d\n",code);
   return "";
  }
+
  Serial.printf("TARS: VISION RESPONSE LEN=%u\n",(unsigned)response.length());
+
  JsonDocument r;
  if(deserializeJson(r,response)){
   Serial.printf("TARS: VISION JSON ERROR len=%u\n",(unsigned)response.length());
   return "";
  }
+
  String ans=r["response"].as<String>();
  ans.trim();
+
  Serial.printf("TARS: VISION DONE answer=%u chars\n",(unsigned)ans.length());
  return ans;
- }
+}
 
 /* MEMORY MP3 */
 class MemMP3Stream:public Stream{
