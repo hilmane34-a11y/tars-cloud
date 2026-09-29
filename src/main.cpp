@@ -166,13 +166,17 @@ void startCamera(){
 void drawCameraOLED(){
  Serial.printf("TARS: OLED CAM CHECK live=%d ok=%d ptr=%p oled=%d play=%d text=%u\n",
  cameraLive,cameraOK,camera,oledOK,playing,(unsigned)oledText.length());
+
  if(!cameraLive||!camera||!cameraOK||!oledOK){
   Serial.println("TARS: OLED CAM SKIP CONDITION");
   return;
  }
+
  static uint8_t preview[128*64];
  memset(preview,0,sizeof(preview));
+
  Serial.println("TARS: OLED CAM DRAW START");
+
  if(cameraMux){
   Serial.println("TARS: OLED CAM MUTEX WAIT");
   if(xSemaphoreTake(cameraMux,pdMS_TO_TICKS(2500))!=pdTRUE){
@@ -181,15 +185,22 @@ void drawCameraOLED(){
   }
   Serial.println("TARS: OLED CAM MUTEX OK");
  }
+
  Serial.printf("TARS: OLED CAM CAPTURE CALL RAM=%u/%u KB\n",
  ESP.getFreeHeap()/1024,ESP.getMaxAllocHeap()/1024);
+
  uint32_t t=millis();
  bool ok=I2SCamera::capturePreview(preview);
  uint32_t dt=millis()-t;
+
+ Serial.println("TARS: ===== CAMERA DMA DIAGNOSTIC FROM MAIN =====");
  I2SCamera::dmaDiagnostic();
+ Serial.println("TARS: ===== CAMERA DMA DIAGNOSTIC END =====");
+
  uint32_t nonzero=0;
  uint8_t minv=255,maxv=0;
  uint32_t sum=0;
+
  for(size_t i=0;i<sizeof(preview);i++){
   uint8_t v=preview[i];
   if(v)nonzero++;
@@ -197,19 +208,26 @@ void drawCameraOLED(){
   if(v>maxv)maxv=v;
   sum+=v;
  }
+
  Serial.printf("TARS: OLED CAM CAPTURE %s time=%lu ms RAM=%u/%u KB\n",
- ok?"OK":"FAIL",(unsigned long)dt,ESP.getFreeHeap()/1024,ESP.getMaxAllocHeap()/1024);
+ ok?"OK":"FAIL",(unsigned long)dt,
+ ESP.getFreeHeap()/1024,ESP.getMaxAllocHeap()/1024);
+
  Serial.printf("TARS: OLED PREVIEW bytes=%u nonzero=%lu min=%u max=%u sum=%lu\n",
- (unsigned)sizeof(preview),(unsigned long)nonzero,minv,maxv,(unsigned long)sum);
+ (unsigned)sizeof(preview),(unsigned long)nonzero,
+ minv,maxv,(unsigned long)sum);
+
  Serial.print("TARS: OLED PREVIEW HEAD=");
  for(int i=0;i<32;i++){
   Serial.printf("%02X",preview[i]);
   if(i<31)Serial.print(" ");
  }
  Serial.println();
+
  if(ok){
   int pixels=0;
   oled.clearDisplay();
+
   for(int y=0;y<64;y++){
    for(int x=0;x<128;x++){
     if(preview[y*128+x]){
@@ -218,11 +236,13 @@ void drawCameraOLED(){
     }
    }
   }
+
   oled.display();
   Serial.printf("TARS: OLED CAM DISPLAY OK pixels=%d\n",pixels);
  }else{
   Serial.println("TARS: OLED CAM DISPLAY SKIP CAPTURE FAIL");
  }
+
  if(cameraMux)xSemaphoreGive(cameraMux);
 }
 
