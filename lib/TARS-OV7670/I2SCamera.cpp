@@ -49,10 +49,10 @@ static void cameraI2SConfig(){
     I2S0.clkm_conf.clkm_div_b=0;
     I2S0.clkm_conf.clkm_div_num=2;
     I2S0.fifo_conf.dscr_en=1;
-    I2S0.fifo_conf.rx_fifo_mod=0;
+    I2S0.fifo_conf.rx_fifo_mod=1;
     I2S0.fifo_conf.rx_fifo_mod_force_en=1;
     I2S0.conf_chan.rx_chan_mod=1;
-    I2S0.sample_rate_conf.rx_bits_mod=0;
+    I2S0.sample_rate_conf.rx_bits_mod=16;
     I2S0.conf.rx_right_first=0;
     I2S0.conf.rx_msb_right=0;
     I2S0.conf.rx_msb_shift=0;
@@ -86,17 +86,17 @@ void IRAM_ATTR I2SCamera::i2sInterrupt(void*arg){
 
 for(int i=0;i<xres*4;i+=4){
     uint8_t b0=buf[i];
-    uint8_t b2=buf[i+2];
+    uint8_t b1=buf[i+1];
 
-    dst[p++]=b2;
     dst[p++]=b0;
+    dst[p++]=b1;
 
     diagBytes+=2;
-    if(b2||b0)diagNonZero++;
-    if(b2<diagMin)diagMin=b2;
+    if(b0||b1)diagNonZero++;
     if(b0<diagMin)diagMin=b0;
-    if(b2>diagMax)diagMax=b2;
+    if(b1<diagMin)diagMin=b1;
     if(b0>diagMax)diagMax=b0;
+    if(b1>diagMax)diagMax=b1;
 }
 
     streamLine++;
