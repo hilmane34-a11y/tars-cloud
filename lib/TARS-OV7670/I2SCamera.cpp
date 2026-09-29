@@ -610,25 +610,36 @@ bool I2SCamera::capturePreview(uint8_t*out){
             break;
         }
 
-        for(int oy=0;oy<64;oy++){
-            int sy=oy*240/64;
+for(int oy=0;oy<64;oy++){
+    int sy=oy*240/64;
+    if(sy<y0||sy>=y0+STREAM_LINES)continue;
+    int ly=sy-y0;
 
-            if(sy<y0||sy>=y0+STREAM_LINES)continue;
+    for(int ox=0;ox<128;ox++){
+        int sx=ox*320/128;
+        int sum=0,count=0;
 
-            int ly=sy-y0;
+        for(int dy=0;dy<2;dy++){
+            int yy=ly+dy;
+            if(yy>=STREAM_LINES)continue;
 
-            for(int ox=0;ox<128;ox++){
-                int sx=ox*320/128;
-                uint16_t p=f[ly*320+sx];
+            for(int dx=0;dx<2;dx++){
+                int xx=sx+dx*2;
+                if(xx>=320)continue;
 
+                uint16_t p=f[yy*320+xx];
                 int r=(p>>11)&31;
                 int g=(p>>5)&63;
                 int bl=p&31;
-                int gray=(r*255/31+g*255/63+bl*255/31)/3;
-
-                if(gray>20)out[oy*128+ox]=1;
+                sum+=(r*255/31+g*255/63+bl*255/31)/3;
+                count++;
             }
         }
+
+        int gray=count?sum/count:0;
+        if(gray>45)out[oy*128+ox]=1;
+    }
+}
 
         streamState[b]=0;
 
