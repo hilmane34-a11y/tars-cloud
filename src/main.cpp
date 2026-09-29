@@ -1025,16 +1025,38 @@ void processQuestion(const String&q){
 
  oledShowText(q,"STT");delay(500);
 
- if(needsVision(q)){
-  Serial.println("TARS: ONLINE VISION REQUEST");oledSetStatus("VISION");
-  String answer=visionAsk(q);
-  if(!answer.length()){Serial.println("TARS: VISION FAILED -> ASK");answer=ask(q);}
-  if(!answer.length()){oledSetStatus("VISION ERROR");behaviorReset();return;}
-  oledShowText(answer,"VISION");delay(500);
-  bool ok=streamAudio(String(TARS_CLOUD_URL)+"/tts",answer);
-  oledSetStatus(ok?"LISTENING":"AUDIO ERROR");behaviorReset();return;
+if(needsVision(q)){
+ Serial.println("TARS: ONLINE VISION REQUEST");
+ oledSetStatus("VISION");
+ visionCameraHeldOff=false;
+ String answer=visionAsk(q);
+ if(!answer.length()){
+  Serial.println("TARS: VISION FAILED -> ASK");
+  answer=ask(q);
  }
-
+ if(!answer.length()){
+  oledSetStatus("VISION ERROR");
+  if(visionCameraHeldOff){
+   Serial.println("TARS: VISION ERROR -> CAMERA ON");
+   startCamera();
+   visionCameraHeldOff=false;
+  }
+  behaviorReset();
+  return;
+ }
+ oledShowText(answer,"VISION");
+ delay(500);
+ Serial.println("TARS: VISION -> TTS CAMERA REMAINS OFF");
+ bool ok=streamAudio(String(TARS_CLOUD_URL)+"/tts",answer);
+ if(visionCameraHeldOff){
+  Serial.println("TARS: TTS DONE -> CAMERA ON");
+  startCamera();
+  visionCameraHeldOff=false;
+ }
+ oledSetStatus(ok?"LISTENING":"AUDIO ERROR");
+ behaviorReset();
+ return;
+}
  bool status=isStatusQuery(q);String answer=status?systemStatus():ask(q);
  if(!answer.length()){oledSetStatus(status?"STATUS ERROR":"ASK ERROR");behaviorReset();return;}
 
