@@ -21,6 +21,7 @@
 #include "config.h"
 #include "wifi_manager.h"
 #include <string.h>
+#include "Log.h"
 
 #define MIC_PORT I2S_NUM_1
 #define MIC_SCK 18
