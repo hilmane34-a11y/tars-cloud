@@ -33,31 +33,48 @@ static volatile bool streamFrameDone=false,streamError=false;
 void IRAM_ATTR I2SCamera::i2sInterrupt(void* arg)
 {
   I2S0.int_clr.val=I2S0.int_raw.val;
+
   unsigned char* buf=dmaBuffer[dmaBufferActive]->buffer;
   dmaBufferActive=(dmaBufferActive+1)%dmaBufferCount;
 
   int idx=streamFill;
   if(idx<0||idx>=STREAM_BLOCKS)return;
+  if(streamState[idx]!=0){
+    streamError=true;
+    return;
+  }
 
   uint8_t* dst=streamBlock[idx];
   int line=streamLine;
+
   if(line>=STREAM_LINES)return;
 
   int p=line*xres*2;
 
+  // Pertahankan format pixel DMA framebuffer Al-Chris:
+  // setiap 4 byte DMA -> 2 byte RGB565.
   for(int i=0;i<xres*4;i+=4){
-    dst[p++]=buf[i+2];
     dst[p++]=buf[i];
+    dst[p++]=buf[i+2];
   }
 
   streamLine++;
 
   if(streamLine>=STREAM_LINES){
-    streamBlockY[idx]=streamLine;
+    streamBlockY[idx]=line;
+
     streamState[idx]=1;
+
+    int nextHead=(readyHead+1)%STREAM_BLOCKS;
+    if(nextHead==readyTail){
+      streamError=true;
+      return;
+    }
+
     readyQueue[readyHead]=idx;
-    readyHead=(readyHead+1)%STREAM_BLOCKS;
+    readyHead=nextHead;
     streamReady++;
+
     streamFill=(streamFill+1)%STREAM_BLOCKS;
     streamLine=0;
   }
@@ -425,7 +442,7 @@ bool I2SCamera::capturePreview(uint8_t* out)
 
         uint8_t gray=(uint8_t)((r*30+g*59+b*11)/100);
 
-        if(gray<65)
+        if(gray>65)
          out[oy*128+ox]=1;
       }
     }
