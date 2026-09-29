@@ -306,7 +306,6 @@ bool needsVision(String q){
 
  h.end();
  body="";
- body.shrinkToFit();
 
  if(!response.length()){
   Serial.printf("TARS: VISION HTTP EMPTY code=%d\n",code);
