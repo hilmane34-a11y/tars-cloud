@@ -368,3 +368,92 @@ bool I2SCamera::encodeFrameToJPEG(uint8_t* outBuffer,size_t* outLen,int quality)
   i2sStop();
   return JPEGEncoderWrapper::finish(outLen);
 }
+
+bool I2SCamera::capturePreview(uint8_t* out)
+{
+  if(!out)return false;
+
+  memset(out,0,128*64);
+
+  streamFill=0;
+  streamLine=0;
+  streamReady=0;
+  readyHead=0;
+  readyTail=0;
+  streamFrameDone=false;
+  streamError=false;
+
+  for(int i=0;i<STREAM_BLOCKS;i++)streamState[i]=0;
+
+  i2sRun();
+
+  const int blocksNeeded=(yres+STREAM_LINES-1)/STREAM_LINES;
+  int blocksDone=0;
+  uint32_t start=millis();
+
+  while(blocksDone<blocksNeeded){
+    if(millis()-start>CAMERA_CAPTURE_TIMEOUT){
+      i2sStop();
+      return false;
+    }
+
+    if(streamReady<=0){
+      delay(1);
+      continue;
+    }
+
+    int idx=readyQueue[readyTail];
+    readyTail=(readyTail+1)%STREAM_BLOCKS;
+    streamReady--;
+
+    uint16_t* src=(uint16_t*)streamBlock[idx];
+    int blockY=blocksDone*STREAM_LINES;
+
+    for(int y=0;y<STREAM_LINES;y++){
+      int oy=(blockY+y)*64/yres;
+      if(oy>=64)continue;
+
+      for(int x=0;x<xres;x++){
+        int ox=x*128/xres;
+        if(ox>=128)continue;
+
+        uint16_t p=src[y*xres+x];
+
+        uint8_t r=((p>>11)&0x1F)*255/31;
+        uint8_t g=((p>>5)&0x3F)*255/63;
+        uint8_t b=(p&0x1F)*255/31;
+
+        uint8_t gray=(uint8_t)((r*30+g*59+b*11)/100);
+
+        if(gray>65)
+          out[oy*128+ox]=1;
+      }
+    }
+
+    streamState[idx]=0;
+    blocksDone++;
+    start=millis();
+  }
+
+  i2sStop();
+  return true;
+}
+
+void I2SCamera::dmaDiagnostic()
+{
+  DEBUG_PRINT("TARS: DMA blocks=");
+  DEBUG_PRINT(dmaBufferCount);
+  DEBUG_PRINT(" active=");
+  DEBUG_PRINT(dmaBufferActive);
+  DEBUG_PRINT(" received=");
+  DEBUG_PRINT(blocksReceived);
+  DEBUG_PRINT(" frames=");
+  DEBUG_PRINTLN(framesReceived);
+
+  DEBUG_PRINT("TARS: STREAM ready=");
+  DEBUG_PRINT(streamReady);
+  DEBUG_PRINT(" fill=");
+  DEBUG_PRINT(streamFill);
+  DEBUG_PRINT(" line=");
+  DEBUG_PRINTLN(streamLine);
+}
