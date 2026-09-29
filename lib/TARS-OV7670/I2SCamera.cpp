@@ -84,20 +84,20 @@ void IRAM_ATTR I2SCamera::i2sInterrupt(void*arg){
 
     int p=streamLine*xres*2;
 
-    for(int i=0;i<xres*4;i+=4){
-        uint8_t hi=buf[i+2];
-        uint8_t lo=buf[i];
+for(int i=0;i<xres*4;i+=4){
+    uint8_t hi=buf[i];
+    uint8_t lo=buf[i+2];
 
-        dst[p++]=hi;
-        dst[p++]=lo;
+    dst[p++]=hi;
+    dst[p++]=lo;
 
-        diagBytes+=2;
-        if(hi||lo)diagNonZero++;
-        if(hi<diagMin)diagMin=hi;
-        if(lo<diagMin)diagMin=lo;
-        if(hi>diagMax)diagMax=hi;
-        if(lo>diagMax)diagMax=lo;
-    }
+    diagBytes+=2;
+    if(hi||lo)diagNonZero++;
+    if(hi<diagMin)diagMin=hi;
+    if(lo<diagMin)diagMin=lo;
+    if(hi>diagMax)diagMax=hi;
+    if(lo>diagMax)diagMax=lo;
+}
 
     streamLine++;
     blocksReceived++;
