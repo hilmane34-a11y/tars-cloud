@@ -175,21 +175,41 @@ void I2SCamera::deinit()
   i2sStop();
   dmaBufferDeinit();
 
-  if (frame) {
-    free(frame);
-    frame = nullptr;
+  for(int i=0;i<STREAM_BLOCKS;i++){
+    if(streamBlock[i]){
+      free(streamBlock[i]);
+      streamBlock[i]=nullptr;
+    }
+    streamState[i]=0;
+    streamBlockY[i]=0;
   }
 
-  if (i2sInterruptHandle) {
+  streamFill=0;
+  streamLine=0;
+  streamReady=0;
+  readyHead=0;
+  readyTail=0;
+  streamFrameDone=false;
+  streamError=false;
+
+  if(frame){
+    free(frame);
+    frame=nullptr;
+  }
+
+  frameBytes=0;
+  framePointer=0;
+
+  if(i2sInterruptHandle){
     esp_intr_disable(i2sInterruptHandle);
     esp_intr_free(i2sInterruptHandle);
-    i2sInterruptHandle = 0;
+    i2sInterruptHandle=0;
   }
 
-  if (vSyncInterruptHandle) {
+  if(vSyncInterruptHandle){
     esp_intr_disable(vSyncInterruptHandle);
     esp_intr_free(vSyncInterruptHandle);
-    vSyncInterruptHandle = 0;
+    vSyncInterruptHandle=0;
   }
 }
 
@@ -322,15 +342,21 @@ void I2SCamera::dmaBufferInit(int bytes)
 
 void I2SCamera::dmaBufferDeinit()
 {
-  if (!dmaBuffer) return;
+  if(!dmaBuffer){
+    dmaBufferCount=0;
+    return;
+  }
 
-  for(int i = 0; i < dmaBufferCount; i++)
-    delete(dmaBuffer[i]);
+  for(int i=0;i<dmaBufferCount;i++){
+    if(dmaBuffer[i]){
+      delete dmaBuffer[i];
+      dmaBuffer[i]=nullptr;
+    }
+  }
 
-  delete(dmaBuffer);
-
-  dmaBuffer = 0;
-  dmaBufferCount = 0;
+  free(dmaBuffer);
+  dmaBuffer=nullptr;
+  dmaBufferCount=0;
 }
 
 bool I2SCamera::encodeFrameToJPEG(uint8_t* outBuffer,size_t* outLen,int quality)
