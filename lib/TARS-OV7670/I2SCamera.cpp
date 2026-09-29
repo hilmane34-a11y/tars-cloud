@@ -33,6 +33,16 @@ static volatile int readyQueue[STREAM_BLOCKS]={0};
 static volatile int readyHead=0,readyTail=0;
 static volatile bool streamFrameDone=false,streamError=false;
 
+/* ===== CAMERA DIAGNOSTIC ===== */
+static volatile uint32_t diagBytes=0;
+static volatile uint32_t diagNonZero=0;
+static volatile uint8_t diagMin=255;
+static volatile uint8_t diagMax=0;
+static volatile uint8_t diagRaw[16]={0};
+static volatile uint16_t diagRGB[8]={0};
+static volatile bool diagCaptured=false;
+/* ============================== */
+
 static void cameraI2SConfig(){
     I2S0.conf.rx_slave_mod=1;
     I2S0.conf2.lcd_en=1;
@@ -57,29 +67,71 @@ void IRAM_ATTR I2SCamera::i2sInterrupt(void*arg){
     I2S0.int_clr.val=I2S0.int_raw.val;
     if(streamError||streamFrameDone)return;
     if(!dmaBuffer||dmaBufferCount<=0){streamError=true;return;}
+
     DMABuffer*d=dmaBuffer[dmaBufferActive];
     if(!d||!d->buffer){streamError=true;return;}
+
     unsigned char*buf=d->buffer;
     dmaBufferActive=(dmaBufferActive+1)%dmaBufferCount;
+
+    /* Capture raw DMA diagnostic only once per frame. */
+    if(!diagCaptured){
+        for(int i=0;i<16;i++)diagRaw[i]=buf[i];
+        for(int i=0;i<8;i++)diagRGB[i]=(uint16_t)(((uint16_t)buf[i*4+2]<<8)|buf[i*4]);
+        diagCaptured=true;
+    }
+
     int block=streamFill;
     uint8_t*dst=streamBlock[block];
     if(!dst){streamError=true;return;}
+
     int p=streamLine*xres*2;
-    for(int i=0;i<xres*4;i+=4){dst[p++]=buf[i+2];dst[p++]=buf[i];}
+
+    for(int i=0;i<xres*4;i+=4){
+        uint8_t hi=buf[i+2];
+        uint8_t lo=buf[i];
+
+        dst[p++]=hi;
+        dst[p++]=lo;
+
+        diagBytes+=2;
+        if(hi||lo)diagNonZero++;
+        if(hi<diagMin)diagMin=hi;
+        if(lo<diagMin)diagMin=lo;
+        if(hi>diagMax)diagMax=hi;
+        if(lo>diagMax)diagMax=lo;
+    }
+
     streamLine++;
     blocksReceived++;
+
     if(streamLine>=STREAM_LINES){
         streamBlockY[block]=blocksReceived-STREAM_LINES;
         streamState[block]=2;
+
         if(streamReady<STREAM_BLOCKS){
             readyQueue[readyTail]=block;
             readyTail=(readyTail+1)%STREAM_BLOCKS;
             streamReady++;
-        }else{streamError=true;return;}
+        }else{
+            streamError=true;
+            return;
+        }
+
         streamLine=0;
-        if(blocksReceived>=yres){framesReceived++;streamFrameDone=true;return;}
+
+        if(blocksReceived>=yres){
+            framesReceived++;
+            streamFrameDone=true;
+            return;
+        }
+
         int next=(block+1)%STREAM_BLOCKS;
-        if(streamState[next]!=0){streamError=true;return;}
+        if(streamState[next]!=0){
+            streamError=true;
+            return;
+        }
+
         streamFill=next;
         streamState[next]=1;
     }
@@ -112,10 +164,20 @@ void I2SCamera::i2sRun(){
     streamFrameDone=false;
     streamError=false;
 
+    /* Reset camera diagnostic. */
+    diagBytes=0;
+    diagNonZero=0;
+    diagMin=255;
+    diagMax=0;
+    diagCaptured=false;
+    memset((void*)diagRaw,0,sizeof(diagRaw));
+    memset((void*)diagRGB,0,sizeof(diagRGB));
+
     for(int i=0;i<STREAM_BLOCKS;i++){
         streamState[i]=0;
         streamBlockY[i]=0;
     }
+
     streamState[0]=1;
 
     if(!dmaBuffer||dmaBufferCount<=0||!dmaBuffer[0]||!dmaBuffer[0]->valid()){
@@ -124,13 +186,22 @@ void I2SCamera::i2sRun(){
     }
 
     uint32_t t=millis();
+
     while(gpio_get_level(vSyncPin)==0){
-        if(millis()-t>500){streamError=true;return;}
+        if(millis()-t>500){
+            streamError=true;
+            return;
+        }
         delay(1);
     }
+
     t=millis();
+
     while(gpio_get_level(vSyncPin)!=0){
-        if(millis()-t>500){streamError=true;return;}
+        if(millis()-t>500){
+            streamError=true;
+            return;
+        }
         delay(1);
     }
 
@@ -154,7 +225,13 @@ void I2SCamera::i2sRun(){
 bool I2SCamera::initVSync(int pin){
     vSyncPin=(gpio_num_t)pin;
     gpio_set_intr_type(vSyncPin,GPIO_INTR_POSEDGE);
-    if(gpio_isr_register(&I2SCamera::vSyncInterrupt,(void*)"vSyncInterrupt",ESP_INTR_FLAG_INTRDISABLED|ESP_INTR_FLAG_IRAM,&vSyncInterruptHandle)!=ESP_OK)return false;
+
+    if(gpio_isr_register(
+        &I2SCamera::vSyncInterrupt,
+        (void*)"vSyncInterrupt",
+        ESP_INTR_FLAG_INTRDISABLED|ESP_INTR_FLAG_IRAM,
+        &vSyncInterruptHandle)!=ESP_OK)return false;
+
     gpio_intr_enable(vSyncPin);
     return true;
 }
@@ -225,8 +302,10 @@ bool I2SCamera::init(
     }
 
     const size_t blockBytes=(size_t)xres*STREAM_LINES*2;
+
     for(int i=0;i<STREAM_BLOCKS;i++){
         streamBlock[i]=(uint8_t*)malloc(blockBytes);
+
         if(!streamBlock[i]){
             DEBUG_PRINTLN("TARS: stream buffer allocation failed");
             deinit();
@@ -240,6 +319,7 @@ bool I2SCamera::init(
     }
 
     dmaBufferInit(xres*2*2);
+
     if(!dmaBuffer){
         deinit();
         return false;
@@ -258,6 +338,7 @@ bool I2SCamera::init(
     DEBUG_PRINT(STREAM_LINES);
     DEBUG_PRINT("x");
     DEBUG_PRINTLN(STREAM_BLOCKS);
+
     return true;
 }
 
@@ -267,6 +348,7 @@ bool I2SCamera::i2sInit(
     const int D4,const int D5,const int D6,const int D7){
 
     int pins[]={VSYNC,HREF,PCLK,D0,D1,D2,D3,D4,D5,D6,D7};
+
     gpio_config_t conf={
         .pin_bit_mask=0,
         .mode=GPIO_MODE_INPUT,
@@ -319,11 +401,13 @@ bool I2SCamera::i2sInit(
         DEBUG_PRINTLN("TARS: I2S interrupt allocation failed");
         return false;
     }
+
     return true;
 }
 
 void I2SCamera::dmaBufferInit(int bytes){
     dmaBufferDeinit();
+
     dmaBufferCount=2;
     dmaBuffer=(DMABuffer**)malloc(sizeof(DMABuffer*)*dmaBufferCount);
 
@@ -334,10 +418,12 @@ void I2SCamera::dmaBufferInit(int bytes){
 
     for(int i=0;i<dmaBufferCount;i++){
         dmaBuffer[i]=new DMABuffer(bytes);
+
         if(!dmaBuffer[i]||!dmaBuffer[i]->valid()){
             dmaBufferDeinit();
             return;
         }
+
         if(i)dmaBuffer[i-1]->next(dmaBuffer[i]);
     }
 
@@ -346,9 +432,11 @@ void I2SCamera::dmaBufferInit(int bytes){
 
 void I2SCamera::dmaBufferDeinit(){
     if(!dmaBuffer)return;
+
     for(int i=0;i<dmaBufferCount;i++){
         if(dmaBuffer[i])delete dmaBuffer[i];
     }
+
     free(dmaBuffer);
     dmaBuffer=0;
     dmaBufferCount=0;
@@ -360,7 +448,12 @@ bool I2SCamera::encodeFrameToJPEG(uint8_t*outBuffer,size_t*outLen,int quality){
 
     if(!JPEGEncoderWrapper::available())return false;
 
-    if(!JPEGEncoderWrapper::begin(outBuffer,OV7670_MAX_JPEG_SIZE,xres,yres,quality)){
+    if(!JPEGEncoderWrapper::begin(
+        outBuffer,
+        OV7670_MAX_JPEG_SIZE,
+        xres,
+        yres,
+        quality)){
         i2sStop();
         return false;
     }
@@ -397,12 +490,16 @@ bool I2SCamera::encodeFrameToJPEG(uint8_t*outBuffer,size_t*outLen,int quality){
 
         streamState[b]=3;
 
-        if(!JPEGEncoderWrapper::addBlock(streamBlock[b],xres,STREAM_LINES)){
+        if(!JPEGEncoderWrapper::addBlock(
+            streamBlock[b],
+            xres,
+            STREAM_LINES)){
             streamError=true;
             break;
         }
 
         streamState[b]=0;
+
         if(streamReady>0)streamReady--;
         encodedBlocks++;
     }
@@ -419,7 +516,10 @@ bool I2SCamera::encodeFrameToJPEG(uint8_t*outBuffer,size_t*outLen,int quality){
 
             streamState[b]=3;
 
-            if(!JPEGEncoderWrapper::addBlock(streamBlock[b],xres,STREAM_LINES)){
+            if(!JPEGEncoderWrapper::addBlock(
+                streamBlock[b],
+                xres,
+                STREAM_LINES)){
                 streamError=true;
                 break;
             }
@@ -451,6 +551,7 @@ bool I2SCamera::encodeFrameToJPEG(uint8_t*outBuffer,size_t*outLen,int quality){
     DEBUG_PRINT(encodedBlocks);
     DEBUG_PRINT(" SIZE=");
     DEBUG_PRINTLN((unsigned)*outLen);
+
     return true;
 }
 
@@ -461,6 +562,7 @@ bool I2SCamera::capturePreview(uint8_t*out){
     }
 
     memset(out,0,128*64);
+
     i2sRun();
 
     if(streamError){
@@ -492,6 +594,7 @@ bool I2SCamera::capturePreview(uint8_t*out){
         }
 
         streamState[b]=3;
+
         int y0=streamBlockY[b];
         uint16_t*f=(uint16_t*)streamBlock[b];
 
@@ -502,6 +605,7 @@ bool I2SCamera::capturePreview(uint8_t*out){
 
         for(int oy=0;oy<64;oy++){
             int sy=oy*240/64;
+
             if(sy<y0||sy>=y0+STREAM_LINES)continue;
 
             int ly=sy-y0;
@@ -509,20 +613,57 @@ bool I2SCamera::capturePreview(uint8_t*out){
             for(int ox=0;ox<128;ox++){
                 int sx=ox*320/128;
                 uint16_t p=f[ly*320+sx];
+
                 int r=(p>>11)&31;
                 int g=(p>>5)&63;
                 int bl=p&31;
                 int gray=(r*255/31+g*255/63+bl*255/31)/3;
+
                 if(gray>120)out[oy*128+ox]=1;
             }
         }
 
         streamState[b]=0;
+
         if(streamReady>0)streamReady--;
         processedBlocks++;
     }
 
     i2sStop();
+
+    /* ===== CAMERA DIAGNOSTIC OUTPUT ===== */
+    DEBUG_PRINT("TARS: CAM RAW ");
+
+    for(int i=0;i<16;i++){
+        if(diagRaw[i]<16)DEBUG_PRINT("0");
+        DEBUG_PRINT(diagRaw[i],HEX);
+        if(i<15)DEBUG_PRINT(" ");
+    }
+
+    DEBUG_PRINTLN("");
+
+    DEBUG_PRINT("TARS: CAM RGB565 ");
+
+    for(int i=0;i<8;i++){
+        if(diagRGB[i]<0x1000)DEBUG_PRINT("0");
+        if(diagRGB[i]<0x0100)DEBUG_PRINT("0");
+        if(diagRGB[i]<0x0010)DEBUG_PRINT("0");
+        DEBUG_PRINT(diagRGB[i],HEX);
+        if(i<7)DEBUG_PRINT(" ");
+    }
+
+    DEBUG_PRINTLN("");
+
+    DEBUG_PRINT("TARS: CAM DATA bytes=");
+    DEBUG_PRINT((unsigned long)diagBytes);
+    DEBUG_PRINT(" nonzero=");
+    DEBUG_PRINT((unsigned long)diagNonZero);
+    DEBUG_PRINT(" min=");
+    DEBUG_PRINT((int)diagMin);
+    DEBUG_PRINT(" max=");
+    DEBUG_PRINT((int)diagMax);
+    DEBUG_PRINTLN("");
+    /* ==================================== */
 
     bool ok=streamFrameDone&&!streamError&&processedBlocks==(yres/STREAM_LINES);
 
