@@ -318,38 +318,53 @@ void I2SCamera::dmaBufferDeinit()
 bool I2SCamera::encodeFrameToJPEG(uint8_t* outBuffer,size_t* outLen,int quality)
 {
   if(!outBuffer||!outLen)return false;
+
+  streamFill=0;
+  streamLine=0;
+  streamReady=0;
+  readyHead=0;
+  readyTail=0;
+  streamFrameDone=false;
+  streamError=false;
+
+  for(int i=0;i<STREAM_BLOCKS;i++)streamState[i]=0;
+
   if(!JPEGEncoderWrapper::begin(outBuffer,OV7670_MAX_JPEG_SIZE,xres,yres,quality))
     return false;
-  if(!i2sRun()){
-    JPEGEncoderWrapper::finish(outLen);
-    return false;
-  }
-  for(int b=0;b<STREAM_BLOCKS;b++){
-    int idx=-1;
-    uint32_t start=millis();
-    while(millis()-start<CAMERA_CAPTURE_TIMEOUT){
-      if(streamReady>0){
-        idx=readyQueue[readyTail];
-        readyTail=(readyTail+1)%STREAM_BLOCKS;
-        streamReady--;
-        break;
-      }
+
+  i2sRun();
+
+  const int blocksNeeded=(yres+STREAM_LINES-1)/STREAM_LINES;
+  int blocksDone=0;
+  uint32_t start=millis();
+
+  while(blocksDone<blocksNeeded){
+    if(millis()-start>CAMERA_CAPTURE_TIMEOUT){
+      i2sStop();
+      JPEGEncoderWrapper::finish(outLen);
+      return false;
+    }
+
+    if(streamReady<=0){
       delay(1);
+      continue;
     }
-    if(idx<0){
+
+    int idx=readyQueue[readyTail];
+    readyTail=(readyTail+1)%STREAM_BLOCKS;
+    streamReady--;
+
+    if(!JPEGEncoderWrapper::addBlock(streamBlock[idx],xres,STREAM_LINES)){
+      i2sStop();
       JPEGEncoderWrapper::finish(outLen);
       return false;
     }
-    if(!JPEGEncoderWrapper::addBlock(
-      streamBlock[idx],
-      xres,
-      STREAM_LINES
-    )){
-      JPEGEncoderWrapper::finish(outLen);
-      return false;
-    }
+
     streamState[idx]=0;
+    blocksDone++;
+    start=millis();
   }
-  streamFrameDone=true;
+
+  i2sStop();
   return JPEGEncoderWrapper::finish(outLen);
 }
