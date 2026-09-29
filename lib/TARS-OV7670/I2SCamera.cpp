@@ -33,49 +33,31 @@ static volatile bool streamFrameDone=false,streamError=false;
 void IRAM_ATTR I2SCamera::i2sInterrupt(void* arg)
 {
   I2S0.int_clr.val=I2S0.int_raw.val;
-
   unsigned char* buf=dmaBuffer[dmaBufferActive]->buffer;
   dmaBufferActive=(dmaBufferActive+1)%dmaBufferCount;
 
   int idx=streamFill;
   if(idx<0||idx>=STREAM_BLOCKS)return;
-  if(streamState[idx]!=0){
-    streamError=true;
-    return;
-  }
 
   uint8_t* dst=streamBlock[idx];
   int line=streamLine;
-
   if(line>=STREAM_LINES)return;
 
-  const int DMA_LINES=4;
-  for(int l=0;l<DMA_LINES&&line<STREAM_LINES;l++){
   int p=line*xres*2;
-  int base=l*xres*4;
+
   for(int i=0;i<xres*4;i+=4){
-    dst[p++]=buf[base+i+2];
-    dst[p++]=buf[base+i];
+    dst[p++]=buf[i+2];
+    dst[p++]=buf[i];
   }
-  line++;
-}
-streamLine=line;
+
+  streamLine++;
 
   if(streamLine>=STREAM_LINES){
-    streamBlockY[idx]=line;
-
+    streamBlockY[idx]=streamLine;
     streamState[idx]=1;
-
-    int nextHead=(readyHead+1)%STREAM_BLOCKS;
-    if(nextHead==readyTail){
-      streamError=true;
-      return;
-    }
-
     readyQueue[readyHead]=idx;
-    readyHead=nextHead;
+    readyHead=(readyHead+1)%STREAM_BLOCKS;
     streamReady++;
-
     streamFill=(streamFill+1)%STREAM_BLOCKS;
     streamLine=0;
   }
@@ -173,44 +155,41 @@ void I2SCamera::deinitVSync()
 void I2SCamera::deinit()
 {
   i2sStop();
-  dmaBufferDeinit();
-
   for(int i=0;i<STREAM_BLOCKS;i++){
     if(streamBlock[i]){
       free(streamBlock[i]);
       streamBlock[i]=nullptr;
     }
-    streamState[i]=0;
-    streamBlockY[i]=0;
   }
-
-  streamFill=0;
-  streamLine=0;
-  streamReady=0;
-  readyHead=0;
-  readyTail=0;
-  streamFrameDone=false;
-  streamError=false;
-
+  dmaBufferDeinit();
   if(frame){
     free(frame);
     frame=nullptr;
   }
-
-  frameBytes=0;
-  framePointer=0;
-
   if(i2sInterruptHandle){
     esp_intr_disable(i2sInterruptHandle);
     esp_intr_free(i2sInterruptHandle);
     i2sInterruptHandle=0;
   }
-
   if(vSyncInterruptHandle){
     esp_intr_disable(vSyncInterruptHandle);
     esp_intr_free(vSyncInterruptHandle);
     vSyncInterruptHandle=0;
   }
+}
+void I2SCamera::dmaBufferDeinit()
+{
+  if(!dmaBuffer)return;
+  for(int i=0;i<dmaBufferCount;i++){
+    if(dmaBuffer[i]){
+      delete dmaBuffer[i];
+      dmaBuffer[i]=nullptr;
+    }
+  }
+  free(dmaBuffer);
+  dmaBuffer=nullptr;
+  dmaBufferCount=0;
+  dmaBufferActive=0;
 }
 
 bool I2SCamera::init(
@@ -226,7 +205,7 @@ bool I2SCamera::init(
   frameBytes=0;
 
   i2sInit(VSYNC,HREF,PCLK,D0,D1,D2,D3,D4,D5,D6,D7);
-  dmaBufferInit(xres*2*4);
+  dmaBufferInit(xres*2*2);
   initVSync(VSYNC);
 
   for(int i=0;i<STREAM_BLOCKS;i++){
@@ -323,42 +302,18 @@ bool I2SCamera::i2sInit(
 
   return true;
 }
-
 void I2SCamera::dmaBufferInit(int bytes)
 {
   dmaBufferCount = 2;
   dmaBuffer = (DMABuffer**) malloc(sizeof(DMABuffer*) * dmaBufferCount);
-
   for(int i = 0; i < dmaBufferCount; i++)
   {
     dmaBuffer[i] = new DMABuffer(bytes);
-
     if(i)
       dmaBuffer[i-1]->next(dmaBuffer[i]);
   }
-
   dmaBuffer[dmaBufferCount - 1]->next(dmaBuffer[0]);
 }
-
-void I2SCamera::dmaBufferDeinit()
-{
-  if(!dmaBuffer){
-    dmaBufferCount=0;
-    return;
-  }
-
-  for(int i=0;i<dmaBufferCount;i++){
-    if(dmaBuffer[i]){
-      delete dmaBuffer[i];
-      dmaBuffer[i]=nullptr;
-    }
-  }
-
-  free(dmaBuffer);
-  dmaBuffer=nullptr;
-  dmaBufferCount=0;
-}
-
 bool I2SCamera::encodeFrameToJPEG(uint8_t* outBuffer,size_t* outLen,int quality)
 {
   if(!outBuffer||!outLen)return false;
@@ -383,10 +338,6 @@ bool I2SCamera::encodeFrameToJPEG(uint8_t* outBuffer,size_t* outLen,int quality)
   uint32_t start=millis();
 
   while(blocksDone<blocksNeeded){
-    if(streamError){
-  i2sStop();
-  return false;
-    }
     if(millis()-start>CAMERA_CAPTURE_TIMEOUT){
       i2sStop();
       JPEGEncoderWrapper::finish(outLen);
@@ -440,11 +391,6 @@ bool I2SCamera::capturePreview(uint8_t* out)
   uint32_t start=millis();
 
   while(blocksDone<blocksNeeded){
-    if(streamError){
-      i2sStop();
-      return false;
-    }
-
     if(millis()-start>CAMERA_CAPTURE_TIMEOUT){
       i2sStop();
       return false;
@@ -472,11 +418,11 @@ bool I2SCamera::capturePreview(uint8_t* out)
 
         uint16_t p=src[y*xres+x];
 
-        uint8_t r=(p>>11)&0x1F;
-        uint8_t g=(p>>5)&0x3F;
-        uint8_t b=p&0x1F;
+        uint8_t r=((p>>11)&0x1F)*255/31;
+        uint8_t g=((p>>5)&0x3F)*255/63;
+        uint8_t b=(p&0x1F)*255/31;
 
-        uint8_t gray=(uint8_t)((r*77+g*75+b*29)>>6);
+        uint8_t gray=(uint8_t)((r*30+g*59+b*11)/100);
 
         if(gray>55)
           out[oy*128+ox]=1;
