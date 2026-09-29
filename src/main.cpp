@@ -186,6 +186,7 @@ void drawCameraOLED(){
  uint32_t t=millis();
  bool ok=I2SCamera::capturePreview(preview);
  uint32_t dt=millis()-t;
+ I2SCamera::dmaDiagnostic();
  uint32_t nonzero=0;
  uint8_t minv=255,maxv=0;
  uint32_t sum=0;
