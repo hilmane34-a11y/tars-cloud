@@ -252,9 +252,10 @@ String visionAsk(const String&q){
  Serial.printf("TARS: VISION POST JPEG=%u JSON=%u RAM=%u/%u KB\n",
  (unsigned)jl,(unsigned)body.length(),ESP.getFreeHeap()/1024,ESP.getMaxAllocHeap()/1024);
 
- int code=h.POST(body);body="";
- Serial.printf("TARS: VISION HTTP CODE=%d\n",code);
-
+ Serial.println("TARS: VISION POST SEND...");
+int code=h.POST(body);
+Serial.printf("TARS: VISION POST RETURN code=%d\n",code);
+body="";
  String response=code>=200&&code<300?h.getString():"";
  h.end();
 
