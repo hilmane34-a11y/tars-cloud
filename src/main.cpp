@@ -1009,7 +1009,6 @@ void processQuestion(const String&q){
  String nq=normCmd(q);
  if(isPickPaperCmd(q)){runPickPaper();return;}
  if(tarsMode==MODE_OFFLINE){processOffline(q);return;}
-
  if(nq=="offline"||nq=="off line"||nq=="tars offline"||nq=="tars off line"||nq=="mode offline"||nq=="mode off line"||nq=="tars mode offline"||nq=="tars mode off line"){
   Serial.println("TARS: SWITCH ONLINE -> OFFLINE");
   tarsMode=MODE_OFFLINE;closeSTT();
@@ -1017,9 +1016,7 @@ void processQuestion(const String&q){
   oledShowText("OFFLINE","ONLINE");playLocalMP3(offline_start,offline_end,"Mode offline aktif, tuan");
   oledSetStatus("READY");Serial.println("TARS: MODE OFFLINE");return;
  }
-
  oledShowText(q,"STT");delay(500);
-
 if(needsVision(q)){
  Serial.println("TARS: ONLINE VISION REQUEST");
  oledSetStatus("VISION");
@@ -1041,7 +1038,7 @@ if(needsVision(q)){
  }
  oledShowText(answer,"VISION");
  delay(500);
- Serial.println("TARS: VISION -> TTS CAMERA REMAINS OFF");
+ Serial.println("TARS: VISION -> TTS CAMERA OFF");
  bool ok=streamAudio(String(TARS_CLOUD_URL)+"/tts",answer);
  if(visionCameraHeldOff){
   Serial.println("TARS: TTS DONE -> CAMERA ON");
