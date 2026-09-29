@@ -49,16 +49,17 @@ void IRAM_ATTR I2SCamera::i2sInterrupt(void* arg)
 
   if(line>=STREAM_LINES)return;
 
+  const int DMA_LINES=4;
+  for(int l=0;l<DMA_LINES&&line<STREAM_LINES;l++){
   int p=line*xres*2;
-
-  // Pertahankan format pixel DMA framebuffer Al-Chris:
-  // setiap 4 byte DMA -> 2 byte RGB565.
+  int base=l*xres*4;
   for(int i=0;i<xres*4;i+=4){
-    dst[p++]=buf[i+2];
-    dst[p++]=buf[i];
+    dst[p++]=buf[base+i+2];
+    dst[p++]=buf[base+i];
   }
-
-  streamLine++;
+  line++;
+}
+streamLine=line;
 
   if(streamLine>=STREAM_LINES){
     streamBlockY[idx]=line;
