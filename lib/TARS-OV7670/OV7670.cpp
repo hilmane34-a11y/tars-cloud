@@ -175,11 +175,6 @@ void OV7670::QQVGARGB565()
 
   // BRIGHTNESS
   i2c.writeRegister(ADDR,0x55,0x35);
-
-  // BLACK/WHITE PIXEL CORRECTION
-  i2c.writeRegister(ADDR,0x76,0xc0);
-
-  i2c.writeRegister(ADDR,0x6f,0x9f);
 }
 
 void OV7670::QVGARGB565()
@@ -215,9 +210,4 @@ void OV7670::QVGARGB565()
 
   // BRIGHTNESS +2
   i2c.writeRegister(ADDR,0x55,0x35);
-
-  // BLACK/WHITE PIXEL CORRECTION
-  i2c.writeRegister(ADDR,0x76,0xc0);
-
-  i2c.writeRegister(ADDR,0x6f,0x9f);
 }
