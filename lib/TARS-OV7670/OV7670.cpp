@@ -168,16 +168,13 @@ void OV7670::QQVGARGB565()
   i2c.writeRegister(ADDR,0x13,0xe7);
 
   // GAIN CEILING
-  i2c.writeRegister(ADDR,0x14,0x20);
+  i2c.writeRegister(ADDR,0x14,0x30);
 
   // EDGE / SHARPNESS
-  i2c.writeRegister(ADDR,0x3f,0x06);
-
-  // CONTRAST
-  i2c.writeRegister(ADDR,0x56,0x40);
+  i2c.writeRegister(ADDR,0x3f,0x08);
 
   // BRIGHTNESS
-  i2c.writeRegister(ADDR,0x55,0x30);
+  i2c.writeRegister(ADDR,0x55,0x35);
 
   // BLACK/WHITE PIXEL CORRECTION
   i2c.writeRegister(ADDR,0x76,0xc0);
@@ -211,16 +208,13 @@ void OV7670::QVGARGB565()
   i2c.writeRegister(ADDR,0x13,0xe7);
 
   // GAIN CEILING - lebih rendah untuk mengurangi noise
-  i2c.writeRegister(ADDR,0x14,0x20);
+  i2c.writeRegister(ADDR,0x14,0x30);
 
   // EDGE ENHANCEMENT - ringan agar detail naik
-  i2c.writeRegister(ADDR,0x3f,0x06);
-
-  // CONTRAST NORMAL
-  i2c.writeRegister(ADDR,0x56,0x40);
+  i2c.writeRegister(ADDR,0x3f,0x08);
 
   // BRIGHTNESS +2
-  i2c.writeRegister(ADDR,0x55,0x30);
+  i2c.writeRegister(ADDR,0x55,0x35);
 
   // BLACK/WHITE PIXEL CORRECTION
   i2c.writeRegister(ADDR,0x76,0xc0);
