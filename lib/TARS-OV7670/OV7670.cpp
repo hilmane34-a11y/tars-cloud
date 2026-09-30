@@ -20,7 +20,7 @@ OV7670::OV7670(
   const int D7)
   :i2c(SIOD,SIOC)
 {
-  ClockEnable(XCLK,20000000);
+  ClockEnable(XCLK,8000000);
 
   DEBUG_PRINT("Waiting for VSYNC...");
   pinMode(VSYNC,INPUT);
@@ -49,11 +49,11 @@ OV7670::OV7670(
       QQVGARGB565();
       break;
 
-case QQQVGA_RGB565:
-  xres=80;
-  yres=60;
-  QQQVGARGB565();
-  break;
+    case QQQVGA_RGB565:
+      xres=80;
+      yres=60;
+      QQQVGA();
+      break;
 
     default:
       xres=0;
@@ -156,21 +156,7 @@ void OV7670::QQVGARGB565()
   i2c.writeRegister(ADDR,0x13,0xe7);
   i2c.writeRegister(ADDR,0x6f,0x9f);
 }
-void OV7670::QQQVGARGB565(){
-  i2c.writeRegister(ADDR,REG_COM7,0b10000000);
-  i2c.writeRegister(ADDR,REG_CLKRC,0b10000000);
-  i2c.writeRegister(ADDR,REG_COM11,0b1000|0b10);
-  i2c.writeRegister(ADDR,REG_COM7,0b100);
-  i2c.writeRegister(ADDR,REG_COM15,0b11000000|0b010000);
-  QQQVGA();
-  frameControl(196,52,8,488);
-  i2c.writeRegister(ADDR,0xb0,0x84);
-  saturation(0);
-  i2c.writeRegister(ADDR,0x13,0xe7);
-  i2c.writeRegister(ADDR,0x6f,0x9f);
-  i2c.writeRegister(ADDR,0x14,0x38);
-  i2c.writeRegister(ADDR,0x55,0x00);
-}
+
 void OV7670::QVGARGB565()
 {
   i2c.writeRegister(ADDR,REG_COM7,0b10000000);
@@ -179,8 +165,9 @@ void OV7670::QVGARGB565()
   i2c.writeRegister(ADDR,REG_COM7,0b100);
   i2c.writeRegister(ADDR,REG_COM15,0b11000000|0b010000);
   QVGA();
- frameControl(168,24,12,492);
+  frameControl(168,24,12,492);
+  i2c.writeRegister(ADDR,0xb0,0x84);
   saturation(0);
-i2c.writeRegister(ADDR,0x13,0xe7);
-i2c.writeRegister(ADDR,0x6f,0x9f);
+  i2c.writeRegister(ADDR,0x13,0xe7);
+  i2c.writeRegister(ADDR,0x14,0x18);
 }
