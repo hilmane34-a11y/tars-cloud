@@ -20,7 +20,7 @@ OV7670::OV7670(
   const int D7)
   :i2c(SIOD,SIOC)
 {
-  ClockEnable(XCLK,8000000);
+  ClockEnable(XCLK,9000000);
 
   DEBUG_PRINT("Waiting for VSYNC...");
   pinMode(VSYNC,INPUT);
@@ -155,7 +155,7 @@ void OV7670::QQVGARGB565()
 
   i2c.writeRegister(ADDR,0xb0,0x84);
 
-  // RGB565 color matrix
+  // RGB565 COLOR MATRIX
   i2c.writeRegister(ADDR,0x4f,0xb3);
   i2c.writeRegister(ADDR,0x50,0xb3);
   i2c.writeRegister(ADDR,0x51,0x00);
@@ -164,14 +164,23 @@ void OV7670::QQVGARGB565()
   i2c.writeRegister(ADDR,0x54,0xe4);
   i2c.writeRegister(ADDR,0x58,0x9e);
 
-  // AEC + AGC + AWB
+  // AUTO EXPOSURE + AUTO GAIN + AUTO WHITE BALANCE
   i2c.writeRegister(ADDR,0x13,0xe7);
 
-  // Gain ceiling
-  i2c.writeRegister(ADDR,0x14,0x48);
+  // GAIN CEILING
+  i2c.writeRegister(ADDR,0x14,0x40);
 
-  // Brightness +3
-  i2c.writeRegister(ADDR,0x55,0x48);
+  // EDGE / SHARPNESS
+  i2c.writeRegister(ADDR,0x3f,0x10);
+
+  // CONTRAST
+  i2c.writeRegister(ADDR,0x56,0x40);
+
+  // BRIGHTNESS
+  i2c.writeRegister(ADDR,0x55,0x30);
+
+  // BLACK/WHITE PIXEL CORRECTION
+  i2c.writeRegister(ADDR,0x76,0xc0);
 
   i2c.writeRegister(ADDR,0x6f,0x9f);
 }
@@ -189,7 +198,7 @@ void OV7670::QVGARGB565()
 
   i2c.writeRegister(ADDR,0xb0,0x84);
 
-  // RGB565 color matrix
+  // RGB565 COLOR MATRIX
   i2c.writeRegister(ADDR,0x4f,0xb3);
   i2c.writeRegister(ADDR,0x50,0xb3);
   i2c.writeRegister(ADDR,0x51,0x00);
@@ -198,14 +207,23 @@ void OV7670::QVGARGB565()
   i2c.writeRegister(ADDR,0x54,0xe4);
   i2c.writeRegister(ADDR,0x58,0x9e);
 
-  // AEC + AGC + AWB
+  // AUTO EXPOSURE + AUTO GAIN + AUTO WHITE BALANCE
   i2c.writeRegister(ADDR,0x13,0xe7);
 
-  // Gain ceiling
-  i2c.writeRegister(ADDR,0x14,0x48);
+  // GAIN CEILING - lebih rendah untuk mengurangi noise
+  i2c.writeRegister(ADDR,0x14,0x40);
 
-  // Brightness +3
-  i2c.writeRegister(ADDR,0x55,0x48);
+  // EDGE ENHANCEMENT - ringan agar detail naik
+  i2c.writeRegister(ADDR,0x3f,0x10);
+
+  // CONTRAST NORMAL
+  i2c.writeRegister(ADDR,0x56,0x40);
+
+  // BRIGHTNESS +2
+  i2c.writeRegister(ADDR,0x55,0x30);
+
+  // BLACK/WHITE PIXEL CORRECTION
+  i2c.writeRegister(ADDR,0x76,0xc0);
 
   i2c.writeRegister(ADDR,0x6f,0x9f);
 }
