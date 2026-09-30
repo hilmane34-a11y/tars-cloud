@@ -3,31 +3,28 @@
 #include "Log.h"
 
 OV7670::OV7670(
-  int XCLK,
-  int SIOD,
-  int SIOC,
-  int VSYNC,
-  int HREF,
-  int PCLK,
-  int D0,
-  int D1,
-  int D2,
-  int D3,
-  int D4,
-  int D5,
-  int D6,
-  int D7,
-  Mode m
+  OV7670::Mode m,
+  const int SIOD,
+  const int SIOC,
+  const int VSYNC,
+  const int HREF,
+  const int XCLK,
+  const int PCLK,
+  const int D0,
+  const int D1,
+  const int D2,
+  const int D3,
+  const int D4,
+  const int D5,
+  const int D6,
+  const int D7
 ):I2SCamera(),i2c(SIOD,SIOC)
 {
   ClockEnable(XCLK,20000000);
-
   DEBUG_PRINT("Waiting for VSYNC...");
   pinMode(VSYNC,INPUT);
-
   while(!digitalRead(VSYNC));
   while(digitalRead(VSYNC));
-
   DEBUG_PRINTLN(" done");
 
   mode=m;
@@ -82,206 +79,118 @@ OV7670::OV7670(
 
 void OV7670::QVGARGB565()
 {
-  i2c.writeRegister(ADDR,REG_COM7,0b10000000);
-  i2c.writeRegister(ADDR,REG_CLKRC,0b10000000);
-  i2c.writeRegister(ADDR,REG_COM11,0b1000|0b10);
-
-  i2c.writeRegister(ADDR,REG_COM7,0b100);
-  i2c.writeRegister(ADDR,REG_COM15,0b11000000|0b010000);
+  i2c.writeRegister(ADDR,REG_COM7,0x80);
+  i2c.writeRegister(ADDR,REG_CLKRC,0x80);
+  i2c.writeRegister(ADDR,REG_COM11,0x0A);
+  i2c.writeRegister(ADDR,REG_COM7,0x04);
+  i2c.writeRegister(ADDR,REG_COM15,0xD0);
 
   QVGA();
-
   frameControl(196,52,8,488);
 
-  i2c.writeRegister(ADDR,0xb0,0x84);
-
+  i2c.writeRegister(ADDR,0xB0,0x84);
   saturation(0);
 
   // AEC + AGC + AWB otomatis
-  i2c.writeRegister(ADDR,0x13,0xe7);
+  i2c.writeRegister(ADDR,REG_COM8,0xE7);
 
-  i2c.writeRegister(ADDR,0x6f,0x9f);
+  i2c.writeRegister(ADDR,0x6F,0x9F);
 }
 
 void OV7670::QVGA()
 {
   i2c.writeRegister(ADDR,REG_COM3,0x04);
   i2c.writeRegister(ADDR,REG_COM14,0x19);
-
-  i2c.writeRegister(
-    ADDR,
-    REG_SCALING_XSC,
-    0x3a
-  );
-
-  i2c.writeRegister(
-    ADDR,
-    REG_SCALING_YSC,
-    0x35
-  );
-
-  i2c.writeRegister(
-    ADDR,
-    REG_SCALING_DCWCTR,
-    0x11
-  );
-
-  i2c.writeRegister(
-    ADDR,
-    REG_SCALING_PCLK_DIV,
-    0xf1
-  );
-
-  i2c.writeRegister(
-    ADDR,
-    REG_SCALING_PCLK_DELAY,
-    0x02
-  );
+  i2c.writeRegister(ADDR,REG_SCALING_XSC,0x3A);
+  i2c.writeRegister(ADDR,REG_SCALING_YSC,0x35);
+  i2c.writeRegister(ADDR,REG_SCALING_DCWCTR,0x11);
+  i2c.writeRegister(ADDR,REG_SCALING_PCLK_DIV,0xF1);
+  i2c.writeRegister(ADDR,REG_SCALING_PCLK_DELAY,0x02);
 }
 
 void OV7670::QQVGARGB565()
 {
-  i2c.writeRegister(ADDR,REG_COM7,0b10000000);
-  i2c.writeRegister(ADDR,REG_CLKRC,0b10000000);
-  i2c.writeRegister(ADDR,REG_COM11,0b1000|0b10);
-
-  i2c.writeRegister(ADDR,REG_COM7,0b100);
-  i2c.writeRegister(ADDR,REG_COM15,0b11000000|0b010000);
+  i2c.writeRegister(ADDR,REG_COM7,0x80);
+  i2c.writeRegister(ADDR,REG_CLKRC,0x80);
+  i2c.writeRegister(ADDR,REG_COM11,0x0A);
+  i2c.writeRegister(ADDR,REG_COM7,0x04);
+  i2c.writeRegister(ADDR,REG_COM15,0xD0);
 
   QQVGA();
-
   frameControl(196,52,8,488);
 
-  i2c.writeRegister(ADDR,0xb0,0x84);
-
+  i2c.writeRegister(ADDR,0xB0,0x84);
   saturation(0);
 
   // AEC + AGC + AWB otomatis
-  i2c.writeRegister(ADDR,0x13,0xe7);
+  i2c.writeRegister(ADDR,REG_COM8,0xE7);
 
-  i2c.writeRegister(ADDR,0x6f,0x9f);
+  i2c.writeRegister(ADDR,0x6F,0x9F);
 }
 
 void OV7670::QQVGA()
 {
   i2c.writeRegister(ADDR,REG_COM3,0x04);
-  i2c.writeRegister(ADDR,REG_COM14,0x1a);
+  i2c.writeRegister(ADDR,REG_COM14,0x1A);
+  i2c.writeRegister(ADDR,REG_SCALING_XSC,0x3A);
+  i2c.writeRegister(ADDR,REG_SCALING_YSC,0x35);
+  i2c.writeRegister(ADDR,REG_SCALING_DCWCTR,0x22);
+  i2c.writeRegister(ADDR,REG_SCALING_PCLK_DIV,0xF1);
+  i2c.writeRegister(ADDR,REG_SCALING_PCLK_DELAY,0x02);
+}
 
-  i2c.writeRegister(
-    ADDR,
-    REG_SCALING_XSC,
-    0x3a
-  );
+void OV7670::QQQVGARGB565()
+{
+  i2c.writeRegister(ADDR,REG_COM7,0x80);
+  i2c.writeRegister(ADDR,REG_CLKRC,0x80);
+  i2c.writeRegister(ADDR,REG_COM11,0x0A);
+  i2c.writeRegister(ADDR,REG_COM7,0x04);
+  i2c.writeRegister(ADDR,REG_COM15,0xD0);
 
-  i2c.writeRegister(
-    ADDR,
-    REG_SCALING_YSC,
-    0x35
-  );
+  QQQVGA();
+  frameControl(196,52,8,488);
 
-  i2c.writeRegister(
-    ADDR,
-    REG_SCALING_DCWCTR,
-    0x22
-  );
+  i2c.writeRegister(ADDR,0xB0,0x84);
+  saturation(0);
 
-  i2c.writeRegister(
-    ADDR,
-    REG_SCALING_PCLK_DIV,
-    0xf1
-  );
+  // AEC + AGC + AWB otomatis
+  i2c.writeRegister(ADDR,REG_COM8,0xE7);
 
-  i2c.writeRegister(
-    ADDR,
-    REG_SCALING_PCLK_DELAY,
-    0x02
-  );
+  i2c.writeRegister(ADDR,0x6F,0x9F);
 }
 
 void OV7670::QQQVGA()
 {
   i2c.writeRegister(ADDR,REG_COM3,0x04);
-  i2c.writeRegister(ADDR,REG_COM14,0x1b);
-
-  i2c.writeRegister(
-    ADDR,
-    REG_SCALING_XSC,
-    0x3a
-  );
-
-  i2c.writeRegister(
-    ADDR,
-    REG_SCALING_YSC,
-    0x35
-  );
-
-  i2c.writeRegister(
-    ADDR,
-    REG_SCALING_DCWCTR,
-    0x33
-  );
-
-  i2c.writeRegister(
-    ADDR,
-    REG_SCALING_PCLK_DIV,
-    0xf1
-  );
-
-  i2c.writeRegister(
-    ADDR,
-    REG_SCALING_PCLK_DELAY,
-    0x02
-  );
+  i2c.writeRegister(ADDR,REG_COM14,0x1B);
+  i2c.writeRegister(ADDR,REG_SCALING_XSC,0x3A);
+  i2c.writeRegister(ADDR,REG_SCALING_YSC,0x35);
+  i2c.writeRegister(ADDR,REG_SCALING_DCWCTR,0x33);
+  i2c.writeRegister(ADDR,REG_SCALING_PCLK_DIV,0xF1);
+  i2c.writeRegister(ADDR,REG_SCALING_PCLK_DELAY,0x02);
 }
 
-void OV7670::QQQVGA_RGB565()
+void OV7670::frameControl(int hStart,int hStop,int vStart,int vStop)
 {
-  i2c.writeRegister(ADDR,REG_COM7,0b10000000);
-  i2c.writeRegister(ADDR,REG_CLKRC,0b10000000);
-  i2c.writeRegister(ADDR,REG_COM11,0b1000|0b10);
-
-  i2c.writeRegister(ADDR,REG_COM7,0b100);
-  i2c.writeRegister(ADDR,REG_COM15,0b11000000|0b010000);
-
-  QQQVGA();
-
-  frameControl(196,52,8,488);
-
-  i2c.writeRegister(ADDR,0xb0,0x84);
-
-  saturation(0);
-
-  // AEC + AGC + AWB otomatis
-  i2c.writeRegister(ADDR,0x13,0xe7);
-
-  i2c.writeRegister(ADDR,0x6f,0x9f);
-}
-
-void OV7670::frameControl(
-  uint8_t hStart,
-  uint8_t hStop,
-  uint8_t vStart,
-  uint8_t vStop
-)
-{
-  i2c.writeRegister(ADDR,REG_HSTART,hStart);
-  i2c.writeRegister(ADDR,REG_HSTOP,hStop);
-  i2c.writeRegister(ADDR,REG_HREF,
-    ((hStop&0x03)<<6)|
-    ((hStart&0x03)<<4)|
-    ((vStop&0x03)<<2)|
-    (vStart&0x03)
+  i2c.writeRegister(ADDR,REG_HSTART,(uint8_t)hStart);
+  i2c.writeRegister(ADDR,REG_HSTOP,(uint8_t)hStop);
+  i2c.writeRegister(
+    ADDR,
+    REG_HREF,
+    (((uint8_t)hStop&0x03)<<6)|
+    (((uint8_t)hStart&0x03)<<4)|
+    (((uint8_t)vStop&0x03)<<2)|
+    ((uint8_t)vStart&0x03)
   );
-
-  i2c.writeRegister(ADDR,REG_VSTART,vStart);
-  i2c.writeRegister(ADDR,REG_VSTOP,vStop);
+  i2c.writeRegister(ADDR,REG_VSTART,(uint8_t)vStart);
+  i2c.writeRegister(ADDR,REG_VSTOP,(uint8_t)vStop);
 }
 
 void OV7670::saturation(int s)
 {
-  uint8_t sat=(uint8_t)(0x5e+(0x2f*s)/2);
+  uint8_t sat=(uint8_t)(0x5E+(0x2F*s)/2);
 
-  i2c.writeRegister(ADDR,0x4f,sat);
+  i2c.writeRegister(ADDR,0x4F,sat);
   i2c.writeRegister(ADDR,0x50,sat);
   i2c.writeRegister(ADDR,0x51,0x00);
   i2c.writeRegister(ADDR,0x52,0x00);
