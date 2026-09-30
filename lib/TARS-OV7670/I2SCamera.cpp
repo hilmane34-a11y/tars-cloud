@@ -2,21 +2,21 @@
 #include "Config.h"
 #include "Log.h"
 
-int I2SCamera::blocksReceived = 0;
-int I2SCamera::framesReceived = 0;
-int I2SCamera::xres = 640;
-int I2SCamera::yres = 480;
-I2SCamera::ImageFormat I2SCamera::imageFormat = I2SCamera::FORMAT_BMP;
-gpio_num_t I2SCamera::vSyncPin = (gpio_num_t)0;
-intr_handle_t I2SCamera::i2sInterruptHandle = 0;
-intr_handle_t I2SCamera::vSyncInterruptHandle = 0;
-int I2SCamera::dmaBufferCount = 0;
-int I2SCamera::dmaBufferActive = 0;
-DMABuffer **I2SCamera::dmaBuffer = 0;
-unsigned char* I2SCamera::frame = 0;
-int I2SCamera::framePointer = 0;
-int I2SCamera::frameBytes = 0;
-volatile bool I2SCamera::stopSignal = false;
+int I2SCamera::blocksReceived=0;
+int I2SCamera::framesReceived=0;
+int I2SCamera::xres=640;
+int I2SCamera::yres=480;
+I2SCamera::ImageFormat I2SCamera::imageFormat=I2SCamera::FORMAT_BMP;
+gpio_num_t I2SCamera::vSyncPin=(gpio_num_t)0;
+intr_handle_t I2SCamera::i2sInterruptHandle=0;
+intr_handle_t I2SCamera::vSyncInterruptHandle=0;
+int I2SCamera::dmaBufferCount=0;
+int I2SCamera::dmaBufferActive=0;
+DMABuffer **I2SCamera::dmaBuffer=0;
+unsigned char* I2SCamera::frame=0;
+int I2SCamera::framePointer=0;
+int I2SCamera::frameBytes=0;
+volatile bool I2SCamera::stopSignal=false;
 
 #define STREAM_LINES 16
 #define STREAM_BLOCKS 4
@@ -29,6 +29,7 @@ static volatile int streamFill=0,streamLine=0,streamReady=0;
 static volatile int readyQueue[STREAM_BLOCKS]={0};
 static volatile int readyHead=0,readyTail=0;
 static volatile bool streamFrameDone=false,streamError=false;
+
 static uint16_t* liveFrame=nullptr;
 static volatile bool liveRunning=false;
 static volatile bool liveFrameReady=false;
@@ -39,21 +40,22 @@ void IRAM_ATTR I2SCamera::i2sInterrupt(void* arg){
   I2S0.int_clr.val=I2S0.int_raw.val;
   unsigned char* buf=dmaBuffer[dmaBufferActive]->buffer;
   dmaBufferActive=(dmaBufferActive+1)%dmaBufferCount;
+
   if(!liveRunning||!liveFrame)return;
+
   portENTER_CRITICAL_ISR(&liveMux);
-  for(int i=0;i<xres*4;i+=4){
-    if(liveWriteY<yres){
+
+  if(liveWriteY<yres){
+    for(int i=0;i<xres*4;i+=4){
       int x=i>>2;
-      if(x<xres){
-        uint16_t p=((uint16_t)buf[i+2]<<8)|buf[i];
-        liveFrame[liveWriteY*xres+x]=p;
-      }
+      if(x<xres)
+        liveFrame[liveWriteY*xres+x]=((uint16_t)buf[i+2]<<8)|buf[i];
     }
-  }
-  liveWriteY++;
-  if(liveWriteY>=yres){
-    liveWriteY=0;
-    liveFrameReady=true;
+    liveWriteY++;
+    if(liveWriteY>=yres){
+      liveWriteY=0;
+      liveFrameReady=true;
+    }
   }
   portEXIT_CRITICAL_ISR(&liveMux);
 }
