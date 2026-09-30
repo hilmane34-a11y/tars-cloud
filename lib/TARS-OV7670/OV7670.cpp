@@ -188,8 +188,7 @@ void OV7670::frameControl(int hStart,int hStop,int vStart,int vStop)
 
 void OV7670::saturation(int s)
 {
-  uint8_t sat=(uint8_t)(0x5E+(0x2F*s)/2);
-
+  uint8_t sat=(uint8_t)(0x5E + ((0x2F * s) / 2));
   i2c.writeRegister(ADDR,0x4F,sat);
   i2c.writeRegister(ADDR,0x50,sat);
   i2c.writeRegister(ADDR,0x51,0x00);
