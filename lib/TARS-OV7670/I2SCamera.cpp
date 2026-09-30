@@ -393,7 +393,7 @@ bool I2SCamera::capturePreview(uint8_t* out)
   const int blocksNeeded=(yres+STREAM_LINES-1)/STREAM_LINES;
   int blocksDone=0;
   uint32_t start=millis();
-           vTaskDelay(1);
+           
   while(blocksDone<blocksNeeded){
     if(millis()-start>CAMERA_CAPTURE_TIMEOUT){
       i2sStop();
@@ -411,8 +411,8 @@ bool I2SCamera::capturePreview(uint8_t* out)
 
     uint16_t* src=(uint16_t*)streamBlock[idx];
     int blockY=blocksDone*STREAM_LINES;
-
-    for(int y=0;y<STREAM_LINES;y++){
+     for(int y=0;y<STREAM_LINES;y++){
+    if((y&3)==0)vTaskDelay(1);
       int sy=blockY+y;
       if(sy>=yres)continue;
 
