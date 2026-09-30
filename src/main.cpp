@@ -673,10 +673,13 @@ bool startSTT(bool offline=false){
  sttWS.onEvent(sttEvent);
  sttWS.setReconnectInterval(60000);
  sttWS.enableHeartbeat(15000,5000,2);
+ Serial.println("TARS: STT PRE-CONNECT SETTLE 300ms");
+ vTaskDelay(pdMS_TO_TICKS(300));
  sttWS.beginSSL(STT_HOST,443,"/stt");
  uint32_t st=millis();
  while(!sttReady&&!sttError&&millis()-st<20000){
-  sttWS.loop();delay(2);yield();
+  sttWS.loop();
+  vTaskDelay(pdMS_TO_TICKS(5));
  }
  if(!sttReady){
   if(sttError)Serial.println(offline?"TARS: OFFLINE STT CONNECT ERROR":"TARS: STT CONNECT ERROR");
@@ -840,7 +843,13 @@ bool ttsCameraOff(){
 }
 void ttsCameraOn(bool wasOn){
  if(!wasOn)return;
- delay(50);startCamera();ramDiag("CAM-ON");
+ Serial.println("TARS: TTS DONE -> CAMERA ON");
+ vTaskDelay(pdMS_TO_TICKS(500));
+ if(startCamera(),cameraLive){
+  ramDiag("CAM-ON");
+  Serial.println("TARS: CAMERA LIVE -> STT SETTLE 800ms");
+  vTaskDelay(pdMS_TO_TICKS(800));
+ }
 }
 
 /* TTS */
