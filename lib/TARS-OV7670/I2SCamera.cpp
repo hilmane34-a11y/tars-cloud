@@ -30,25 +30,28 @@ static volatile int readyQueue[STREAM_BLOCKS]={0};
 static volatile int readyHead=0,readyTail=0;
 static volatile bool streamFrameDone=false,streamError=false;
 
-void IRAM_ATTR I2SCamera::i2sInterrupt(void* arg)
-{
+void IRAM_ATTR I2SCamera::i2sInterrupt(void* arg){
   I2S0.int_clr.val=I2S0.int_raw.val;
   unsigned char* buf=dmaBuffer[dmaBufferActive]->buffer;
   dmaBufferActive=(dmaBufferActive+1)%dmaBufferCount;
-
-  int idx=streamFill;
-  if(idx<0||idx>=STREAM_BLOCKS)return;
-
-  uint8_t* dst=streamBlock[idx];
-  int line=streamLine;
-  if(line>=STREAM_LINES)return;
-
-  int p=line*xres*2;
-
+  if(!liveRunning||!liveFrame)return;
+  portENTER_CRITICAL_ISR(&liveMux);
   for(int i=0;i<xres*4;i+=4){
-    dst[p++]=buf[i+2];
-    dst[p++]=buf[i];
+    if(liveWriteY<yres){
+      int x=i>>1;
+      if(x<xres){
+        uint16_t p=((uint16_t)buf[i+2]<<8)|buf[i];
+        liveFrame[liveWriteY*xres+x]=p;
+      }
+    }
   }
+  liveWriteY++;
+  if(liveWriteY>=yres){
+    liveWriteY=0;
+    liveFrameReady=true;
+  }
+  portEXIT_CRITICAL_ISR(&liveMux);
+}
 
   streamLine++;
 
@@ -366,6 +369,52 @@ bool I2SCamera::encodeFrameToJPEG(uint8_t* outBuffer,size_t* outLen,int quality)
   i2sStop();
   return JPEGEncoderWrapper::finish(outLen);
 }
+bool I2SCamera::startLivePreview(){
+  if(liveRunning)return true;
+  if(xres!=80||yres!=60)return false;
+  if(!liveFrame){
+    liveFrame=(uint16_t*)malloc(xres*yres*2);
+    if(!liveFrame){
+      DEBUG_PRINTLN("LIVE FRAME ALLOC FAIL");
+      return false;
+    }
+  }
+  memset(liveFrame,0,xres*yres*2);
+  liveWriteY=0;
+  liveReadY=0;
+  liveFrameReady=false;
+  liveRunning=true;
+  i2sRun();
+  DEBUG_PRINTLN("LIVE I2S START");
+  return true;
+}
+
+bool I2SCamera::updateLivePreview(uint8_t* out){
+  if(!out||!liveRunning||!liveFrame)return false;
+  bool ready=false;
+  portENTER_CRITICAL(&liveMux);
+  if(liveFrameReady){
+    liveFrameReady=false;
+    memcpy(out,liveFrame,xres*yres*2);
+    ready=true;
+  }
+  portEXIT_CRITICAL(&liveMux);
+  return ready;
+}
+
+void I2SCamera::stopLivePreview(){
+  if(!liveRunning)return;
+  liveRunning=false;
+  i2sStop();
+  if(liveFrame){
+    free(liveFrame);
+    liveFrame=nullptr;
+  }
+  liveFrameReady=false;
+  liveWriteY=0;
+  DEBUG_PRINTLN("LIVE I2S STOP");
+}
+
 bool I2SCamera::capturePreview(uint8_t* out){
   if(!out||!liveRunning||!liveFrame)return false;
   bool ready=false;
