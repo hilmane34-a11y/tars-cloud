@@ -362,6 +362,7 @@ bool I2SCamera::encodeFrameToJPEG(uint8_t* outBuffer,size_t* outLen,int quality)
     streamState[idx]=0;
     blocksDone++;
     start=millis();
+    vTaskDelay(1);
   }
 
   i2sStop();
@@ -403,6 +404,7 @@ bool I2SCamera::capturePreview(uint8_t* out)
     uint16_t* src=(uint16_t*)streamBlock[idx];
     int blockY=blocksDone*STREAM_LINES;
     for(int y=0;y<STREAM_LINES;y++){
+    if((y&3)==0)vTaskDelay(1);
       int oy=(blockY+y)*64/yres;
       if(oy>=64)continue;
       for(int x=0;x<xres;x++){
@@ -413,7 +415,7 @@ bool I2SCamera::capturePreview(uint8_t* out)
         uint8_t g=((p>>5)&0x3F)*255/63;
         uint8_t b=(p&0x1F)*255/31;
         uint8_t gray=(uint8_t)((77*r+150*g+29*b)>>8);
-  if(gray>=55)
+  if(gray>=45)
   out[oy*128+ox]=1;
       }
     }
