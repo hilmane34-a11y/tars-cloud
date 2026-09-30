@@ -275,7 +275,7 @@ bool I2SCamera::i2sInit(
   I2S0.clkm_conf.clkm_div_num = 2;
 
   I2S0.fifo_conf.dscr_en = 1;
-  I2S0.fifo_conf.rx_fifo_mod = 0;
+  I2S0.fifo_conf.rx_fifo_mod = 1;
   I2S0.fifo_conf.rx_fifo_mod_force_en = 1;
   I2S0.conf_chan.rx_chan_mod = 1;
 
@@ -415,7 +415,7 @@ bool I2SCamera::capturePreview(uint8_t* out)
         uint8_t g=((p>>5)&0x3F)*255/63;
         uint8_t b=(p&0x1F)*255/31;
         uint8_t gray=(uint8_t)((77*r+150*g+29*b)>>8);
-   if(gray<=45)out[oy*128+ox]=1;
+      if(gray>=80)out[oy*128+ox]=1;
       }
     }
     streamState[idx]=0;
