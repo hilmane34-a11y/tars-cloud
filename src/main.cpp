@@ -1065,15 +1065,18 @@ if(needsVision(q)){
  delay(500);
  Serial.println("TARS: VISION -> TTS CAMERA OFF");
  bool ok=streamAudio(String(TARS_CLOUD_URL)+"/tts",answer);
- if(visionCameraHeldOff){
-  Serial.println("TARS: TTS DONE -> CAMERA ON");
-  startCamera();
+if(visionCameraHeldOff){
+  Serial.println("TARS: TTS DONE -> CAMERA ON IN 1 SEC");
   visionCameraHeldOff=false;
- }
- oledSetStatus(ok?"LISTENING":"AUDIO ERROR");
- behaviorReset();
- return;
+  delay(1000);
+  oledSetStatus(ok?"LISTENING":"AUDIO ERROR");
+  startCamera();
+  ramDiag("VISION-CAM-ON");
+}else{
+  oledSetStatus(ok?"LISTENING":"AUDIO ERROR");
 }
+behaviorReset();
+return;
  bool status=isStatusQuery(q);String answer=status?systemStatus():ask(q);
  if(!answer.length()){oledSetStatus(status?"STATUS ERROR":"ASK ERROR");behaviorReset();return;}
 
