@@ -7,6 +7,8 @@
 #define STREAM_LINES 16
 #define STREAM_BLOCKS 2
 #define CAMERA_CAPTURE_TIMEOUT 3000
+#define CAMERA_PREVIEW_TIMEOUT 1000
+#define CAMERA_VSYNC_TIMEOUT 500
 
 int I2SCamera::blocksReceived=0;
 int I2SCamera::framesReceived=0;
@@ -81,11 +83,6 @@ void IRAM_ATTR I2SCamera::i2sInterrupt(void* arg)
 
     int next=(block+1)%STREAM_BLOCKS;
 
-    /*
-     * Buffer berikutnya harus sudah bebas.
-     * Jika JPEG belum sempat mengambil buffer sebelumnya,
-     * jangan pernah menimpanya.
-     */
     if(streamState[next]!=0){
       streamError=true;
       return;
@@ -127,14 +124,43 @@ void I2SCamera::i2sRun()
   streamReady=0;
   streamFrameDone=false;
   streamError=false;
+  stopSignal=false;
 
   for(int i=0;i<STREAM_BLOCKS;i++)
     streamState[i]=0;
 
   streamState[0]=1;
 
-  while(gpio_get_level(vSyncPin)==0);
-  while(gpio_get_level(vSyncPin)!=0);
+  uint32_t waitStart=millis();
+
+  while(gpio_get_level(vSyncPin)==0){
+    if(millis()-waitStart>=CAMERA_VSYNC_TIMEOUT){
+      streamError=true;
+      DEBUG_PRINTLN("TARS: CAMERA VSYNC LOW TIMEOUT");
+      return;
+    }
+    delay(1);
+  }
+
+  waitStart=millis();
+
+  while(gpio_get_level(vSyncPin)!=0){
+    if(millis()-waitStart>=CAMERA_VSYNC_TIMEOUT){
+      streamError=true;
+      DEBUG_PRINTLN("TARS: CAMERA VSYNC HIGH TIMEOUT");
+      return;
+    }
+    delay(1);
+  }
+
+  if(streamError)
+    return;
+
+  if(!dmaBuffer||dmaBufferCount<=0){
+    streamError=true;
+    DEBUG_PRINTLN("TARS: CAMERA DMA INVALID");
+    return;
+  }
 
   I2S0.rx_eof_num=dmaBuffer[0]->sampleCount();
   I2S0.in_link.addr=(uint32_t)&dmaBuffer[0]->descriptor;
@@ -215,6 +241,7 @@ void I2SCamera::deinit()
   streamReady=0;
   streamFrameDone=false;
   streamError=false;
+  stopSignal=false;
 }
 
 bool I2SCamera::init(
@@ -260,10 +287,6 @@ bool I2SCamera::init(
     return false;
   }
 
-  /*
-   * 320 pixel × 2 byte × 2 =
-   * 1280 byte per DMA buffer.
-   */
   dmaBufferInit(xres*2*2);
 
   if(!dmaBuffer){
@@ -454,6 +477,13 @@ bool I2SCamera::encodeFrameToJPEG(
 
   i2sRun();
 
+  if(streamError){
+    i2sStop();
+    JPEGEncoderWrapper::finish(outLen);
+    DEBUG_PRINTLN("TARS: STREAM I2S START ERROR");
+    return false;
+  }
+
   int encodedBlocks=0;
   uint32_t start=millis();
 
@@ -487,9 +517,6 @@ bool I2SCamera::encodeFrameToJPEG(
       break;
     }
 
-    /*
-     * Baru sekarang ISR boleh memakai kembali buffer.
-     */
     streamState[b]=0;
 
     if(streamReady>0)
@@ -499,10 +526,6 @@ bool I2SCamera::encodeFrameToJPEG(
     start=millis();
   }
 
-  /*
-   * Frame bisa selesai tepat ketika block terakhir
-   * belum sempat dikonsumsi oleh loop utama.
-   */
   for(int pass=0;pass<STREAM_BLOCKS;pass++){
     int b=-1;
 
@@ -587,6 +610,12 @@ bool I2SCamera::capturePreview(uint8_t* out)
 
   i2sRun();
 
+  if(streamError){
+    i2sStop();
+    DEBUG_PRINTLN("TARS: PREVIEW I2S START ERROR");
+    return false;
+  }
+
   int blocksDone=0;
   const int blocksNeeded=(yres+STREAM_LINES-1)/STREAM_LINES;
   uint32_t start=millis();
@@ -602,7 +631,7 @@ bool I2SCamera::capturePreview(uint8_t* out)
     }
 
     if(b<0){
-      if(millis()-start>CAMERA_CAPTURE_TIMEOUT){
+      if(millis()-start>CAMERA_PREVIEW_TIMEOUT){
         streamError=true;
         break;
       }
@@ -617,11 +646,13 @@ bool I2SCamera::capturePreview(uint8_t* out)
 
     for(int y=0;y<STREAM_LINES;y++){
       int oy=(blockY+y)*64/yres;
+
       if(oy>=64)
         continue;
 
       for(int x=0;x<xres;x++){
         int ox=x*128/xres;
+
         if(ox>=128)
           continue;
 
