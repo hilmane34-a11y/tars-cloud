@@ -168,10 +168,10 @@ void OV7670::QQVGARGB565()
   i2c.writeRegister(ADDR,0x13,0xe7);
 
   // GAIN CEILING
-  i2c.writeRegister(ADDR,0x14,0x40);
+  i2c.writeRegister(ADDR,0x14,0x20);
 
   // EDGE / SHARPNESS
-  i2c.writeRegister(ADDR,0x3f,0x10);
+  i2c.writeRegister(ADDR,0x3f,0x06);
 
   // CONTRAST
   i2c.writeRegister(ADDR,0x56,0x40);
@@ -211,10 +211,10 @@ void OV7670::QVGARGB565()
   i2c.writeRegister(ADDR,0x13,0xe7);
 
   // GAIN CEILING - lebih rendah untuk mengurangi noise
-  i2c.writeRegister(ADDR,0x14,0x40);
+  i2c.writeRegister(ADDR,0x14,0x20);
 
   // EDGE ENHANCEMENT - ringan agar detail naik
-  i2c.writeRegister(ADDR,0x3f,0x10);
+  i2c.writeRegister(ADDR,0x3f,0x06);
 
   // CONTRAST NORMAL
   i2c.writeRegister(ADDR,0x56,0x40);
