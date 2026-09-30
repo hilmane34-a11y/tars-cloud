@@ -510,7 +510,7 @@ void oledTask(void*){
 
   if(cameraLive&&!playing&&!oledText.length()){
    drawCameraOLED();
-   vTaskDelay(70);
+   vTaskDelay(500);
    continue;
   }
   if(oledText.length()&&oledTypePos<oledText.length()&&now-oledLastType>=OLED_TYPE_MS)
