@@ -373,9 +373,9 @@ bool I2SCamera::capturePreview(uint8_t* out)
 {
   if(!out)return false;
 
-  memset(out,0,128*64);
-
   static uint8_t bin[128*64];
+  memset(out,0,128*64);
+  memset(bin,0,sizeof(bin));
 
   streamFill=0;
   streamLine=0;
@@ -386,14 +386,13 @@ bool I2SCamera::capturePreview(uint8_t* out)
   streamError=false;
 
   for(int i=0;i<STREAM_BLOCKS;i++)streamState[i]=0;
-  memset(bin,0,sizeof(bin));
 
   i2sRun();
 
   const int blocksNeeded=(yres+STREAM_LINES-1)/STREAM_LINES;
   int blocksDone=0;
   uint32_t start=millis();
-           
+
   while(blocksDone<blocksNeeded){
     if(millis()-start>CAMERA_CAPTURE_TIMEOUT){
       i2sStop();
@@ -411,8 +410,8 @@ bool I2SCamera::capturePreview(uint8_t* out)
 
     uint16_t* src=(uint16_t*)streamBlock[idx];
     int blockY=blocksDone*STREAM_LINES;
-     for(int y=0;y<STREAM_LINES;y++){
-    if((y&3)==0)vTaskDelay(1);
+
+    for(int y=0;y<STREAM_LINES;y++){
       int sy=blockY+y;
       if(sy>=yres)continue;
 
@@ -441,25 +440,23 @@ bool I2SCamera::capturePreview(uint8_t* out)
 
   i2sStop();
 
-  // Majority filter 3x3 untuk membuang pixel noise tunggal
+  // Filter 3x3: buang pixel noise yang berdiri sendiri
   for(int y=1;y<63;y++){
     for(int x=1;x<127;x++){
-      int n=0;
-
-      n+=bin[(y-1)*128+(x-1)];
-      n+=bin[(y-1)*128+x];
-      n+=bin[(y-1)*128+(x+1)];
-      n+=bin[y*128+(x-1)];
-      n+=bin[y*128+x];
-      n+=bin[y*128+(x+1)];
-      n+=bin[(y+1)*128+(x-1)];
-      n+=bin[(y+1)*128+x];
-      n+=bin[(y+1)*128+(x+1)];
+      int n=
+        bin[(y-1)*128+(x-1)]+
+        bin[(y-1)*128+x]+
+        bin[(y-1)*128+(x+1)]+
+        bin[y*128+(x-1)]+
+        bin[y*128+x]+
+        bin[y*128+(x+1)]+
+        bin[(y+1)*128+(x-1)]+
+        bin[(y+1)*128+x]+
+        bin[(y+1)*128+(x+1)];
 
       if(n>=4)out[y*128+x]=1;
     }
   }
-
   return true;
 }
 void I2SCamera::dmaDiagnostic()
