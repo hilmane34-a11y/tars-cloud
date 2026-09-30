@@ -43,7 +43,7 @@ void IRAM_ATTR I2SCamera::i2sInterrupt(void* arg){
   portENTER_CRITICAL_ISR(&liveMux);
   for(int i=0;i<xres*4;i+=4){
     if(liveWriteY<yres){
-      int x=i>>1;
+      int x=i>>2;
       if(x<xres){
         uint16_t p=((uint16_t)buf[i+2]<<8)|buf[i];
         liveFrame[liveWriteY*xres+x]=p;
@@ -56,32 +56,6 @@ void IRAM_ATTR I2SCamera::i2sInterrupt(void* arg){
     liveFrameReady=true;
   }
   portEXIT_CRITICAL_ISR(&liveMux);
-}
-
-  streamLine++;
-
-  if(streamLine>=STREAM_LINES){
-    streamBlockY[idx]=streamLine;
-    streamState[idx]=1;
-    readyQueue[readyHead]=idx;
-    readyHead=(readyHead+1)%STREAM_BLOCKS;
-    streamReady++;
-    streamFill=(streamFill+1)%STREAM_BLOCKS;
-    streamLine=0;
-  }
-
-  blocksReceived++;
-
-  if(blocksReceived>=yres){
-    blocksReceived=0;
-    framesReceived++;
-    streamFrameDone=true;
-
-    if(stopSignal){
-      i2sStop();
-      stopSignal=false;
-    }
-  }
 }
 void IRAM_ATTR I2SCamera::vSyncInterrupt(void* arg)
 {
