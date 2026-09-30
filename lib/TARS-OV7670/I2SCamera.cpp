@@ -275,11 +275,11 @@ bool I2SCamera::i2sInit(
   I2S0.clkm_conf.clkm_div_num = 2;
 
   I2S0.fifo_conf.dscr_en = 1;
-  I2S0.fifo_conf.rx_fifo_mod =1;
+  I2S0.fifo_conf.rx_fifo_mod = 1;
   I2S0.fifo_conf.rx_fifo_mod_force_en = 1;
   I2S0.conf_chan.rx_chan_mod = 1;
 
-  I2S0.sample_rate_conf.rx_bits_mod = 16;
+  I2S0.sample_rate_conf.rx_bits_mod = 0;
   I2S0.conf.rx_right_first = 0;
   I2S0.conf.rx_msb_right = 0;
   I2S0.conf.rx_msb_shift = 0;
