@@ -20,7 +20,7 @@ OV7670::OV7670(
   const int D7)
   :i2c(SIOD,SIOC)
 {
-  ClockEnable(XCLK, 8MHz);
+  ClockEnable(XCLK, 7MHz);
  
   DEBUG_PRINT("Waiting for VSYNC...");
   pinMode(VSYNC,INPUT);
