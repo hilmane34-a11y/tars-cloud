@@ -24,10 +24,7 @@ public:
     FORMAT_JPEG
   };
   static void dmaDiagnostic();
-  static bool capturePreview(uint8_t*out);
-  
-  bool startLivePreview();
-  void stopLivePreview();
+  static bool capturePreview(uint8_t*out) 
   
   static ImageFormat imageFormat;
 
