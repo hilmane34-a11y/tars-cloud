@@ -1057,11 +1057,11 @@ if(needsVision(q)){
  if(!answer.length()){
   oledSetStatus("VISION ERROR");
   if(visionCameraHeldOff){
-    Serial.println("TARS: TTS DONE -> CAMERA ON IN 500ms");
+    Serial.println("TARS: VISION ERROR -> CAMERA ON IN 500ms");
     delay(500);
     startCamera();
     visionCameraHeldOff=false;
-  }
+}
   behaviorReset();
   return;
  }
