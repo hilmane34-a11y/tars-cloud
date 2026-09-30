@@ -49,11 +49,11 @@ OV7670::OV7670(
       QQVGARGB565();
       break;
 
-    case QQQVGA_RGB565:
-      xres=80;
-      yres=60;
-      QQQVGA();
-      break;
+case QQQVGA_RGB565:
+  xres=80;
+  yres=60;
+  QQQVGARGB565();
+  break;
 
     default:
       xres=0;
