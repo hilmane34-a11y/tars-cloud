@@ -41,23 +41,62 @@ void IRAM_ATTR I2SCamera::i2sInterrupt(void* arg){
   unsigned char* buf=dmaBuffer[dmaBufferActive]->buffer;
   dmaBufferActive=(dmaBufferActive+1)%dmaBufferCount;
 
-  if(!liveRunning||!liveFrame)return;
-
-  portENTER_CRITICAL_ISR(&liveMux);
-
-  if(liveWriteY<yres){
-    for(int i=0;i<xres*4;i+=4){
-      int x=i>>2;
-      if(x<xres)
-        liveFrame[liveWriteY*xres+x]=((uint16_t)buf[i+2]<<8)|buf[i];
+  if(liveRunning&&liveFrame){
+    portENTER_CRITICAL_ISR(&liveMux);
+    if(liveWriteY<yres){
+      for(int i=0;i<xres*4;i+=4){
+        int x=i>>2;
+        if(x<xres)
+          liveFrame[liveWriteY*xres+x]=((uint16_t)buf[i+2]<<8)|buf[i];
+      }
+      liveWriteY++;
+      if(liveWriteY>=yres){
+        liveWriteY=0;
+        liveFrameReady=true;
+      }
     }
-    liveWriteY++;
-    if(liveWriteY>=yres){
-      liveWriteY=0;
-      liveFrameReady=true;
+    portEXIT_CRITICAL_ISR(&liveMux);
+    return;
+  }
+
+  int idx=streamFill;
+  if(idx<0||idx>=STREAM_BLOCKS)return;
+
+  uint8_t* dst=streamBlock[idx];
+  int line=streamLine;
+  if(line>=STREAM_LINES)return;
+
+  int p=line*xres*2;
+
+  for(int i=0;i<xres*4;i+=4){
+    dst[p++]=buf[i+2];
+    dst[p++]=buf[i];
+  }
+
+  streamLine++;
+
+  if(streamLine>=STREAM_LINES){
+    streamBlockY[idx]=streamLine;
+    streamState[idx]=1;
+    readyQueue[readyHead]=idx;
+    readyHead=(readyHead+1)%STREAM_BLOCKS;
+    streamReady++;
+    streamFill=(streamFill+1)%STREAM_BLOCKS;
+    streamLine=0;
+  }
+
+  blocksReceived++;
+
+  if(blocksReceived>=yres){
+    blocksReceived=0;
+    framesReceived++;
+    streamFrameDone=true;
+
+    if(stopSignal){
+      i2sStop();
+      stopSignal=false;
     }
   }
-  portEXIT_CRITICAL_ISR(&liveMux);
 }
 void IRAM_ATTR I2SCamera::vSyncInterrupt(void* arg)
 {
