@@ -279,7 +279,7 @@ bool I2SCamera::i2sInit(
   I2S0.fifo_conf.rx_fifo_mod_force_en = 1;
   I2S0.conf_chan.rx_chan_mod = 1;
 
-  I2S0.sample_rate_conf.rx_bits_mod = 0;
+  I2S0.sample_rate_conf.rx_bits_mod = 16;
   I2S0.conf.rx_right_first = 0;
   I2S0.conf.rx_msb_right = 0;
   I2S0.conf.rx_msb_shift = 0;
@@ -366,61 +366,30 @@ bool I2SCamera::encodeFrameToJPEG(uint8_t* outBuffer,size_t* outLen,int quality)
   i2sStop();
   return JPEGEncoderWrapper::finish(outLen);
 }
-bool I2SCamera::capturePreview(uint8_t* out)
-{
-  if(!out)return false;
-  memset(out,0,128*64);
-  streamFill=0;
-  streamLine=0;
-  streamReady=0;
-  readyHead=0;
-  readyTail=0;
-  streamFrameDone=false;
-  streamError=false;
-  for(int i=0;i<STREAM_BLOCKS;i++)streamState[i]=0;
-  i2sRun();
-  const int blocksNeeded=(yres+STREAM_LINES-1)/STREAM_LINES;
-  int blocksDone=0;
-  uint32_t start=millis();
-  const int PW=80;
-  const int PH=60;
-  const int OX=24;
-  const int OY=2;
-  while(blocksDone<blocksNeeded){
-    if(millis()-start>CAMERA_CAPTURE_TIMEOUT){
-      i2sStop();
-      return false;
-    }
-    if(streamReady<=0){
-      delay(1);
-      continue;
-    }
-    int idx=readyQueue[readyTail];
-    readyTail=(readyTail+1)%STREAM_BLOCKS;
-    streamReady--;
-    uint16_t* src=(uint16_t*)streamBlock[idx];
-    int blockY=blocksDone*STREAM_LINES;
-    for(int y=0;y<STREAM_LINES;y++){
-      if((y&3)==0)vTaskDelay(1);
-      int sy=blockY+y;
-      if(sy>=PH)continue;
-      int oy=OY+sy;
-      if(oy>=64)continue;
-      for(int x=0;x<PW;x++){
-        int ox=OX+x;
-        uint16_t p=src[y*xres+x];
-        uint8_t r=((p>>11)&0x1F)*255/31;
-        uint8_t g=((p>>5)&0x3F)*255/63;
-        uint8_t b=(p&0x1F)*255/31;
-        uint8_t gray=(uint8_t)((77*r+150*g+29*b)>>8);
-        if(gray<55)out[oy*128+ox]=1;
-      }
-    }
-    streamState[idx]=0;
-    blocksDone++;
-    start=millis();
+bool I2SCamera::capturePreview(uint8_t* out){
+  if(!out||!liveRunning||!liveFrame)return false;
+  bool ready=false;
+  portENTER_CRITICAL(&liveMux);
+  if(liveFrameReady){
+    liveFrameReady=false;
+    ready=true;
   }
-  i2sStop();
+  portEXIT_CRITICAL(&liveMux);
+  if(!ready)return false;
+
+  memset(out,0,128*64);
+  const int OX=24,OY=2;
+
+  for(int y=0;y<60;y++){
+    for(int x=0;x<80;x++){
+      uint16_t p=liveFrame[y*80+x];
+      uint8_t r=((p>>11)&31)*255/31;
+      uint8_t g=((p>>5)&63)*255/63;
+      uint8_t b=(p&31)*255/31;
+      uint8_t gray=(uint8_t)((77*r+150*g+29*b)>>8);
+      if(gray<=55)out[(OY+y)*128+(OX+x)]=1;
+    }
+  }
   return true;
 }
 void I2SCamera::dmaDiagnostic()
