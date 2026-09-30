@@ -156,7 +156,21 @@ void OV7670::QQVGARGB565()
   i2c.writeRegister(ADDR,0x13,0xe7);
   i2c.writeRegister(ADDR,0x6f,0x9f);
 }
-
+void OV7670::QQQVGARGB565(){
+  i2c.writeRegister(ADDR,REG_COM7,0b10000000);
+  i2c.writeRegister(ADDR,REG_CLKRC,0b10000000);
+  i2c.writeRegister(ADDR,REG_COM11,0b1000|0b10);
+  i2c.writeRegister(ADDR,REG_COM7,0b100);
+  i2c.writeRegister(ADDR,REG_COM15,0b11000000|0b010000);
+  QQQVGA();
+  frameControl(196,52,8,488);
+  i2c.writeRegister(ADDR,0xb0,0x84);
+  saturation(0);
+  i2c.writeRegister(ADDR,0x13,0xe7);
+  i2c.writeRegister(ADDR,0x6f,0x9f);
+  i2c.writeRegister(ADDR,0x14,0x38);
+  i2c.writeRegister(ADDR,0x55,0x00);
+}
 void OV7670::QVGARGB565()
 {
   i2c.writeRegister(ADDR,REG_COM7,0b10000000);
