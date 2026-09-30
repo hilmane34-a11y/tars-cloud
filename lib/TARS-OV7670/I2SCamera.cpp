@@ -279,7 +279,7 @@ bool I2SCamera::i2sInit(
   I2S0.fifo_conf.rx_fifo_mod_force_en = 1;
   I2S0.conf_chan.rx_chan_mod = 1;
 
-  I2S0.sample_rate_conf.rx_bits_mod = 18;
+  I2S0.sample_rate_conf.rx_bits_mod = 16;
   I2S0.conf.rx_right_first = 0;
   I2S0.conf.rx_msb_right = 0;
   I2S0.conf.rx_msb_shift = 0;
@@ -375,6 +375,8 @@ bool I2SCamera::capturePreview(uint8_t* out)
 
   memset(out,0,128*64);
 
+  static uint8_t bin[128*64];
+
   streamFill=0;
   streamLine=0;
   streamReady=0;
@@ -384,46 +386,80 @@ bool I2SCamera::capturePreview(uint8_t* out)
   streamError=false;
 
   for(int i=0;i<STREAM_BLOCKS;i++)streamState[i]=0;
+  memset(bin,0,sizeof(bin));
 
   i2sRun();
+
   const int blocksNeeded=(yres+STREAM_LINES-1)/STREAM_LINES;
   int blocksDone=0;
   uint32_t start=millis();
+
   while(blocksDone<blocksNeeded){
     if(millis()-start>CAMERA_CAPTURE_TIMEOUT){
       i2sStop();
       return false;
     }
+
     if(streamReady<=0){
       delay(1);
       continue;
     }
+
     int idx=readyQueue[readyTail];
     readyTail=(readyTail+1)%STREAM_BLOCKS;
     streamReady--;
+
     uint16_t* src=(uint16_t*)streamBlock[idx];
     int blockY=blocksDone*STREAM_LINES;
+
     for(int y=0;y<STREAM_LINES;y++){
-    if((y&3)==0)vTaskDelay(1);
-      int oy=(blockY+y)*64/yres;
+      int sy=blockY+y;
+      if(sy>=yres)continue;
+
+      int oy=sy*64/yres;
       if(oy>=64)continue;
+
       for(int x=0;x<xres;x++){
         int ox=x*128/xres;
         if(ox>=128)continue;
+
         uint16_t p=src[y*xres+x];
+
         uint8_t r=((p>>11)&0x1F)*255/31;
         uint8_t g=((p>>5)&0x3F)*255/63;
         uint8_t b=(p&0x1F)*255/31;
         uint8_t gray=(uint8_t)((77*r+150*g+29*b)>>8);
-  if(gray<=45)
-  out[oy*128+ox]=1;
+
+        if(gray<=45)bin[oy*128+ox]=1;
       }
     }
+
     streamState[idx]=0;
     blocksDone++;
     start=millis();
   }
+
   i2sStop();
+
+  // Majority filter 3x3 untuk membuang pixel noise tunggal
+  for(int y=1;y<63;y++){
+    for(int x=1;x<127;x++){
+      int n=0;
+
+      n+=bin[(y-1)*128+(x-1)];
+      n+=bin[(y-1)*128+x];
+      n+=bin[(y-1)*128+(x+1)];
+      n+=bin[y*128+(x-1)];
+      n+=bin[y*128+x];
+      n+=bin[y*128+(x+1)];
+      n+=bin[(y+1)*128+(x-1)];
+      n+=bin[(y+1)*128+x];
+      n+=bin[(y+1)*128+(x+1)];
+
+      if(n>=4)out[y*128+x]=1;
+    }
+  }
+
   return true;
 }
 void I2SCamera::dmaDiagnostic()
