@@ -149,15 +149,31 @@ void OV7670::QQVGARGB565()
   i2c.writeRegister(ADDR,REG_COM11,0b1000|0b10);
   i2c.writeRegister(ADDR,REG_COM7,0b100);
   i2c.writeRegister(ADDR,REG_COM15,0b11000000|0b010000);
+
   QQVGA();
   frameControl(196,52,8,488);
+
   i2c.writeRegister(ADDR,0xb0,0x84);
-  saturation(0);
+
+  // RGB565 color matrix
+  i2c.writeRegister(ADDR,0x4f,0xb3);
+  i2c.writeRegister(ADDR,0x50,0xb3);
+  i2c.writeRegister(ADDR,0x51,0x00);
+  i2c.writeRegister(ADDR,0x52,0x3d);
+  i2c.writeRegister(ADDR,0x53,0xa7);
+  i2c.writeRegister(ADDR,0x54,0xe4);
+  i2c.writeRegister(ADDR,0x58,0x9e);
+
+  // AEC + AGC + AWB
   i2c.writeRegister(ADDR,0x13,0xe7);
-  i2c.writeRegister(ADDR,0x6f,0x9f);
+
+  // Gain ceiling
+  i2c.writeRegister(ADDR,0x14,0x48);
 
   // Brightness +3
   i2c.writeRegister(ADDR,0x55,0x48);
+
+  i2c.writeRegister(ADDR,0x6f,0x9f);
 }
 
 void OV7670::QVGARGB565()
@@ -167,13 +183,29 @@ void OV7670::QVGARGB565()
   i2c.writeRegister(ADDR,REG_COM11,0b1000|0b10);
   i2c.writeRegister(ADDR,REG_COM7,0b100);
   i2c.writeRegister(ADDR,REG_COM15,0b11000000|0b010000);
+
   QVGA();
   frameControl(168,24,12,492);
+
   i2c.writeRegister(ADDR,0xb0,0x84);
-  saturation(0);
+
+  // RGB565 color matrix
+  i2c.writeRegister(ADDR,0x4f,0xb3);
+  i2c.writeRegister(ADDR,0x50,0xb3);
+  i2c.writeRegister(ADDR,0x51,0x00);
+  i2c.writeRegister(ADDR,0x52,0x3d);
+  i2c.writeRegister(ADDR,0x53,0xa7);
+  i2c.writeRegister(ADDR,0x54,0xe4);
+  i2c.writeRegister(ADDR,0x58,0x9e);
+
+  // AEC + AGC + AWB
   i2c.writeRegister(ADDR,0x13,0xe7);
+
+  // Gain ceiling
   i2c.writeRegister(ADDR,0x14,0x48);
 
   // Brightness +3
   i2c.writeRegister(ADDR,0x55,0x48);
+
+  i2c.writeRegister(ADDR,0x6f,0x9f);
 }
