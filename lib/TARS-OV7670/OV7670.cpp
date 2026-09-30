@@ -20,7 +20,7 @@ OV7670::OV7670(
   const int D7)
   :i2c(SIOD,SIOC)
 {
-  ClockEnable(XCLK,20000000); //20mhz//
+  ClockEnable(XCLK,8000000);
 
   DEBUG_PRINT("Waiting for VSYNC...");
   pinMode(VSYNC,INPUT);
@@ -155,6 +155,9 @@ void OV7670::QQVGARGB565()
   saturation(0);
   i2c.writeRegister(ADDR,0x13,0xe7);
   i2c.writeRegister(ADDR,0x6f,0x9f);
+
+  // Brightness +3
+  i2c.writeRegister(ADDR,0x55,0x48);
 }
 
 void OV7670::QVGARGB565()
@@ -170,4 +173,7 @@ void OV7670::QVGARGB565()
   saturation(0);
   i2c.writeRegister(ADDR,0x13,0xe7);
   i2c.writeRegister(ADDR,0x14,0x48);
+
+  // Brightness +3
+  i2c.writeRegister(ADDR,0x55,0x48);
 }
