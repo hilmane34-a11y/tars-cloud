@@ -183,3 +183,4 @@ void OV7670::QVGARGB565()
   saturation(0);
 i2c.writeRegister(ADDR,0x13,0xe7);
 i2c.writeRegister(ADDR,0x6f,0x9f);
+}
