@@ -393,7 +393,7 @@ bool I2SCamera::capturePreview(uint8_t* out)
   const int blocksNeeded=(yres+STREAM_LINES-1)/STREAM_LINES;
   int blocksDone=0;
   uint32_t start=millis();
-
+           vTaskDelay(1);
   while(blocksDone<blocksNeeded){
     if(millis()-start>CAMERA_CAPTURE_TIMEOUT){
       i2sStop();
