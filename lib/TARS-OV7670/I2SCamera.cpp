@@ -29,6 +29,11 @@ static volatile int streamFill=0,streamLine=0,streamReady=0;
 static volatile int readyQueue[STREAM_BLOCKS]={0};
 static volatile int readyHead=0,readyTail=0;
 static volatile bool streamFrameDone=false,streamError=false;
+static uint16_t* liveFrame=nullptr;
+static volatile bool liveRunning=false;
+static volatile bool liveFrameReady=false;
+static volatile int liveWriteY=0;
+static portMUX_TYPE liveMux=portMUX_INITIALIZER_UNLOCKED;
 
 void IRAM_ATTR I2SCamera::i2sInterrupt(void* arg){
   I2S0.int_clr.val=I2S0.int_raw.val;
@@ -381,27 +386,12 @@ bool I2SCamera::startLivePreview(){
   }
   memset(liveFrame,0,xres*yres*2);
   liveWriteY=0;
-  liveReadY=0;
   liveFrameReady=false;
   liveRunning=true;
   i2sRun();
   DEBUG_PRINTLN("LIVE I2S START");
   return true;
 }
-
-bool I2SCamera::updateLivePreview(uint8_t* out){
-  if(!out||!liveRunning||!liveFrame)return false;
-  bool ready=false;
-  portENTER_CRITICAL(&liveMux);
-  if(liveFrameReady){
-    liveFrameReady=false;
-    memcpy(out,liveFrame,xres*yres*2);
-    ready=true;
-  }
-  portEXIT_CRITICAL(&liveMux);
-  return ready;
-}
-
 void I2SCamera::stopLivePreview(){
   if(!liveRunning)return;
   liveRunning=false;
@@ -414,7 +404,6 @@ void I2SCamera::stopLivePreview(){
   liveWriteY=0;
   DEBUG_PRINTLN("LIVE I2S STOP");
 }
-
 bool I2SCamera::capturePreview(uint8_t* out){
   if(!out||!liveRunning||!liveFrame)return false;
   bool ready=false;
@@ -425,10 +414,7 @@ bool I2SCamera::capturePreview(uint8_t* out){
   }
   portEXIT_CRITICAL(&liveMux);
   if(!ready)return false;
-
   memset(out,0,128*64);
-  const int OX=24,OY=2;
-
   for(int y=0;y<60;y++){
     for(int x=0;x<80;x++){
       uint16_t p=liveFrame[y*80+x];
@@ -436,7 +422,8 @@ bool I2SCamera::capturePreview(uint8_t* out){
       uint8_t g=((p>>5)&63)*255/63;
       uint8_t b=(p&31)*255/31;
       uint8_t gray=(uint8_t)((77*r+150*g+29*b)>>8);
-      if(gray<=55)out[(OY+y)*128+(OX+x)]=1;
+      if(gray<=55)
+        out[(y+2)*128+(x+24)]=1;
     }
   }
   return true;
