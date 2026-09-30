@@ -840,7 +840,10 @@ bool ttsCameraOff(){
 }
 void ttsCameraOn(bool wasOn){
  if(!wasOn)return;
- delay(50);startCamera();ramDiag("CAM-ON");
+ Serial.println("TARS: TTS DONE -> CAMERA ON IN 500ms");
+ delay(500);
+ startCamera();
+ ramDiag("CAM-ON");
 }
 
 /* TTS */
@@ -1054,9 +1057,10 @@ if(needsVision(q)){
  if(!answer.length()){
   oledSetStatus("VISION ERROR");
   if(visionCameraHeldOff){
-   Serial.println("TARS: VISION ERROR -> CAMERA ON");
-   startCamera();
-   visionCameraHeldOff=false;
+    Serial.println("TARS: TTS DONE -> CAMERA ON IN 500ms");
+    delay(500);
+    startCamera();
+    visionCameraHeldOff=false;
   }
   behaviorReset();
   return;
