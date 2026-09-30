@@ -25,7 +25,10 @@ public:
   };
   static void dmaDiagnostic();
   static bool capturePreview(uint8_t*out);
-
+  
+  bool startLivePreview();
+  void stopLivePreview();
+  
   static ImageFormat imageFormat;
 
   static bool encodeFrameToJPEG(
