@@ -1,6 +1,7 @@
 #pragma once
 
 #define TARS_CLOUD_URL "https://tars-cloud-v1.hilmane34.workers.dev"
+#define TARS_LIVE_TOKEN "a705b4ff366844ccb9b240a602469508"
 
 #define OLED_SDA 21
 #define OLED_SCL 22
