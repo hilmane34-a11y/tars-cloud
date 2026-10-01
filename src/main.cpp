@@ -954,8 +954,8 @@ if(needsVision(q)){
  oledSetStatus(ok?"LISTENING":"AUDIO ERROR");
  behaviorReset();
  return;
+ }
 }
-
 /* SETUP */
 void setup(){
  Serial.begin(SERIAL_BAUD);Wire.begin(OLED_SDA,OLED_SCL);Wire.setClock(400000);
@@ -999,7 +999,6 @@ void setup(){
  oledSetStatus("READY");startCamera();visionLiveBegin();ramDiag("READY");behaviorReset();
  Serial.println("TARS: LIFE READY");
 }
-
 /* LOOP */
 void loop(){
  ramMonitor();
