@@ -404,7 +404,7 @@ bool I2SCamera::capturePreview(uint8_t* out)
         uint8_t g=((p>>5)&0x3F)*255/63;
         uint8_t b=(p&0x1F)*255/31;
         uint8_t gray=(uint8_t)((77*r+150*g+29*b)>>8);
-        if(gray<=47)out[oy*128+ox]=1;
+        if(gray<=52)out[oy*128+ox]=1;
       }
     }
     streamState[idx]=0;
@@ -413,7 +413,7 @@ bool I2SCamera::capturePreview(uint8_t* out)
   }
   i2sStop();
 
-  // MEDIAN FILTER 3x3: hilangkan titik hitam terisolasi
+  // MEDIAN FILTER 3x3: pertahankan detail gelap dan kurangi noise
   for(int y=0;y<64;y++){
     for(int x=0;x<128;x++){
       int count=0,total=0;
@@ -425,7 +425,7 @@ bool I2SCamera::capturePreview(uint8_t* out)
           total++;
         }
       }
-      previewFiltered[y*128+x]=(count>total/2)?1:0;
+      previewFiltered[y*128+x]=(count>=total/2+1)?1:0;
     }
     if((y&7)==0)vTaskDelay(1);
   }
