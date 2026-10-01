@@ -732,6 +732,7 @@ void visionCameraResume(){
   startCamera();
   ramDiag("VISION-CAMERA-ON");
  }
+}
 /* TTS */
 bool streamAudio(const String&url,const String&text){
  if(!wifiOK())return false;
