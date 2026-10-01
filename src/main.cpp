@@ -1041,11 +1041,6 @@ if(needsVision(q)){
  }
  if(!answer.length()){
   oledSetStatus("VISION ERROR");
-  if(visionCameraHeldOff){
-   Serial.println("TARS: VISION ERROR -> CAMERA ON");
-   startCamera();
-   visionCameraHeldOff=false;
-  }
   behaviorReset();
   return;
  }
@@ -1053,11 +1048,6 @@ if(needsVision(q)){
  delay(500);
  Serial.println("TARS: VISION -> TTS CAMERA OFF");
  bool ok=streamAudio(String(TARS_CLOUD_URL)+"/tts",answer);
- if(visionCameraHeldOff){
-  Serial.println("TARS: TTS DONE -> CAMERA ON");
-  startCamera();
-  visionCameraHeldOff=false;
- }
  oledSetStatus(ok?"LISTENING":"AUDIO ERROR");
  behaviorReset();
  return;
@@ -1110,7 +1100,7 @@ void setup(){
  wifiManagerBegin();
  if(wifiManagerConnect(true))if(syncTime())checkTimeGreeting();
 
- oledSetStatus("READY");startCamera();ramDiag("READY");behaviorReset();
+ oledSetStatus("READY");startCamera();visionLiveBegin();ramDiag("READY");behaviorReset();
  Serial.println("TARS: LIFE READY");
 }
 
