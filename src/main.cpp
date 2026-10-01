@@ -14,6 +14,7 @@
 #include <Adafruit_SSD1306.h>
 #include <WebSocketsClient.h>
 #include <OV7670.h>
+#include "vision_live.h"
 #include "AudioTools.h"
 #include "AudioTools/AudioLibs/AudioESP32ULP.h"
 #include "AudioTools/AudioCodecs/CodecMP3Helix.h"
@@ -80,7 +81,6 @@ const uint32_t STT_RECONNECT_GUARD=60000;
 
 static int32_t rawBuf[BUF/4];
 static int16_t pcmBuf[BUF/4],preBuf[PREROLL_SAMPLES],sendBuf[256];
-static uint8_t visionJpeg[VISION_JPEG_MAX];
 
 Adafruit_SSD1306 oled(OLED_WIDTH,OLED_HEIGHT,&Wire,-1);
 AudioESP32ULP dac;
@@ -110,6 +110,9 @@ MP3SYM(offline) MP3SYM(angkat) MP3SYM(hari) MP3SYM(pagi)
 MP3SYM(siang) MP3SYM(sore) MP3SYM(malam)
 
 bool wifiOK();
+bool visionLiveEnabled() {
+return tarsMode == MODE_ONLINE;
+}
 String normCmd(String);
 bool playLocalMP3(const uint8_t*,const uint8_t*,const String&,bool=false);
 
