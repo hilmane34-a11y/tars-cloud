@@ -1034,8 +1034,7 @@ void processQuestion(const String&q){
 if(needsVision(q)){
  Serial.println("TARS: ONLINE VISION REQUEST");
  oledSetStatus("VISION");
- visionCameraHeldOff=false;
- String answer=visionAsk(q);
+ String answer=visionLiveAsk(q);
  if(!answer.length()){
   Serial.println("TARS: VISION FAILED -> ASK");
   answer=ask(q);
