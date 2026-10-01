@@ -51,7 +51,7 @@ const uint32_t MIC_RATE=16000,RECORD_MIN_MS=500,SILENCE_MS=1000,PREROLL_MS=250,O
 const int32_t MIC_THRESHOLD=12000,MIC_SILENCE=8000;
 const size_t BUF=256,PREROLL_SAMPLES=MIC_RATE*PREROLL_MS/1000;
 const int MP3_COPY_BUFFER=512;
-const size_t AUDIO_RING_SIZE=8192,AUDIO_PREBUFFER=2048,VISION_JPEG_MAX=20000;
+const size_t AUDIO_RING_SIZE=8192,AUDIO_PREBUFFER=2048,VISION_JPEG_MAX=24000;
 const char*STT_HOST="tars-cloud-v1.hilmane34.workers.dev";
 
 enum TarsMode:uint8_t{MODE_OFFLINE,MODE_ONLINE};
@@ -213,7 +213,7 @@ bool needsVision(String q){
  size_t jl=0;
  uint32_t st=millis();
  Serial.printf("TARS: VISION JPEG START RAM=%u/%u KB\n",ESP.getFreeHeap()/1024,ESP.getMaxAllocHeap()/1024);
- bool ok=I2SCamera::encodeFrameToJPEG(visionJpeg,&jl,25);
+ bool ok=I2SCamera::encodeFrameToJPEG(visionJpeg,&jl,35);
  Serial.printf("TARS: VISION JPEG RETURN=%s size=%u time=%lu ms RAM=%u/%u KB\n",
   ok?"OK":"FAIL",(unsigned)jl,(unsigned long)(millis()-st),
   ESP.getFreeHeap()/1024,ESP.getMaxAllocHeap()/1024);
@@ -671,8 +671,8 @@ bool startSTT(bool offline=false){
  sttWS.onEvent(sttEvent);
  sttWS.setReconnectInterval(60000);
  sttWS.enableHeartbeat(15000,5000,2);
- Serial.println("TARS: STT PRE-CONNECT SETTLE 300ms");
- vTaskDelay(pdMS_TO_TICKS(1000));
+ Serial.println("TARS: STT PRE-CONNECT SETTLE 1500ms");
+ vTaskDelay(pdMS_TO_TICKS(1500));
  sttWS.beginSSL(STT_HOST,443,"/stt");
  uint32_t st=millis();
  while(!sttReady&&!sttError&&millis()-st<20000){
