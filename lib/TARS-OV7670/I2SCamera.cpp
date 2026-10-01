@@ -275,7 +275,7 @@ bool I2SCamera::i2sInit(
   I2S0.clkm_conf.clkm_div_num = 2;
 
   I2S0.fifo_conf.dscr_en = 1;
-  I2S0.fifo_conf.rx_fifo_mod = 1;
+  I2S0.fifo_conf.rx_fifo_mod =1;
   I2S0.fifo_conf.rx_fifo_mod_force_en = 1;
   I2S0.conf_chan.rx_chan_mod = 1;
 
@@ -372,91 +372,63 @@ bool I2SCamera::encodeFrameToJPEG(uint8_t* outBuffer,size_t* outLen,int quality)
 bool I2SCamera::capturePreview(uint8_t* out)
 {
   if(!out)return false;
-
-  static uint8_t bin[128*64];
   memset(out,0,128*64);
-  memset(bin,0,sizeof(bin));
-
-  streamFill=0;
-  streamLine=0;
-  streamReady=0;
-  readyHead=0;
-  readyTail=0;
-  streamFrameDone=false;
-  streamError=false;
-
+  streamFill=0;streamLine=0;streamReady=0;
+  readyHead=0;readyTail=0;streamFrameDone=false;streamError=false;
   for(int i=0;i<STREAM_BLOCKS;i++)streamState[i]=0;
-
   i2sRun();
-
   const int blocksNeeded=(yres+STREAM_LINES-1)/STREAM_LINES;
   int blocksDone=0;
   uint32_t start=millis();
-
   while(blocksDone<blocksNeeded){
     if(millis()-start>CAMERA_CAPTURE_TIMEOUT){
       i2sStop();
       return false;
     }
-
-    if(streamReady<=0){
-      delay(1);
-      continue;
-    }
-
+    if(streamReady<=0){delay(1);continue;}
     int idx=readyQueue[readyTail];
     readyTail=(readyTail+1)%STREAM_BLOCKS;
     streamReady--;
-
     uint16_t* src=(uint16_t*)streamBlock[idx];
     int blockY=blocksDone*STREAM_LINES;
-
     for(int y=0;y<STREAM_LINES;y++){
-      int sy=blockY+y;
-      if(sy>=yres)continue;
-
-      int oy=sy*64/yres;
+      if((y&3)==0)vTaskDelay(1);
+      int oy=(blockY+y)*64/yres;
       if(oy>=64)continue;
-
       for(int x=0;x<xres;x++){
         int ox=x*128/xres;
         if(ox>=128)continue;
-
         uint16_t p=src[y*xres+x];
-
         uint8_t r=((p>>11)&0x1F)*255/31;
         uint8_t g=((p>>5)&0x3F)*255/63;
         uint8_t b=(p&0x1F)*255/31;
         uint8_t gray=(uint8_t)((77*r+150*g+29*b)>>8);
-
-        if(gray<=47)bin[oy*128+ox]=1;
+        if(gray<=47)out[oy*128+ox]=1;
       }
     }
-
     streamState[idx]=0;
     blocksDone++;
     start=millis();
   }
-
   i2sStop();
 
-  // Filter 3x3: buang pixel noise yang berdiri sendiri
-  for(int y=1;y<63;y++){
-    for(int x=1;x<127;x++){
-      int n=
-        bin[(y-1)*128+(x-1)]+
-        bin[(y-1)*128+x]+
-        bin[(y-1)*128+(x+1)]+
-        bin[y*128+(x-1)]+
-        bin[y*128+x]+
-        bin[y*128+(x+1)]+
-        bin[(y+1)*128+(x-1)]+
-        bin[(y+1)*128+x]+
-        bin[(y+1)*128+(x+1)];
-
-      if(n>=4)out[y*128+x]=1;
+  // MEDIAN FILTER 3x3: hilangkan titik hitam terisolasi
+  for(int y=0;y<64;y++){
+    for(int x=0;x<128;x++){
+      int count=0,total=0;
+      for(int dy=-1;dy<=1;dy++){
+        for(int dx=-1;dx<=1;dx++){
+          int nx=x+dx,ny=y+dy;
+          if(nx<0||nx>=128||ny<0||ny>=64)continue;
+          count+=out[ny*128+nx];
+          total++;
+        }
+      }
+      previewFiltered[y*128+x]=(count>total/2)?1:0;
     }
+    if((y&7)==0)vTaskDelay(1);
   }
+  memcpy(out,previewFiltered,128*64);
   return true;
 }
 void I2SCamera::dmaDiagnostic()
