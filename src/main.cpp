@@ -52,7 +52,7 @@ const uint32_t MIC_RATE=16000,RECORD_MIN_MS=500,SILENCE_MS=1000,PREROLL_MS=250,O
 const int32_t MIC_THRESHOLD=12000,MIC_SILENCE=8000;
 const size_t BUF=256,PREROLL_SAMPLES=MIC_RATE*PREROLL_MS/1000;
 const int MP3_COPY_BUFFER=512;
-const size_t AUDIO_RING_SIZE=8192,AUDIO_PREBUFFER=2048,VISION_JPEG_MAX=20000;
+const size_t AUDIO_RING_SIZE=8192,AUDIO_PREBUFFER=2048;
 const char*STT_HOST="tars-cloud-v1.hilmane34.workers.dev";
 
 enum TarsMode:uint8_t{MODE_OFFLINE,MODE_ONLINE};
@@ -195,125 +195,21 @@ void drawCameraOLED(){
 
 /* VISION */
 bool needsVision(String q){
- q.toLowerCase();
- static const char*keys[]={"ambil","lihat","lihatkan","apa ini","apa itu","benda","objek","warna","yang ada di depan","di depan saya","di depanmu","yang terlihat","terlihat apa","lihat apa"};
- for(const char*k:keys)if(q.indexOf(k)>=0)return true;
- return false;
-}
- String visionAsk(const String&q){
- Serial.printf("TARS: VISION START q=%u mode=%d\n",(unsigned)q.length(),tarsMode);
- camDiag("VISION");
- if(tarsMode!=MODE_ONLINE){Serial.println("TARS: VISION BLOCKED OFFLINE");return "";}
- if(!wifiOK()){Serial.println("TARS: VISION FAIL WIFI");return "";}
- if(!cameraLive||!camera||!cameraOK){Serial.println("TARS: VISION FAIL CAMERA NOT LIVE");return "";}
-
- if(cameraMux){
-  Serial.println("TARS: VISION MUTEX WAIT");
-  if(xSemaphoreTake(cameraMux,pdMS_TO_TICKS(1500))!=pdTRUE){
-   Serial.println("TARS: VISION MUTEX TIMEOUT");return "";
-  }
-  Serial.println("TARS: VISION MUTEX OK");
- }
-
- size_t jl=0;
- uint32_t st=millis();
- Serial.printf("TARS: VISION JPEG START RAM=%u/%u KB\n",ESP.getFreeHeap()/1024,ESP.getMaxAllocHeap()/1024);
- bool ok=I2SCamera::encodeFrameToJPEG(visionJpeg,&jl,25);
- Serial.printf("TARS: VISION JPEG RETURN=%s size=%u time=%lu ms RAM=%u/%u KB\n",
-  ok?"OK":"FAIL",(unsigned)jl,(unsigned long)(millis()-st),
-  ESP.getFreeHeap()/1024,ESP.getMaxAllocHeap()/1024);
-
- if(cameraMux)xSemaphoreGive(cameraMux);
-
- if(!ok){Serial.println("TARS: VISION JPEG ERROR");return "";}
- if(!jl){Serial.println("TARS: VISION JPEG ERROR SIZE=0");return "";}
- if(jl>VISION_JPEG_MAX){
-  Serial.printf("TARS: VISION JPEG ERROR TOO LARGE=%u\n",(unsigned)jl);return "";
- }
-
- Serial.println("TARS: VISION JPEG COMPLETE");
- delay(100);
-
- Serial.println("TARS: VISION CAMERA OFF");
- stopCamera();
- delay(150);
- visionCameraHeldOff=true;
- ramDiag("VISION-CAM-OFF");
-
- static const char B64[]="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
- WiFiClientSecure c;
- c.setInsecure();
- c.setTimeout(20000);
-
- HTTPClient h;
- String url=String(TARS_CLOUD_URL)+"/vision";
-
- Serial.println("TARS: VISION HTTPS BEGIN");
- if(!h.begin(c,url)){
-  Serial.println("TARS: VISION HTTP BEGIN FAIL");
-  return "";
- }
-
- h.setTimeout(30000);
- h.addHeader("Content-Type","application/json");
-
- size_t b64len=((jl+2)/3)*4;
- size_t bodyLen=16+q.length()+24+b64len+3;
-
- Serial.printf("TARS: VISION BODY RESERVE=%u RAM=%u/%u KB\n",
-  (unsigned)bodyLen,ESP.getFreeHeap()/1024,ESP.getMaxAllocHeap()/1024);
-
- String body;
- body.reserve(bodyLen);
-
- body="{\"question\":";
- {
-  String qs;
-  qs.reserve(q.length()+4);
-  JsonDocument jq;
-  jq.set(q);
-  serializeJson(jq,qs);
-  body+=qs;
- }
- body+=",\"image\":\"data:image/jpeg;base64,";
- for(size_t i=0;i<jl;i+=3){
-  uint32_t v=(uint32_t)visionJpeg[i]<<16;
-  if(i+1<jl)v|=(uint32_t)visionJpeg[i+1]<<8;
-  if(i+2<jl)v|=(uint32_t)visionJpeg[i+2];
-
-  body+=B64[(v>>18)&63];
-  body+=B64[(v>>12)&63];
-  body+=(i+1<jl)?B64[(v>>6)&63]:'=';
-  body+=(i+2<jl)?B64[v&63]:'=';
- }
- body+="\"}";
- Serial.printf("TARS: VISION POST JPEG=%u JSON=%u RAM=%u/%u KB\n",
-  (unsigned)jl,(unsigned)body.length(),
-  ESP.getFreeHeap()/1024,ESP.getMaxAllocHeap()/1024);
- Serial.println("TARS: VISION POST SEND...");
- int code=h.POST((uint8_t*)body.c_str(),body.length());
- Serial.printf("TARS: VISION POST RETURN code=%d\n",code);
- if(code<0){
-  Serial.printf("TARS: VISION HTTP ERROR=%s\n",h.errorToString(code).c_str());
- }
- String response;
- if(code>=200&&code<300)response=h.getString();
- h.end();
- body="";
- if(!response.length()){
-  Serial.printf("TARS: VISION HTTP EMPTY code=%d\n",code);
-  return "";
- }
- Serial.printf("TARS: VISION RESPONSE LEN=%u\n",(unsigned)response.length());
- JsonDocument r;
- if(deserializeJson(r,response)){
-  Serial.printf("TARS: VISION JSON ERROR len=%u\n",(unsigned)response.length());
-  return "";
- }
- String ans=r["response"].as<String>();
- ans.trim();
- Serial.printf("TARS: VISION DONE answer=%u chars\n",(unsigned)ans.length());
- return ans;
+  q.toLowerCase();
+  return q.indexOf("ambil")>=0 ||
+         q.indexOf("lihat")>=0 ||
+         q.indexOf("lihatkan")>=0 ||
+         q.indexOf("apa ini")>=0 ||
+         q.indexOf("apa itu")>=0 ||
+         q.indexOf("benda")>=0 ||
+         q.indexOf("objek")>=0 ||
+         q.indexOf("warna")>=0 ||
+         q.indexOf("yang ada di depan")>=0 ||
+         q.indexOf("di depan saya")>=0 ||
+         q.indexOf("di depanmu")>=0 ||
+         q.indexOf("yang terlihat")>=0 ||
+         q.indexOf("terlihat apa")>=0 ||
+         q.indexOf("lihat apa")>=0;
 }
 
 /* MEMORY MP3 */
