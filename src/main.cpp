@@ -674,7 +674,7 @@ bool startSTT(bool offline=false){
  sttWS.setReconnectInterval(60000);
  sttWS.enableHeartbeat(15000,5000,2);
  Serial.println("TARS: STT PRE-CONNECT SETTLE 300ms");
- vTaskDelay(pdMS_TO_TICKS(300));
+ vTaskDelay(pdMS_TO_TICKS(1000));
  sttWS.beginSSL(STT_HOST,443,"/stt");
  uint32_t st=millis();
  while(!sttReady&&!sttError&&millis()-st<20000){
