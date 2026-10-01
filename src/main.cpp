@@ -702,6 +702,16 @@ String stopSTT(uint32_t samples,bool offline=false){
 
 String recordSTT(bool offline){
  if(!startSTT(offline))return "";
+
+ if(visionCameraHeldOff){
+  Serial.println("TARS: STT READY -> CAMERA ON");
+  startCamera();
+  if(cameraLive){
+   visionCameraHeldOff=false;
+   ramDiag("CAMERA ON AFTER STT READY");
+  }else Serial.println("TARS: CAMERA RESTART FAILED");
+ }
+
  if(offline)oledSetStatus("READY");else oledSetListening();
 
  size_t prePos=0,preCount=0;uint32_t voiceStart=0,lastVoice=0,samples=0;bool voice=false;
@@ -752,7 +762,14 @@ String recordSTT(bool offline){
   if(!voice)Serial.println(offline?"TARS: OFFLINE MIC AUDIO TOO LOW":"TARS: MIC AUDIO TOO LOW");
   return "";
  }
- return stopSTT(samples,offline);
+  String result=stopSTT(samples,offline);
+ if(result.length()&&!(tarsMode==MODE_ONLINE&&needsVision(result))){
+  Serial.println("TARS: NORMAL QUESTION -> CAMERA OFF");
+  stopCamera();
+  visionCameraHeldOff=true;
+  ramDiag("CAMERA OFF AFTER STT");
+ }
+ return result;
 }
 
 String recordRealtime(){return recordSTT(false);}
@@ -1045,22 +1062,28 @@ void processQuestion(const String&q){
 if(needsVision(q)){
  Serial.println("TARS: ONLINE VISION REQUEST");
  oledSetStatus("VISION");
- visionCameraHeldOff=false;
  String answer=visionAsk(q);
  if(!answer.length()){
-  Serial.println("TARS: VISION FAILED -> ASK");
+  Serial.println("TARS: VISION FAILED -> CAMERA OFF -> ASK");
+  if(cameraLive){
+   stopCamera();
+   visionCameraHeldOff=true;
+  }
   answer=ask(q);
  }
  if(!answer.length()){
   oledSetStatus("VISION ERROR");
-  if(visionCameraHeldOff){
-   Serial.println("TARS: VISION ERROR -> CAMERA ON");
-   startCamera();
-   visionCameraHeldOff=false;
-  }
   behaviorReset();
   return;
  }
+ oledShowText(answer,"VISION");
+ delay(500);
+ Serial.println("TARS: VISION -> TTS CAMERA OFF");
+ bool ok=streamAudio(String(TARS_CLOUD_URL)+"/tts",answer);
+ oledSetStatus(ok?"LISTENING":"AUDIO ERROR");
+ behaviorReset();
+ return;
+}
  oledShowText(answer,"VISION");
  delay(500);
  Serial.println("TARS: VISION -> TTS CAMERA OFF");
