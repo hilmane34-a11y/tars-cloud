@@ -125,13 +125,14 @@ void OV7670::QVGARGB565(){
   i2c.writeRegister(ADDR,REG_COM11,0x0a);
   i2c.writeRegister(ADDR,REG_COM7,0x04);
   i2c.writeRegister(ADDR,REG_COM15,0xd0);
+  i2c.writeRegister(ADDR,REG_TSLB,0x04);
 
   QVGA();
   frameControl(168,24,12,492);
 
   i2c.writeRegister(ADDR,0xb0,0x84);
 
-  // RGB565 COLOR MATRIX
+  // RGB565
   i2c.writeRegister(ADDR,0x4f,0xb3);
   i2c.writeRegister(ADDR,0x50,0xb3);
   i2c.writeRegister(ADDR,0x51,0x00);
@@ -140,24 +141,22 @@ void OV7670::QVGARGB565(){
   i2c.writeRegister(ADDR,0x54,0xe4);
   i2c.writeRegister(ADDR,0x58,0x9e);
 
-  // AUTO EXPOSURE + AUTO GAIN + AUTO WHITE BALANCE
+  // UV saturation auto adjustment
+  i2c.writeRegister(ADDR,0x3d,0x40);
+
+  // Auto exposure + gain + white balance
   i2c.writeRegister(ADDR,0x13,0xe7);
-
-  // ENABLE AWB GAIN
   i2c.writeRegister(ADDR,0x41,0x08);
+  i2c.writeRegister(ADDR,0x42,0x00);
+  i2c.writeRegister(ADDR,0x6f,0x9f);
 
-  // GAIN CEILING
+  // Gain ceiling
   i2c.writeRegister(ADDR,0x14,0x30);
 
-  // AUTO COLOR / AWB
-  i2c.writeRegister(ADDR,0x42,0x00);
-
-  // EDGE / SHARPNESS: natural detail
+  // Edge/detail
   i2c.writeRegister(ADDR,0x3f,0x08);
 
-  // BRIGHTNESS: neutral
+  // Brightness / contrast
   i2c.writeRegister(ADDR,0x55,0x00);
-
-  // CONTRAST: neutral
   i2c.writeRegister(ADDR,0x56,0x40);
 }
