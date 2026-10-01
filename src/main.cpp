@@ -170,24 +170,22 @@ void drawCameraOLED(){
  if(!cameraLive||!camera||!cameraOK||!oledOK)return;
  static uint8_t preview[128*64];
  memset(preview,0,sizeof(preview));
-
  if(cameraMux){
-  if(xSemaphoreTake(cameraMux,pdMS_TO_TICKS(2500))!=pdTRUE)return;
- }
-
- bool ok=I2SCamera::capturePreview(preview);
-
- if(ok){
-  oled.clearDisplay();
-  for(int y=0;y<64;y++){
-   for(int x=0;x<128;x++){
-    if(preview[y*128+x])oled.drawPixel(x,y,SSD1306_WHITE);
-   }
+  if(xSemaphoreTake(cameraMux,pdMS_TO_TICKS(2500))!=pdTRUE){
+   Serial.println("TARS: OLED CAM MUTEX TIMEOUT");
+   return;
   }
-  oled.display();
  }
-
+ bool ok=I2SCamera::capturePreview(preview);
  if(cameraMux)xSemaphoreGive(cameraMux);
+ if(!ok){
+  Serial.println("TARS: OLED CAMERA PREVIEW FAIL");
+  return;
+ }
+ Serial.println("TARS: OLED CAMERA PREVIEW OK");
+ oled.clearDisplay();
+ for(int y=0;y<64;y++)for(int x=0;x<128;x++)if(preview[y*128+x])oled.drawPixel(x,y,SSD1306_WHITE);
+ oled.display();
 }
 
 /* VISION */
