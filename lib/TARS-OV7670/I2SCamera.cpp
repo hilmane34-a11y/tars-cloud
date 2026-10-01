@@ -23,6 +23,7 @@ volatile bool I2SCamera::stopSignal = false;
 #define CAMERA_CAPTURE_TIMEOUT 2000
 
 static uint8_t* streamBlock[STREAM_BLOCKS]={0};
+static uint8_t previewFiltered[128*64];
 static volatile uint8_t streamState[STREAM_BLOCKS]={0};
 static volatile int streamBlockY[STREAM_BLOCKS]={0};
 static volatile int streamFill=0,streamLine=0,streamReady=0;
