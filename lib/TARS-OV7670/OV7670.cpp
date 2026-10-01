@@ -27,7 +27,7 @@ OV7670::OV7670(
 }
 
 void OV7670::testImage(){
-  i2c.writeRegister(ADDR,0x71,0x35|0x80);
+  i2c.writeRegister(ADDR,0x71,0xB5);
 }
 
 void OV7670::saturation(int s){
@@ -43,10 +43,10 @@ void OV7670::saturation(int s){
 void OV7670::frameControl(int hStart,int hStop,int vStart,int vStop){
   i2c.writeRegister(ADDR,REG_HSTART,hStart>>3);
   i2c.writeRegister(ADDR,REG_HSTOP,hStop>>3);
-  i2c.writeRegister(ADDR,REG_HREF,((hStop&0b111)<<3)|(hStart&0b111));
+  i2c.writeRegister(ADDR,REG_HREF,((hStop&0x07)<<3)|(hStart&0x07));
   i2c.writeRegister(ADDR,REG_VSTART,vStart>>2);
   i2c.writeRegister(ADDR,REG_VSTOP,vStop>>2);
-  i2c.writeRegister(ADDR,REG_VREF,((vStop&0b11)<<2)|(vStart&0b11));
+  i2c.writeRegister(ADDR,REG_VREF,((vStop&0x03)<<2)|(vStart&0x03));
 }
 
 void OV7670::QQQVGA(){
@@ -90,7 +90,6 @@ void OV7670::QQVGARGB565(){
   frameControl(196,52,8,488);
 
   i2c.writeRegister(ADDR,0xb0,0x84);
-
   i2c.writeRegister(ADDR,0x4f,0xb3);
   i2c.writeRegister(ADDR,0x50,0xb3);
   i2c.writeRegister(ADDR,0x51,0x00);
@@ -99,23 +98,12 @@ void OV7670::QQVGARGB565(){
   i2c.writeRegister(ADDR,0x54,0xe4);
   i2c.writeRegister(ADDR,0x58,0x9e);
 
-  // AUTO: exposure + gain + white balance
   i2c.writeRegister(ADDR,0x13,0xe7);
   i2c.writeRegister(ADDR,0x41,0x08);
-
-  // AUTO GAIN: ceiling sedang untuk membatasi noise
   i2c.writeRegister(ADDR,0x14,0x30);
-
-  // AUTO COLOR / AWB GAIN
   i2c.writeRegister(ADDR,0x42,0x00);
-
-  // DETAIL / EDGE: ringan dan natural
   i2c.writeRegister(ADDR,0x3f,0x08);
-
-  // BRIGHTNESS: netral, exposure bekerja otomatis
   i2c.writeRegister(ADDR,0x55,0x00);
-
-  // CONTRAST: netral
   i2c.writeRegister(ADDR,0x56,0x40);
 }
 
@@ -131,7 +119,6 @@ void OV7670::QVGARGB565(){
 
   i2c.writeRegister(ADDR,0xb0,0x84);
 
-  // RGB565 COLOR MATRIX
   i2c.writeRegister(ADDR,0x4f,0xb3);
   i2c.writeRegister(ADDR,0x50,0xb3);
   i2c.writeRegister(ADDR,0x51,0x00);
@@ -140,24 +127,11 @@ void OV7670::QVGARGB565(){
   i2c.writeRegister(ADDR,0x54,0xe4);
   i2c.writeRegister(ADDR,0x58,0x9e);
 
-  // AUTO EXPOSURE + AUTO GAIN + AUTO WHITE BALANCE
   i2c.writeRegister(ADDR,0x13,0xe7);
-
-  // ENABLE AWB GAIN
   i2c.writeRegister(ADDR,0x41,0x08);
-
-  // GAIN CEILING
   i2c.writeRegister(ADDR,0x14,0x30);
-
-  // AUTO COLOR / AWB
   i2c.writeRegister(ADDR,0x42,0x00);
-
-  // EDGE / SHARPNESS: natural detail
   i2c.writeRegister(ADDR,0x3f,0x08);
-
-  // BRIGHTNESS: neutral
   i2c.writeRegister(ADDR,0x55,0x00);
-
-  // CONTRAST: neutral
   i2c.writeRegister(ADDR,0x56,0x40);
 }
