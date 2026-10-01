@@ -173,13 +173,14 @@ void drawCameraOLED(){
  if(!cameraLive||!camera||!cameraOK||!oledOK)return;
  static uint8_t preview[128*64];
  memset(preview,0,sizeof(preview));
-
  if(cameraMux){
   if(xSemaphoreTake(cameraMux,pdMS_TO_TICKS(2500))!=pdTRUE)return;
  }
-
+ if(!cameraLive||!camera||!cameraOK){
+  if(cameraMux)xSemaphoreGive(cameraMux);
+  return;
+ }
  bool ok=I2SCamera::capturePreview(preview);
-
  if(ok){
   oled.clearDisplay();
   for(int y=0;y<64;y++){
@@ -189,10 +190,8 @@ void drawCameraOLED(){
   }
   oled.display();
  }
-
  if(cameraMux)xSemaphoreGive(cameraMux);
 }
-
 /* VISION */
 bool needsVision(String q){
   q.toLowerCase();
@@ -727,7 +726,13 @@ void ttsCameraOn(bool wasOn){
  if(!wasOn)return;
  delay(50);startCamera();ramDiag("CAM-ON");
 }
-
+void visionCameraResume(){
+ if(tarsMode!=MODE_ONLINE)return;
+ if(!cameraLive){
+  Serial.println("TARS: VISION CAMERA RESUME");
+  startCamera();
+  ramDiag("VISION-CAMERA-ON");
+ }
 /* TTS */
 bool streamAudio(const String&url,const String&text){
  if(!wifiOK())return false;
@@ -936,6 +941,7 @@ if(needsVision(q)){
   answer=ask(q);
  }
  if(!answer.length()){
+  visionCameraResume();
   oledSetStatus("VISION ERROR");
   behaviorReset();
   return;
@@ -944,16 +950,10 @@ if(needsVision(q)){
  delay(500);
  Serial.println("TARS: VISION -> TTS CAMERA OFF");
  bool ok=streamAudio(String(TARS_CLOUD_URL)+"/tts",answer);
+ visionCameraResume();
  oledSetStatus(ok?"LISTENING":"AUDIO ERROR");
  behaviorReset();
  return;
-}
- bool status=isStatusQuery(q);String answer=status?systemStatus():ask(q);
- if(!answer.length()){oledSetStatus(status?"STATUS ERROR":"ASK ERROR");behaviorReset();return;}
-
- oledShowText(answer,"ASK");delay(500);
- bool ok=streamAudio(String(TARS_CLOUD_URL)+"/tts",answer);
- oledSetStatus(ok?"LISTENING":"AUDIO ERROR");behaviorReset();
 }
 
 /* SETUP */
