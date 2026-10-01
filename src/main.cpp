@@ -89,25 +89,17 @@ WAVDecoder wav;
 WebSocketsClient sttWS;
 OV7670*camera=nullptr;
 
-/* GPIO 21/22 SHARED BUS */
-SemaphoreHandle_t cameraMux=nullptr;
-SemaphoreHandle_t busMux=nullptr;
+/* GPIO21/22 SHARED BUS */
+SemaphoreHandle_t cameraMux=nullptr,busMux=nullptr;
 bool visionCameraHeldOff=false;
 
 bool busLock(uint32_t ms=2500){
-    if(!busMux)return true;
-    return xSemaphoreTake(busMux,pdMS_TO_TICKS(ms))==pdTRUE;
+    return !busMux||xSemaphoreTake(busMux,pdMS_TO_TICKS(ms))==pdTRUE;
 }
-void busUnlock(){
-    if(busMux)xSemaphoreGive(busMux);
-}
+void busUnlock(){if(busMux)xSemaphoreGive(busMux);}
 void oledDisplaySafe(){
-    if(!busLock(2500)){
-        Serial.println("TARS: OLED BUS MUTEX TIMEOUT");
-        return;
-    }
-    oled.display();
-    busUnlock();
+    if(!busLock(2500)){Serial.println("TARS: OLED BUS MUTEX TIMEOUT");return;}
+    oled.display();busUnlock();
 }
 
 void ramDiag(const char*tag){
@@ -134,58 +126,51 @@ bool playLocalMP3(const uint8_t*,const uint8_t*,const String&,bool=false);
 
 /* CAMERA DIAGNOSTIC */
 void camDiag(const char*tag){
-    Serial.printf("TARS: CAM[%s] live=%d ok=%d ptr=%p oled=%d play=%d text=%u RAM=%u/%u KB\n",
-        tag,cameraLive,cameraOK,camera,oledOK,playing,(unsigned)oledText.length(),
-        ESP.getFreeHeap()/1024,ESP.getMaxAllocHeap()/1024);
+    Serial.printf("TARS: CAM[%s] live=%d ok=%d ptr=%p oled=%d play=%d text=%u RAM=%u/%u KB\n",tag,cameraLive,cameraOK,camera,oledOK,playing,(unsigned)oledText.length(),ESP.getFreeHeap()/1024,ESP.getMaxAllocHeap()/1024);
 }
 
 /* CAMERA */
 bool initCamera(){
-    if(!camera){
-        Serial.println("TARS: CAM INIT START");
-        Serial.printf("TARS: CAM CONFIG QVGA RGB565 D0..D7=%d,%d,%d,%d,%d,%d,%d,%d XCLK=%d PCLK=%d VSYNC=%d HREF=%d SCCB=%d/%d\n",
-            CAM_D0,CAM_D1,CAM_D2,CAM_D3,CAM_D4,CAM_D5,CAM_D6,CAM_D7,
-            CAM_XCLK,CAM_PCLK,CAM_VSYNC,CAM_HREF,CAM_SIOD,CAM_SIOC);
-
-        if(cameraMux&&!xSemaphoreTake(cameraMux,pdMS_TO_TICKS(2500))){
-            Serial.println("TARS: CAM INIT CAMERA MUTEX TIMEOUT");
-            return false;
-        }
-
-        if(!busLock(2500)){
-            if(cameraMux)xSemaphoreGive(cameraMux);
-            Serial.println("TARS: CAM INIT BUS MUTEX TIMEOUT");
-            return false;
-        }
-
-        camera=new OV7670(OV7670::Mode::QVGA_RGB565,CAM_SIOD,CAM_SIOC,
-            CAM_VSYNC,CAM_HREF,CAM_XCLK,CAM_PCLK,
-            CAM_D0,CAM_D1,CAM_D2,CAM_D3,CAM_D4,CAM_D5,CAM_D6,CAM_D7);
-
-        busUnlock();
-        if(cameraMux)xSemaphoreGive(cameraMux);
-
-        if(!camera){
-            Serial.println("TARS: CAM INIT FAIL ALLOC");
-            cameraOK=cameraLive=false;
-            return false;
-        }
-
-        Serial.printf("TARS: CAM OBJECT ptr=%p res=%dx%d\n",camera,camera->xres,camera->yres);
-        cameraOK=camera->xres==320&&camera->yres==240;
-
-        if(!cameraOK){
-            Serial.println("TARS: CAM INIT FAIL INVALID RES");
-            if(cameraMux)xSemaphoreTake(cameraMux,portMAX_DELAY);
-            if(busLock(2500)){delete camera;camera=nullptr;busUnlock();}
-            if(cameraMux)xSemaphoreGive(cameraMux);
-            return false;
-        }
-        cameraLive=true;
-    }else{
+    if(camera){
         Serial.println("TARS: CAM INIT SKIP ptr already valid");
+        cameraLive=true;cameraOK=camera->xres==320&&camera->yres==240;
+        return cameraOK;
     }
 
+    Serial.println("TARS: CAM INIT START");
+    Serial.printf("TARS: CAM CONFIG QVGA RGB565 D0..D7=%d,%d,%d,%d,%d,%d,%d,%d XCLK=%d PCLK=%d VSYNC=%d HREF=%d SCCB=%d/%d\n",
+        CAM_D0,CAM_D1,CAM_D2,CAM_D3,CAM_D4,CAM_D5,CAM_D6,CAM_D7,CAM_XCLK,CAM_PCLK,CAM_VSYNC,CAM_HREF,CAM_SIOD,CAM_SIOC);
+
+    if(cameraMux&&!xSemaphoreTake(cameraMux,pdMS_TO_TICKS(2500))){
+        Serial.println("TARS: CAM INIT CAMERA MUTEX TIMEOUT");return false;
+    }
+    if(!busLock(2500)){
+        if(cameraMux)xSemaphoreGive(cameraMux);
+        Serial.println("TARS: CAM INIT BUS MUTEX TIMEOUT");return false;
+    }
+
+    /* Constructor OV7670 memakai SCCB GPIO21/22 di sini. */
+    camera=new OV7670(OV7670::Mode::QVGA_RGB565,CAM_SIOD,CAM_SIOC,CAM_VSYNC,CAM_HREF,CAM_XCLK,CAM_PCLK,CAM_D0,CAM_D1,CAM_D2,CAM_D3,CAM_D4,CAM_D5,CAM_D6,CAM_D7);
+
+    busUnlock();
+    if(cameraMux)xSemaphoreGive(cameraMux);
+
+    if(!camera){
+        Serial.println("TARS: CAM INIT FAIL ALLOC");
+        cameraOK=cameraLive=false;return false;
+    }
+
+    Serial.printf("TARS: CAM OBJECT ptr=%p res=%dx%d\n",camera,camera->xres,camera->yres);
+    cameraOK=camera->xres==320&&camera->yres==240;
+    if(!cameraOK){
+        Serial.println("TARS: CAM INIT FAIL INVALID RES");
+        if(cameraMux)xSemaphoreTake(cameraMux,portMAX_DELAY);
+        if(busLock(2500)){delete camera;camera=nullptr;busUnlock();}
+        if(cameraMux)xSemaphoreGive(cameraMux);
+        cameraLive=false;return false;
+    }
+
+    cameraLive=true;
     Serial.println("TARS: CAM INIT OK QVGA 320x240");
     camDiag("LIVE");
     return true;
@@ -197,29 +182,22 @@ void stopCamera(){
 
     if(!camera){
         cameraLive=false;cameraOK=false;
-        Serial.println("TARS: CAM STOP SKIP NULL");
-        return;
+        Serial.println("TARS: CAM STOP SKIP NULL");return;
     }
 
     if(cameraMux&&!xSemaphoreTake(cameraMux,portMAX_DELAY)){
-        Serial.println("TARS: CAM STOP MUTEX FAIL");
-        return;
+        Serial.println("TARS: CAM STOP MUTEX FAIL");return;
     }
-
     if(!busLock(2500)){
         if(cameraMux)xSemaphoreGive(cameraMux);
-        Serial.println("TARS: CAM STOP BUS MUTEX TIMEOUT");
-        return;
+        Serial.println("TARS: CAM STOP BUS MUTEX TIMEOUT");return;
     }
 
     cameraLive=false;
-    delete camera;
-    camera=nullptr;
-    cameraOK=false;
+    delete camera;camera=nullptr;cameraOK=false;
 
     busUnlock();
     if(cameraMux)xSemaphoreGive(cameraMux);
-
     delay(40);
     camDiag("OFF");
     Serial.println("TARS: CAM STOP DONE");
@@ -229,13 +207,11 @@ void startCamera(){
     Serial.println("TARS: CAM START REQUEST");
     camDiag("START-BEFORE");
     if(cameraLive){
-        Serial.println("TARS: CAM START SKIP ALREADY LIVE");
-        return;
+        Serial.println("TARS: CAM START SKIP ALREADY LIVE");return;
     }
     delay(40);
     if(!initCamera()){
-        Serial.println("TARS: CAM START FAIL");
-        return;
+        Serial.println("TARS: CAM START FAIL");return;
     }
     cameraLive=true;
     Serial.println("TARS: CAM LIVE");
@@ -249,32 +225,25 @@ void drawCameraOLED(){
     memset(preview,0,sizeof(preview));
 
     if(cameraMux&&!xSemaphoreTake(cameraMux,pdMS_TO_TICKS(2500))){
-        Serial.println("TARS: OLED CAM MUTEX TIMEOUT");
-        return;
+        Serial.println("TARS: OLED CAM MUTEX TIMEOUT");return;
     }
-
     if(!busLock(2500)){
         if(cameraMux)xSemaphoreGive(cameraMux);
-        Serial.println("TARS: OLED CAM BUS MUTEX TIMEOUT");
-        return;
+        Serial.println("TARS: OLED CAM BUS MUTEX TIMEOUT");return;
     }
 
     bool ok=I2SCamera::capturePreview(preview);
     if(ok){
         oled.clearDisplay();
-        for(int y=0;y<64;y++)
-            for(int x=0;x<128;x++)
-                if(preview[y*128+x])oled.drawPixel(x,y,SSD1306_WHITE);
+        for(int y=0;y<64;y++)for(int x=0;x<128;x++)
+            if(preview[y*128+x])oled.drawPixel(x,y,SSD1306_WHITE);
         oled.display();
     }
 
     busUnlock();
     if(cameraMux)xSemaphoreGive(cameraMux);
 
-    if(!ok){
-        Serial.println("TARS: OLED CAMERA PREVIEW FAIL");
-        return;
-    }
+    if(!ok){Serial.println("TARS: OLED CAMERA PREVIEW FAIL");return;}
     Serial.println("TARS: OLED CAMERA PREVIEW OK");
 }
 
@@ -290,97 +259,49 @@ String visionAsk(const String&q){
     Serial.printf("TARS: VISION START q=%u mode=%d\n",(unsigned)q.length(),tarsMode);
     camDiag("VISION");
 
-    if(tarsMode!=MODE_ONLINE){
-        Serial.println("TARS: VISION BLOCKED OFFLINE");
-        return "";
-    }
-    if(!wifiOK()){
-        Serial.println("TARS: VISION FAIL WIFI");
-        return "";
-    }
-    if(!cameraLive||!camera||!cameraOK){
-        Serial.println("TARS: VISION FAIL CAMERA NOT LIVE");
-        return "";
-    }
+    if(tarsMode!=MODE_ONLINE){Serial.println("TARS: VISION BLOCKED OFFLINE");return "";}
+    if(!wifiOK()){Serial.println("TARS: VISION FAIL WIFI");return "";}
+    if(!cameraLive||!camera||!cameraOK){Serial.println("TARS: VISION FAIL CAMERA NOT LIVE");return "";}
 
     if(cameraMux&&!xSemaphoreTake(cameraMux,pdMS_TO_TICKS(1500))){
-        Serial.println("TARS: VISION MUTEX TIMEOUT");
-        return "";
+        Serial.println("TARS: VISION MUTEX TIMEOUT");return "";
     }
-
     if(!busLock(2500)){
         if(cameraMux)xSemaphoreGive(cameraMux);
-        Serial.println("TARS: VISION BUS MUTEX TIMEOUT");
-        return "";
+        Serial.println("TARS: VISION BUS MUTEX TIMEOUT");return "";
     }
 
-    size_t jl=0;
-    uint32_t st=millis();
+    size_t jl=0;uint32_t st=millis();
     Serial.printf("TARS: VISION JPEG START RAM=%u/%u KB\n",ESP.getFreeHeap()/1024,ESP.getMaxAllocHeap()/1024);
-
     bool ok=I2SCamera::encodeFrameToJPEG(visionJpeg,&jl,35);
-
-    Serial.printf("TARS: VISION JPEG RETURN=%s size=%u time=%lu ms RAM=%u/%u KB\n",
-        ok?"OK":"FAIL",(unsigned)jl,(unsigned long)(millis()-st),
-        ESP.getFreeHeap()/1024,ESP.getMaxAllocHeap()/1024);
+    Serial.printf("TARS: VISION JPEG RETURN=%s size=%u time=%lu ms RAM=%u/%u KB\n",ok?"OK":"FAIL",(unsigned)jl,(unsigned long)(millis()-st),ESP.getFreeHeap()/1024,ESP.getMaxAllocHeap()/1024);
 
     busUnlock();
     if(cameraMux)xSemaphoreGive(cameraMux);
 
-    if(!ok){
-        Serial.println("TARS: VISION JPEG ERROR");
-        return "";
-    }
-    if(!jl){
-        Serial.println("TARS: VISION JPEG ERROR SIZE=0");
-        return "";
-    }
-    if(jl>VISION_JPEG_MAX){
-        Serial.printf("TARS: VISION JPEG ERROR TOO LARGE=%u\n",(unsigned)jl);
-        return "";
-    }
+    if(!ok){Serial.println("TARS: VISION JPEG ERROR");return "";}
+    if(!jl){Serial.println("TARS: VISION JPEG ERROR SIZE=0");return "";}
+    if(jl>VISION_JPEG_MAX){Serial.printf("TARS: VISION JPEG ERROR TOO LARGE=%u\n",(unsigned)jl);return "";}
 
     Serial.println("TARS: VISION JPEG COMPLETE");
-    delay(100);
-    Serial.println("TARS: VISION CAMERA OFF");
-    stopCamera();
-    delay(150);
-    visionCameraHeldOff=true;
+    delay(100);Serial.println("TARS: VISION CAMERA OFF");
+    stopCamera();delay(150);visionCameraHeldOff=true;
     ramDiag("VISION-CAM-OFF");
 
     static const char B64[]="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    WiFiClientSecure c;
-    c.setInsecure();
-    c.setTimeout(20000);
-
-    HTTPClient h;
-    String url=String(TARS_CLOUD_URL)+"/vision";
+    WiFiClientSecure c;c.setInsecure();c.setTimeout(20000);
+    HTTPClient h;String url=String(TARS_CLOUD_URL)+"/vision";
 
     Serial.println("TARS: VISION HTTPS BEGIN");
-    if(!h.begin(c,url)){
-        Serial.println("TARS: VISION HTTP BEGIN FAIL");
-        return "";
-    }
+    if(!h.begin(c,url)){Serial.println("TARS: VISION HTTP BEGIN FAIL");return "";}
+    h.setTimeout(30000);h.addHeader("Content-Type","application/json");
 
-    h.setTimeout(30000);
-    h.addHeader("Content-Type","application/json");
+    size_t b64len=((jl+2)/3)*4,bodyLen=16+q.length()+24+b64len+3;
+    Serial.printf("TARS: VISION BODY RESERVE=%u RAM=%u/%u KB\n",(unsigned)bodyLen,ESP.getFreeHeap()/1024,ESP.getMaxAllocHeap()/1024);
 
-    size_t b64len=((jl+2)/3)*4;
-    size_t bodyLen=16+q.length()+24+b64len+3;
-
-    Serial.printf("TARS: VISION BODY RESERVE=%u RAM=%u/%u KB\n",
-        (unsigned)bodyLen,ESP.getFreeHeap()/1024,ESP.getMaxAllocHeap()/1024);
-
-    String body;
-    body.reserve(bodyLen);
-    body="{\"question\":";
+    String body;body.reserve(bodyLen);body="{\"question\":";
     {
-        String qs;
-        qs.reserve(q.length()+4);
-        JsonDocument jq;
-        jq.set(q);
-        serializeJson(jq,qs);
-        body+=qs;
+        String qs;qs.reserve(q.length()+4);JsonDocument jq;jq.set(q);serializeJson(jq,qs);body+=qs;
     }
     body+=",\"image\":\"data:image/jpeg;base64,";
 
@@ -388,46 +309,27 @@ String visionAsk(const String&q){
         uint32_t v=(uint32_t)visionJpeg[i]<<16;
         if(i+1<jl)v|=(uint32_t)visionJpeg[i+1]<<8;
         if(i+2<jl)v|=(uint32_t)visionJpeg[i+2];
-
-        body+=B64[(v>>18)&63];
-        body+=B64[(v>>12)&63];
+        body+=B64[(v>>18)&63];body+=B64[(v>>12)&63];
         body+=(i+1<jl)?B64[(v>>6)&63]:'=';
         body+=(i+2<jl)?B64[v&63]:'=';
     }
     body+="\"}";
 
-    Serial.printf("TARS: VISION POST JPEG=%u JSON=%u RAM=%u/%u KB\n",
-        (unsigned)jl,(unsigned)body.length(),
-        ESP.getFreeHeap()/1024,ESP.getMaxAllocHeap()/1024);
-
+    Serial.printf("TARS: VISION POST JPEG=%u JSON=%u RAM=%u/%u KB\n",(unsigned)jl,(unsigned)body.length(),ESP.getFreeHeap()/1024,ESP.getMaxAllocHeap()/1024);
     Serial.println("TARS: VISION POST SEND...");
     int code=h.POST((uint8_t*)body.c_str(),body.length());
     Serial.printf("TARS: VISION POST RETURN code=%d\n",code);
-
-    if(code<0)
-        Serial.printf("TARS: VISION HTTP ERROR=%s\n",h.errorToString(code).c_str());
+    if(code<0)Serial.printf("TARS: VISION HTTP ERROR=%s\n",h.errorToString(code).c_str());
 
     String response;
     if(code>=200&&code<300)response=h.getString();
-
-    h.end();
-    body="";
-
-    if(!response.length()){
-        Serial.printf("TARS: VISION HTTP EMPTY code=%d\n",code);
-        return "";
-    }
-
+    h.end();body="";
+    if(!response.length()){Serial.printf("TARS: VISION HTTP EMPTY code=%d\n",code);return "";}
     Serial.printf("TARS: VISION RESPONSE LEN=%u\n",(unsigned)response.length());
 
     JsonDocument r;
-    if(deserializeJson(r,response)){
-        Serial.printf("TARS: VISION JSON ERROR len=%u\n",(unsigned)response.length());
-        return "";
-    }
-
-    String ans=r["response"].as<String>();
-    ans.trim();
+    if(deserializeJson(r,response)){Serial.printf("TARS: VISION JSON ERROR len=%u\n",(unsigned)response.length());return "";}
+    String ans=r["response"].as<String>();ans.trim();
     Serial.printf("TARS: VISION DONE answer=%u chars\n",(unsigned)ans.length());
     return ans;
 }
@@ -455,33 +357,24 @@ class AudioRingStream:public Stream{
     portMUX_TYPE mux=portMUX_INITIALIZER_UNLOCKED;
     WiFiClient*src=nullptr;
     int expected=-1,received=0;
-    uint32_t lastRx=0;
-    bool gotData=false;
+    uint32_t lastRx=0;bool gotData=false;
 
     static void entry(void*p){((AudioRingStream*)p)->rx();vTaskDelete(nullptr);}
-
     size_t push(const uint8_t*p,size_t x){
         if(!p||!x)return 0;
-        portENTER_CRITICAL(&mux);
-        x=min(x,AUDIO_RING_SIZE-n);
-        size_t z=min(x,AUDIO_RING_SIZE-h);
-        memcpy(b+h,p,z);
+        portENTER_CRITICAL(&mux);x=min(x,AUDIO_RING_SIZE-n);
+        size_t z=min(x,AUDIO_RING_SIZE-h);memcpy(b+h,p,z);
         if(x>z)memcpy(b,p+z,x-z);
-        h=(h+x)%AUDIO_RING_SIZE;n+=x;
-        portEXIT_CRITICAL(&mux);
-        return x;
+        h=(h+x)%AUDIO_RING_SIZE;n+=x;portEXIT_CRITICAL(&mux);return x;
     }
-
     void rx(){
-        uint8_t tmp[512];
-        lastRx=millis();gotData=false;
+        uint8_t tmp[512];lastRx=millis();gotData=false;
         while(!stopFlag){
             int av=src?src->available():0;
             if(av){
                 size_t free=AUDIO_RING_SIZE-available();
                 if(!free){vTaskDelay(1);continue;}
-                size_t want=min((size_t)av,sizeof(tmp));
-                want=min(want,free);
+                size_t want=min((size_t)av,sizeof(tmp));want=min(want,free);
                 int r=src->read(tmp,want);
                 if(r>0){
                     push(tmp,r);received+=r;lastRx=millis();gotData=true;
@@ -495,48 +388,30 @@ class AudioRingStream:public Stream{
             }
         }
         portENTER_CRITICAL(&mux);done=true;running=false;portEXIT_CRITICAL(&mux);
-        Serial.printf("TARS: TARS_RX STACK FREE=%u\n",task?uxTaskGetStackHighWaterMark(task):0);
-        task=nullptr;
+        Serial.printf("TARS: TARS_RX STACK FREE=%u\n",task?uxTaskGetStackHighWaterMark(task):0);task=nullptr;
     }
-
 public:
     void start(WiFiClient&s,int len=-1){
-        stop();
-        portENTER_CRITICAL(&mux);
-        h=t=n=0;done=false;stopFlag=false;running=true;
-        portEXIT_CRITICAL(&mux);
+        stop();portENTER_CRITICAL(&mux);h=t=n=0;done=false;stopFlag=false;running=true;portEXIT_CRITICAL(&mux);
         src=&s;expected=len;received=0;lastRx=millis();gotData=false;
         xTaskCreatePinnedToCore(entry,"TARS_RX",3000,this,2,&task,0);
         if(task)Serial.printf("TARS: TARS_RX STACK START FREE=%u\n",uxTaskGetStackHighWaterMark(task));
     }
-
     void stop(){
-        stopFlag=true;
-        uint32_t st=millis();
+        stopFlag=true;uint32_t st=millis();
         while(running&&millis()-st<1500)vTaskDelay(1);
         if(task){vTaskDelete(task);task=nullptr;}
-        portENTER_CRITICAL(&mux);running=false;done=true;portEXIT_CRITICAL(&mux);
-        src=nullptr;
+        portENTER_CRITICAL(&mux);running=false;done=true;portEXIT_CRITICAL(&mux);src=nullptr;
     }
-
     bool finished(){return done&&available()==0;}
     int available()override{portENTER_CRITICAL(&mux);int r=n;portEXIT_CRITICAL(&mux);return r;}
     int read()override{uint8_t c;return read(&c,1)==1?c:-1;}
-
     int read(uint8_t*p,size_t x){
         if(!p||!x)return 0;
-        portENTER_CRITICAL(&mux);
-        size_t take=min((size_t)n,x);
-        if(take){
-            size_t z=min(take,AUDIO_RING_SIZE-t);
-            memcpy(p,b+t,z);
-            if(take>z)memcpy(p+z,b,take-z);
-            t=(t+take)%AUDIO_RING_SIZE;n-=take;
-        }
-        portEXIT_CRITICAL(&mux);
-        return take;
+        portENTER_CRITICAL(&mux);size_t take=min((size_t)n,x);
+        if(take){size_t z=min(take,AUDIO_RING_SIZE-t);memcpy(p,b+t,z);if(take>z)memcpy(p+z,b,take-z);t=(t+take)%AUDIO_RING_SIZE;n-=take;}
+        portEXIT_CRITICAL(&mux);return take;
     }
-
     int peek()override{portENTER_CRITICAL(&mux);int r=n?b[t]:-1;portEXIT_CRITICAL(&mux);return r;}
     void flush()override{portENTER_CRITICAL(&mux);h=t=n=0;portEXIT_CRITICAL(&mux);}
     size_t write(uint8_t)override{return 0;}
@@ -556,12 +431,8 @@ public:
         Serial.printf("TARS: PCM->DAC %lu Hz / %d ch / %d bit\n",(unsigned long)x.sample_rate,x.channels,x.bits_per_sample);
     }
     size_t write(const uint8_t*p,size_t n)override{
-        if(!p||!n)return 0;
-        decBytes+=n;size_t d=0;
-        while(d<n){
-            size_t w=out->write(p+d,n-d);
-            if(w)d+=w;else{delay(1);yield();}
-        }
+        if(!p||!n)return 0;decBytes+=n;size_t d=0;
+        while(d<n){size_t w=out->write(p+d,n-d);if(w)d+=w;else{delay(1);yield();}}
         dacBytes+=d;return d;
     }
     int availableForWrite()override{return out->availableForWrite();}
@@ -586,9 +457,7 @@ void initMotors(){
 }
 
 /* BEHAVIOR */
-void behaviorReset(){
-    motorStop();behavior=BEH_IDLE;behaviorPhase=0;behaviorAt=millis();behaviorNext=behaviorAt+random(8000,18000);
-}
+void behaviorReset(){motorStop();behavior=BEH_IDLE;behaviorPhase=0;behaviorAt=millis();behaviorNext=behaviorAt+random(8000,18000);}
 void behaviorStart(Behavior b){
     if(playing||motorBusy||alarmRunning||greetingPlaying)return;
     behavior=b;behaviorPhase=0;behaviorAt=millis();motorBusy=true;
@@ -602,8 +471,7 @@ void behaviorStart(Behavior b){
 }
 void behaviorTask(){
     if(playing||alarmRunning||greetingPlaying||motorBusy)return;
-    uint32_t now=millis();
-    if(now<behaviorNext)return;
+    uint32_t now=millis();if(now<behaviorNext)return;
     uint8_t r=random(100);
     if(r<48){behaviorNext=now+random(12000,30000);return;}
     if(r<72)behaviorStart(random(0,2)?BEH_ARM_UP:BEH_ARM_DOWN);
@@ -612,31 +480,20 @@ void behaviorTask(){
 }
 void behaviorUpdate(){
     if(!motorBusy)return;
-    uint32_t now=millis();
-    if(now-behaviorAt<700)return;
+    uint32_t now=millis();if(now-behaviorAt<700)return;
     motorStop();
-    if(behaviorPhase==1){
-        behavior=BEH_GRIP_OPEN;behaviorPhase=2;behaviorAt=now;gripOpen();return;
-    }
+    if(behaviorPhase==1){behavior=BEH_GRIP_OPEN;behaviorPhase=2;behaviorAt=now;gripOpen();return;}
     motorBusy=false;behavior=BEH_IDLE;behaviorNext=now+random(10000,26000);
 }
 
 /* OLED */
 void oledSetStatus(const String&s){oledStatus=s;oledText="";oledTypePos=0;oledPage=0;oledLastPage=millis();}
 void oledSetListening(){oledSetStatus("LISTENING");}
-void oledStartSpeak(const String&s){
-    oledStatus="SPEAKING";oledText=s;oledTypePos=0;oledPage=0;oledLastType=millis();oledLastPage=millis();
-}
-void oledShowText(const String&s,const String&status){
-    oledStatus=status;oledText=s;oledTypePos=s.length();oledPage=0;oledLastType=millis();oledLastPage=millis();
-}
+void oledStartSpeak(const String&s){oledStatus="SPEAKING";oledText=s;oledTypePos=0;oledPage=0;oledLastType=millis();oledLastPage=millis();}
+void oledShowText(const String&s,const String&status){oledStatus=status;oledText=s;oledTypePos=s.length();oledPage=0;oledLastType=millis();oledLastPage=millis();}
 
 void drawSpecialOLED(uint8_t m){
-    if(!busLock(2500)){
-        Serial.println("TARS: OLED SPECIAL BUS MUTEX TIMEOUT");
-        return;
-    }
-
+    if(!busLock(2500)){Serial.println("TARS: OLED SPECIAL BUS MUTEX TIMEOUT");return;}
     oled.clearDisplay();oled.setTextColor(SSD1306_WHITE);
     oled.drawLine(15,55,8,37,1);oled.drawLine(8,37,8,22,1);oled.drawLine(8,22,4,17,1);oled.drawLine(8,22,8,14,1);oled.drawLine(8,22,12,15,1);
     oled.drawLine(113,55,120,37,1);oled.drawLine(120,37,120,22,1);oled.drawLine(120,22,124,17,1);oled.drawLine(120,22,120,14,1);oled.drawLine(120,22,116,15,1);
@@ -644,17 +501,13 @@ void drawSpecialOLED(uint8_t m){
     if(m==1){
         oled.fillCircle(42,25,8,1);oled.fillCircle(86,25,8,1);oled.drawLine(45,44,83,44,1);
     }else{
-        oled.drawLine(34,18,49,32,1);oled.drawLine(49,18,34,32,1);
-        oled.drawLine(79,18,94,32,1);oled.drawLine(94,18,79,32,1);
+        oled.drawLine(34,18,49,32,1);oled.drawLine(49,18,34,32,1);oled.drawLine(79,18,94,32,1);oled.drawLine(94,18,79,32,1);
         oled.drawCircle(64,45,7,1);oled.fillRect(61,49,6,4,0);oled.drawLine(64,52,64,57,1);oled.drawLine(64,57,69,57,1);
-        uint32_t e=millis()-oledDoorStart;
-        int bx=5+(int)((e/35U>48U)?48U:e/35U);
+        uint32_t e=millis()-oledDoorStart;int bx=5+(int)((e/35U>48U)?48U:e/35U);
         oled.drawLine(bx-10,27,bx-2,27,1);oled.drawLine(bx-8,30,bx-2,30,1);oled.fillCircle(bx,27,3,1);
         if(e>1700){oled.drawLine(53,23,58,28,1);oled.drawLine(58,23,53,28,1);}
     }
-
-    oled.display();
-    busUnlock();
+    oled.display();busUnlock();
 }
 
 void oledTask(void*){
@@ -663,29 +516,17 @@ void oledTask(void*){
         uint32_t now=millis();
 
         if(oledSpecial){
-            if(oledSpecial==2&&now>=oledDeadUntil){
-                oledSpecial=0;oledSetStatus(tarsMode==MODE_ONLINE?"LISTENING":"READY");
-            }else{
-                drawSpecialOLED(oledSpecial);vTaskDelay(20);continue;
-            }
+            if(oledSpecial==2&&now>=oledDeadUntil){oledSpecial=0;oledSetStatus(tarsMode==MODE_ONLINE?"LISTENING":"READY");}
+            else{drawSpecialOLED(oledSpecial);vTaskDelay(20);continue;}
         }
 
-        if(cameraLive&&!playing&&!oledText.length()){
-            drawCameraOLED();
-            vTaskDelay(500);
-            continue;
-        }
+        if(cameraLive&&!playing&&!oledText.length()){drawCameraOLED();vTaskDelay(500);continue;}
 
-        if(oledText.length()&&oledTypePos<oledText.length()&&now-oledLastType>=OLED_TYPE_MS)
-            oledTypePos++,oledLastType=now;
+        if(oledText.length()&&oledTypePos<oledText.length()&&now-oledLastType>=OLED_TYPE_MS)oledTypePos++,oledLastType=now;
 
         if(now-oledLastWave>=OLED_WAVE_MS){
             oledLastWave=now;
-            if(!busLock(2500)){
-                Serial.println("TARS: OLED DRAW BUS MUTEX TIMEOUT");
-                vTaskDelay(10);
-                continue;
-            }
+            if(!busLock(2500)){Serial.println("TARS: OLED DRAW BUS MUTEX TIMEOUT");vTaskDelay(10);continue;}
 
             oled.clearDisplay();oled.setTextColor(1);oled.setTextSize(2);oled.setCursor(36,0);oled.print("TARS");
             oled.setTextSize(1);oled.setCursor(3,17);oled.print(oledStatus);
@@ -698,37 +539,25 @@ void oledTask(void*){
                     char c=i<s.length()?s[i]:'\0';
                     if(c=='\n'||c=='\0'){
                         if(lineNo>=target&&shown<4){oled.setCursor(3,29+shown*8);oled.print(line);shown++;}
-                        line="";lineNo++;
-                        if(shown>=4){next=i<s.length();break;}
-                        continue;
+                        line="";lineNo++;if(shown>=4){next=i<s.length();break;}continue;
                     }
                     line+=c;
                     if(line.length()>=20){
                         int cut=line.lastIndexOf(' ');
                         if(cut>0){
-                            String rest=line.substring(cut+1);
-                            line=line.substring(0,cut);
+                            String rest=line.substring(cut+1);line=line.substring(0,cut);
                             if(lineNo>=target&&shown<4){oled.setCursor(3,29+shown*8);oled.print(line);shown++;}
-                            line=rest;lineNo++;
-                            if(shown>=4){next=i+1<s.length();break;}
+                            line=rest;lineNo++;if(shown>=4){next=i+1<s.length();break;}
                         }
                     }
                 }
-
-                if(oledStatus=="SPEAKING"&&now-oledLastPage>=OLED_PAGE_MS){
-                    if(next)oledPage++;
-                    oledLastPage=now;
-                }
+                if(oledStatus=="SPEAKING"&&now-oledLastPage>=OLED_PAGE_MS){if(next)oledPage++;oledLastPage=now;}
             }
 
-            if(oledStatus=="LISTENING"){
-                int x=64+(int)(sin(now/120.0)*25);oled.drawCircle(x,56,4,1);
-            }else if(oledStatus=="SPEAKING"){
-                int w=8+(now/40)%18;oled.fillRect(64-w/2,51,w,6,1);
-            }
+            if(oledStatus=="LISTENING"){int x=64+(int)(sin(now/120.0)*25);oled.drawCircle(x,56,4,1);}
+            else if(oledStatus=="SPEAKING"){int w=8+(now/40)%18;oled.fillRect(64-w/2,51,w,6,1);}
 
-            oled.display();
-            busUnlock();
+            oled.display();busUnlock();
         }
         vTaskDelay(10);
     }
@@ -740,16 +569,11 @@ bool initDAC(){
     if(!dac.begin(info)){Serial.println("TARS: DAC ERROR");dacOK=false;return false;}
     if(!dacLinksReady){
         dec.addNotifyAudioChange(mp3Resample);mp3Resample.addNotifyAudioChange(pcmProbe);
-        wavDec.addNotifyAudioChange(wavResample);wavResample.addNotifyAudioChange(pcmProbe);
-        dacLinksReady=true;
+        wavDec.addNotifyAudioChange(wavResample);wavResample.addNotifyAudioChange(pcmProbe);dacLinksReady=true;
     }
     dacOK=true;Serial.println("TARS: ULP DAC GPIO26 READY");return true;
 }
-bool audioStart(){
-    if(dacOK)return true;
-    if(!initDAC()){Serial.println("TARS: DAC START FAILED");return false;}
-    Serial.println("TARS: AUDIO ULP DAC -> GPIO26");return true;
-}
+bool audioStart(){if(dacOK)return true;if(!initDAC()){Serial.println("TARS: DAC START FAILED");return false;}Serial.println("TARS: AUDIO ULP DAC -> GPIO26");return true;}
 void audioStop(){if(dacOK){dac.end();dacOK=false;}Serial.println("TARS: ULP DAC OFF");}
 
 /* MIC */
@@ -794,39 +618,26 @@ uint32_t sttRetryAt=0;bool sttRetryShown=false;
 bool sttCooling(){return millis()<sttRetryAt;}
 
 void sttEvent(WStype_t type,uint8_t*payload,size_t length){
-    if(type==WStype_CONNECTED){
-        sttConnected=true;sttError=false;Serial.println("TARS: STT WS CONNECTED");oledSetStatus("STT CONNECTED");return;
-    }
+    if(type==WStype_CONNECTED){sttConnected=true;sttError=false;Serial.println("TARS: STT WS CONNECTED");oledSetStatus("STT CONNECTED");return;}
     if(type==WStype_DISCONNECTED){
-        sttConnected=false;
-        if(!sttClosing&&!sttDone)sttError=true;
-        Serial.println(sttClosing?"TARS: STT WS DISCONNECTED (NORMAL)":"TARS: STT WS DISCONNECTED");
-        return;
+        sttConnected=false;if(!sttClosing&&!sttDone)sttError=true;
+        Serial.println(sttClosing?"TARS: STT WS DISCONNECTED (NORMAL)":"TARS: STT WS DISCONNECTED");return;
     }
-    if(type==WStype_ERROR){
-        if(!sttClosing)sttError=true;
-        Serial.println("TARS: STT WS ERROR");oledSetStatus("STT ERROR");return;
-    }
+    if(type==WStype_ERROR){if(!sttClosing)sttError=true;Serial.println("TARS: STT WS ERROR");oledSetStatus("STT ERROR");return;}
     if(type!=WStype_TEXT)return;
 
-    String msg;msg.reserve(length+1);
-    for(size_t i=0;i<length;i++)msg+=(char)payload[i];
+    String msg;msg.reserve(length+1);for(size_t i=0;i<length;i++)msg+=(char)payload[i];
     JsonDocument j;if(deserializeJson(j,msg))return;
-
     String t=j["type"].as<String>();
+
     if(t=="ready"){
-        sttReady=true;sttError=false;sttRetryShown=false;
-        Serial.println("TARS: STT REALTIME READY");oledSetStatus("STT READY");
+        sttReady=true;sttError=false;sttRetryShown=false;Serial.println("TARS: STT REALTIME READY");oledSetStatus("STT READY");
     }else if(t=="partial"){
-        sttPartial=j["text"].as<String>();sttPartial.trim();
-        if(sttPartial.length())Serial.println("TARS: STT PARTIAL = "+sttPartial);
+        sttPartial=j["text"].as<String>();sttPartial.trim();if(sttPartial.length())Serial.println("TARS: STT PARTIAL = "+sttPartial);
     }else if(t=="final"){
-        sttFinal=j["text"].as<String>();sttFinal.trim();sttDone=true;
-        Serial.println("TARS: YOU SAID = "+sttFinal);
+        sttFinal=j["text"].as<String>();sttFinal.trim();sttDone=true;Serial.println("TARS: YOU SAID = "+sttFinal);
     }else if(t=="error"){
-        sttError=true;sttDone=true;
-        String e=j["error"].as<String>();
-        Serial.println("TARS: STT ERROR = "+e);oledSetStatus("STT ERROR");
+        sttError=true;sttDone=true;String e=j["error"].as<String>();Serial.println("TARS: STT ERROR = "+e);oledSetStatus("STT ERROR");
     }
 }
 
@@ -838,19 +649,13 @@ void closeSTT(){
 bool startSTT(bool offline=false){
     if(!wifiOK()||!micOK)return false;
     if((int32_t)(millis()-sttRetryAt)<0){
-        if(!sttRetryShown){Serial.println("TARS: STT RETRY COOLDOWN");sttRetryShown=true;}
-        return false;
+        if(!sttRetryShown){Serial.println("TARS: STT RETRY COOLDOWN");sttRetryShown=true;}return false;
     }
-    closeSTT();
-    sttReady=false;sttDone=false;sttError=false;sttFinal="";sttPartial="";
+    closeSTT();sttReady=false;sttDone=false;sttError=false;sttFinal="";sttPartial="";
     sttWS.onEvent(sttEvent);sttWS.setReconnectInterval(60000);sttWS.enableHeartbeat(15000,5000,2);
-    Serial.println("TARS: STT PRE-CONNECT SETTLE 1500ms");
-    vTaskDelay(pdMS_TO_TICKS(1500));
-    sttWS.beginSSL(STT_HOST,443,"/stt");
-    uint32_t st=millis();
-    while(!sttReady&&!sttError&&millis()-st<20000){
-        sttWS.loop();vTaskDelay(pdMS_TO_TICKS(5));
-    }
+    Serial.println("TARS: STT PRE-CONNECT SETTLE 1500ms");vTaskDelay(pdMS_TO_TICKS(1500));
+    sttWS.beginSSL(STT_HOST,443,"/stt");uint32_t st=millis();
+    while(!sttReady&&!sttError&&millis()-st<20000){sttWS.loop();vTaskDelay(pdMS_TO_TICKS(5));}
     if(!sttReady){
         if(sttError)Serial.println(offline?"TARS: OFFLINE STT CONNECT ERROR":"TARS: STT CONNECT ERROR");
         else Serial.println(offline?"TARS: OFFLINE STT REALTIME TIMEOUT":"TARS: STT REALTIME TIMEOUT");
@@ -881,81 +686,51 @@ String recordSTT(bool offline){
         size_t count=bytes/4;int32_t peak=0;uint64_t sum=0;
 
         for(size_t i=0;i<count;i++){
-            int32_t v=constrain(rawBuf[i]>>16,-32768,32767);
-            pcmBuf[i]=(int16_t)v;int32_t a=abs(v);
+            int32_t v=constrain(rawBuf[i]>>16,-32768,32767);pcmBuf[i]=(int16_t)v;int32_t a=abs(v);
             if(a>peak)peak=a;sum+=(uint64_t)a*a;
         }
-
         uint32_t rms=count?(uint32_t)sqrt((double)sum/count):0;
 
         if(!voice){
-            for(size_t i=0;i<count;i++){
-                preBuf[prePos]=pcmBuf[i];prePos=(prePos+1)%PREROLL_SAMPLES;
-                if(preCount<PREROLL_SAMPLES)preCount++;
-            }
-
+            for(size_t i=0;i<count;i++){preBuf[prePos]=pcmBuf[i];prePos=(prePos+1)%PREROLL_SAMPLES;if(preCount<PREROLL_SAMPLES)preCount++;}
             if(peak>=MIC_THRESHOLD||rms>=3000){
-                voice=true;voiceStart=lastVoice=millis();
-                size_t start=preCount==PREROLL_SAMPLES?prePos:0,nsend=0;
-
+                voice=true;voiceStart=lastVoice=millis();size_t start=preCount==PREROLL_SAMPLES?prePos:0,nsend=0;
                 for(size_t i=0;i<preCount;i++){
                     sendBuf[nsend++]=preBuf[(start+i)%PREROLL_SAMPLES];
-                    if(nsend==256){
-                        if(!sttWS.sendBIN((uint8_t*)sendBuf,nsend*2)){sttError=true;break;}
-                        nsend=0;
-                    }
+                    if(nsend==256){if(!sttWS.sendBIN((uint8_t*)sendBuf,nsend*2)){sttError=true;break;}nsend=0;}
                 }
                 if(nsend&&!sttError&&!sttWS.sendBIN((uint8_t*)sendBuf,nsend*2))sttError=true;
-                samples+=preCount;
-                Serial.printf("TARS: %s VOICE PEAK=%ld RMS=%lu\n",offline?"OFFLINE":"ONLINE",(long)peak,(unsigned long)rms);
+                samples+=preCount;Serial.printf("TARS: %s VOICE PEAK=%ld RMS=%lu\n",offline?"OFFLINE":"ONLINE",(long)peak,(unsigned long)rms);
             }
         }else{
-            if(!sttWS.sendBIN((uint8_t*)pcmBuf,count*2)){
-                Serial.println(offline?"TARS: OFFLINE STT PCM SEND FAILED":"TARS: STT PCM SEND FAILED");
-                sttError=true;break;
-            }
-            samples+=count;
-            if(peak>=MIC_SILENCE||rms>=1800)lastVoice=millis();
+            if(!sttWS.sendBIN((uint8_t*)pcmBuf,count*2)){Serial.println(offline?"TARS: OFFLINE STT PCM SEND FAILED":"TARS: STT PCM SEND FAILED");sttError=true;break;}
+            samples+=count;if(peak>=MIC_SILENCE||rms>=1800)lastVoice=millis();
             if(millis()-voiceStart>=RECORD_MIN_MS&&millis()-lastVoice>=SILENCE_MS)break;
         }
         yield();
     }
 
     if(!voice||sttError){
-        closeSTT();
-        if(!voice)Serial.println(offline?"TARS: OFFLINE MIC AUDIO TOO LOW":"TARS: MIC AUDIO TOO LOW");
-        return "";
+        closeSTT();if(!voice)Serial.println(offline?"TARS: OFFLINE MIC AUDIO TOO LOW":"TARS: MIC AUDIO TOO LOW");return "";
     }
     return stopSTT(samples,offline);
 }
-
 String recordRealtime(){return recordSTT(false);}
 String recordOffline(){return recordSTT(true);}
 
 /* COMMAND */
 String normCmd(String s){
-    s.toLowerCase();
-    for(size_t i=0;i<s.length();i++)if(ispunct((unsigned char)s[i]))s.setCharAt(i,' ');
-    while(s.indexOf("  ")>=0)s.replace("  "," ");
-    s.trim();return s;
+    s.toLowerCase();for(size_t i=0;i<s.length();i++)if(ispunct((unsigned char)s[i]))s.setCharAt(i,' ');
+    while(s.indexOf("  ")>=0)s.replace("  "," ");s.trim();return s;
 }
-
 uint8_t greetingPeriod(){
-    if(!ntpOK)return 255;
-    time_t now=time(nullptr);if(now<1704067200)return 255;
+    if(!ntpOK)return 255;time_t now=time(nullptr);if(now<1704067200)return 255;
     struct tm t;localtime_r(&now,&t);
-    if(t.tm_hour>=5&&t.tm_hour<11)return 0;
-    if(t.tm_hour>=11&&t.tm_hour<15)return 1;
-    if(t.tm_hour>=15&&t.tm_hour<20)return 2;
-    return 3;
+    if(t.tm_hour>=5&&t.tm_hour<11)return 0;if(t.tm_hour>=11&&t.tm_hour<15)return 1;
+    if(t.tm_hour>=15&&t.tm_hour<20)return 2;return 3;
 }
 const char*greetingText(uint8_t p){
-    switch(p){
-        case 0:return "Selamat pagi, tuan.";
-        case 1:return "Selamat siang, tuan.";
-        case 2:return "Selamat sore, tuan.";
-        default:return "Selamat malam, tuan.";
-    }
+    switch(p){case 0:return "Selamat pagi, tuan.";case 1:return "Selamat siang, tuan.";case 2:return "Selamat sore, tuan.";default:return "Selamat malam, tuan.";}
 }
 bool playTimeGreeting(uint8_t p){
     switch(p){
@@ -970,51 +745,33 @@ bool playTimeGreeting(uint8_t p){
 /* LOCAL MP3 */
 bool playLocalMP3(const uint8_t*a,const uint8_t*z,const String&text,bool keepSpecial){
     if(!audioStart())return false;
-    localMP3.begin(a,z);playing=true;motorStop();pcmProbe.reset();
-    if(!keepSpecial)oledStartSpeak(text);
+    localMP3.begin(a,z);playing=true;motorStop();pcmProbe.reset();if(!keepSpecial)oledStartSpeak(text);
     if(!dec.begin()){
         Serial.printf("TARS: HELIX LOCAL START FAILED HEAP=%u MAX=%u\n",ESP.getFreeHeap(),ESP.getMaxAllocHeap());
         ramDiag("LOCAL-HELIX-FAIL");playing=false;audioStop();return false;
     }
     audio_tools::AudioInfo src=codec.audioInfo();bool ok=mp3Resample.begin(src,22050);
-    if(ok){
-        copier.begin(dec,localMP3);
-        while(localMP3.available()>0)copier.copy();
-        mp3Resample.flush();mp3Resample.end();
-    }
+    if(ok){copier.begin(dec,localMP3);while(localMP3.available()>0)copier.copy();mp3Resample.flush();mp3Resample.end();}
     dec.end();pcmProbe.report();playing=false;audioStop();
-    if(!keepSpecial)oledSetStatus(tarsMode==MODE_ONLINE?"LISTENING":"READY");
-    behaviorReset();return ok;
+    if(!keepSpecial)oledSetStatus(tarsMode==MODE_ONLINE?"LISTENING":"READY");behaviorReset();return ok;
 }
-
 void checkTimeGreeting(){
     if(!ntpOK||playing||alarmRunning||greetingPlaying)return;
-    uint8_t p=greetingPeriod();
-    if(p==255||p==lastGreetingPeriod)return;
-    greetingPlaying=true;
-    String txt=greetingText(p);oledShowText(txt,"SALAM");
-    bool ok=playTimeGreeting(p);
-    if(ok)lastGreetingPeriod=p;
-    greetingPlaying=false;behaviorReset();
-    oledSetStatus(ok?(tarsMode==MODE_ONLINE?"LISTENING":"READY"):"AUDIO ERROR");
+    uint8_t p=greetingPeriod();if(p==255||p==lastGreetingPeriod)return;
+    greetingPlaying=true;String txt=greetingText(p);oledShowText(txt,"SALAM");bool ok=playTimeGreeting(p);
+    if(ok)lastGreetingPeriod=p;greetingPlaying=false;behaviorReset();oledSetStatus(ok?(tarsMode==MODE_ONLINE?"LISTENING":"READY"):"AUDIO ERROR");
 }
 
 /* ASK */
 String ask(const String&q){
     if(!wifiOK())return "";
-    WiFiClientSecure c;c.setInsecure();HTTPClient h;
-    if(!h.begin(c,String(TARS_CLOUD_URL)+"/ask"))return "";
-    h.setTimeout(12000);h.addHeader("Content-Type","application/json");
-    String body;
+    WiFiClientSecure c;c.setInsecure();HTTPClient h;if(!h.begin(c,String(TARS_CLOUD_URL)+"/ask"))return "";
+    h.setTimeout(12000);h.addHeader("Content-Type","application/json");String body;
     {JsonDocument j;j["question"]=q;serializeJson(j,body);}
-    int code=h.POST(body);body="";
-    Serial.printf("TARS: ASK HTTP=%d\n",code);
+    int code=h.POST(body);body="";Serial.printf("TARS: ASK HTTP=%d\n",code);
     if(code<200||code>=300){h.end();return "";}
-    String r=h.getString();h.end();JsonDocument x;
-    if(deserializeJson(x,r))return "";
-    String s=x["response"].as<String>();s.trim();
-    Serial.printf("TARS: ASK RESPONSE LENGTH=%u\n",(unsigned)s.length());
-    return s;
+    String r=h.getString();h.end();JsonDocument x;if(deserializeJson(x,r))return "";
+    String s=x["response"].as<String>();s.trim();Serial.printf("TARS: ASK RESPONSE LENGTH=%u\n",(unsigned)s.length());return s;
 }
 
 /* TTS CAMERA */
@@ -1024,13 +781,8 @@ bool ttsCameraOff(){
 }
 void ttsCameraOn(bool wasOn){
     if(!wasOn)return;
-    Serial.println("TARS: TTS DONE -> CAMERA ON");
-    vTaskDelay(pdMS_TO_TICKS(500));
-    if(startCamera(),cameraLive){
-        ramDiag("CAM-ON");
-        Serial.println("TARS: CAMERA LIVE -> STT SETTLE 800ms");
-        vTaskDelay(pdMS_TO_TICKS(800));
-    }
+    Serial.println("TARS: TTS DONE -> CAMERA ON");vTaskDelay(pdMS_TO_TICKS(500));
+    if(startCamera(),cameraLive){ramDiag("CAM-ON");Serial.println("TARS: CAMERA LIVE -> STT SETTLE 800ms");vTaskDelay(pdMS_TO_TICKS(800));}
 }
 
 /* TTS */
@@ -1039,60 +791,38 @@ bool streamAudio(const String&url,const String&text){
     bool camOff=ttsCameraOff();ramDiag("PRE-TTS");
     if(!audioStart()){ttsCameraOn(camOff);return false;}
 
-    WiFiClientSecure c;c.setInsecure();c.setTimeout(20000);HTTPClient h;
-    uint32_t total=millis();
-
+    WiFiClientSecure c;c.setInsecure();c.setTimeout(20000);HTTPClient h;uint32_t total=millis();
     if(!h.begin(c,url)){audioStop();ttsCameraOn(camOff);return false;}
     h.setTimeout(20000);h.addHeader("Content-Type","application/json");
     const char*keys[]={"Content-Type","X-TARS-TTS","X-TARS-TTS-FORMAT"};h.collectHeaders(keys,3);
 
-    {
-        JsonDocument j;j["text"]=text;String body;serializeJson(j,body);
-        int code=h.POST(body);Serial.printf("TARS: AUDIO HTTP=%d\n",code);
+    {JsonDocument j;j["text"]=text;String body;serializeJson(j,body);int code=h.POST(body);Serial.printf("TARS: AUDIO HTTP=%d\n",code);
         if(code<200||code>=300){h.end();audioStop();ttsCameraOn(camOff);return false;}
     }
 
-    String ct=h.header("Content-Type"),fmt=h.header("X-TARS-TTS");
-    ct.toLowerCase();
-    WiFiClient*stream=h.getStreamPtr();
-    if(!stream){h.end();audioStop();ttsCameraOn(camOff);return false;}
+    String ct=h.header("Content-Type"),fmt=h.header("X-TARS-TTS");ct.toLowerCase();
+    WiFiClient*stream=h.getStreamPtr();if(!stream){h.end();audioStop();ttsCameraOn(camOff);return false;}
 
-    int contentLen=h.getSize();
-    bool isWav=ct.indexOf("wav")>=0||fmt.equalsIgnoreCase("WAV");
+    int contentLen=h.getSize();bool isWav=ct.indexOf("wav")>=0||fmt.equalsIgnoreCase("WAV");
     audioRing.start(*stream,contentLen);playing=true;motorStop();
 
-    size_t target=AUDIO_PREBUFFER;
-    if(contentLen>0)target=min(target,(size_t)contentLen);
-    uint32_t ps=millis();
-
+    size_t target=AUDIO_PREBUFFER;if(contentLen>0)target=min(target,(size_t)contentLen);uint32_t ps=millis();
     while(audioRing.available()<(int)target&&!audioRing.finished()){
-        if(millis()-ps>10000){
-            audioRing.stop();h.end();playing=false;audioStop();ttsCameraOn(camOff);return false;
-        }
+        if(millis()-ps>10000){audioRing.stop();h.end();playing=false;audioStop();ttsCameraOn(camOff);return false;}
         delay(1);yield();
     }
-
-    if(!audioRing.available()){
-        audioRing.stop();h.end();playing=false;audioStop();ttsCameraOn(camOff);return false;
-    }
+    if(!audioRing.available()){audioRing.stop();h.end();playing=false;audioStop();ttsCameraOn(camOff);return false;}
 
     ramDiag("BEFORE-DECODER");pcmProbe.reset();bool started=false;
 
     if(!isWav){
         if(!dec.begin()){
             ramDiag("HELIX-ALLOC-FAIL");
-            Serial.printf("TARS: HELIX START FAILED HEAP=%u MAX=%u INTMAX=%u\n",
-                ESP.getFreeHeap(),ESP.getMaxAllocHeap(),
-                heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT));
+            Serial.printf("TARS: HELIX START FAILED HEAP=%u MAX=%u INTMAX=%u\n",ESP.getFreeHeap(),ESP.getMaxAllocHeap(),heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT));
             audioRing.stop();h.end();playing=false;audioStop();ttsCameraOn(camOff);return false;
         }
-
-        ramDiag("HELIX-READY");
-        audio_tools::AudioInfo src=codec.audioInfo();
-        if(!mp3Resample.begin(src,22050)){
-            dec.end();audioRing.stop();h.end();playing=false;audioStop();ttsCameraOn(camOff);return false;
-        }
-
+        ramDiag("HELIX-READY");audio_tools::AudioInfo src=codec.audioInfo();
+        if(!mp3Resample.begin(src,22050)){dec.end();audioRing.stop();h.end();playing=false;audioStop();ttsCameraOn(camOff);return false;}
         copier.begin(dec,audioRing);
         while(true){
             int before=audioRing.available();bool copied=copier.copy();int after=audioRing.available();
@@ -1102,11 +832,8 @@ bool streamAudio(const String&url,const String&text){
         }
         mp3Resample.flush();mp3Resample.end();dec.end();
     }else{
-        wavDec.begin();
-        audio_tools::AudioInfo src=wav.audioInfo();
-        if(!wavResample.begin(src,22050)){
-            wavDec.end();audioRing.stop();h.end();playing=false;audioStop();ttsCameraOn(camOff);return false;
-        }
+        wavDec.begin();audio_tools::AudioInfo src=wav.audioInfo();
+        if(!wavResample.begin(src,22050)){wavDec.end();audioRing.stop();h.end();playing=false;audioStop();ttsCameraOn(camOff);return false;}
         oledStartSpeak(text);copier.begin(wavDec,audioRing);
         while(true){
             int before=audioRing.available();bool copied=copier.copy();int after=audioRing.available();
@@ -1119,8 +846,7 @@ bool streamAudio(const String&url,const String&text){
 
     audioRing.stop();pcmProbe.report();h.end();ramDiag("TTS-DONE");
     playing=false;audioStop();ttsCameraOn(camOff);behaviorReset();oledSetListening();
-    Serial.printf("TARS: AUDIO TOTAL=%lu ms\n",(unsigned long)(millis()-total));
-    return started;
+    Serial.printf("TARS: AUDIO TOTAL=%lu ms\n",(unsigned long)(millis()-total));return started;
 }
 
 /* STATUS */
@@ -1150,31 +876,19 @@ bool isPickPaperCmd(const String&q){
 void runPickPaper(){
     if(motorBusy)return;
     motorBusy=true;behavior=BEH_IDLE;motorStop();oledShowText("AMBIL KERTAS","MOTOR");
-    armDown();delay(1200);motorStop();delay(150);gripOpen();delay(600);motorStop();
-    delay(150);gripClose();delay(800);motorStop();delay(150);armUp();delay(1200);motorStop();
+    armDown();delay(1200);motorStop();delay(150);gripOpen();delay(600);motorStop();delay(150);gripClose();delay(800);motorStop();delay(150);armUp();delay(1200);motorStop();
     motorBusy=false;behaviorReset();oledSetStatus(tarsMode==MODE_ONLINE?"LISTENING":"READY");
 }
-bool cmdMatch(const String&s,const char*const*v,uint8_t n){
-    for(uint8_t i=0;i<n;i++)if(s==v[i])return true;
-    return false;
-}
-bool isDoorWord(String w){
-    w.toLowerCase();w.trim();
-    return w=="dor"||w=="door"||w=="doar"||(w.length()>=3&&w.length()<=6&&w.startsWith("dor"));
-}
+bool cmdMatch(const String&s,const char*const*v,uint8_t n){for(uint8_t i=0;i<n;i++)if(s==v[i])return true;return false;}
+bool isDoorWord(String w){w.toLowerCase();w.trim();return w=="dor"||w=="door"||w=="doar"||(w.length()>=3&&w.length()<=6&&w.startsWith("dor"));}
 bool isDoorCmd(const String&s){
     String x=s;x.trim();if(!x.length())return false;
     int p=0,doors=0,tokens=0;
     while(p<x.length()){
-        while(p<x.length()&&x[p]==' ')p++;
-        if(p>=x.length())break;
-        int e=x.indexOf(' ',p);if(e<0)e=x.length();
-        String w=x.substring(p,e);tokens++;
-        if(isDoorWord(w))doors++;
-        else if(w=="tars"&&tokens==1){}
-        else return false;
-        if(tokens>7)return false;
-        p=e+1;
+        while(p<x.length()&&x[p]==' ')p++;if(p>=x.length())break;
+        int e=x.indexOf(' ',p);if(e<0)e=x.length();String w=x.substring(p,e);tokens++;
+        if(isDoorWord(w))doors++;else if(w=="tars"&&tokens==1){}else return false;
+        if(tokens>7)return false;p=e+1;
     }
     return doors>0;
 }
@@ -1183,8 +897,7 @@ bool isDoorCmd(const String&s){
 bool alarmDue(){
     if(!ntpOK||alarmRunning)return false;
     time_t now=time(nullptr);if(now<1704067200)return false;
-    struct tm t;localtime_r(&now,&t);
-    return t.tm_hour==6&&t.tm_min==0&&alarmLastDay!=t.tm_yday;
+    struct tm t;localtime_r(&now,&t);return t.tm_hour==6&&t.tm_min==0&&alarmLastDay!=t.tm_yday;
 }
 bool playLocalAlarm(){
     if(!audioStart())return false;
@@ -1194,11 +907,7 @@ bool playLocalAlarm(){
         playing=false;audioStop();return false;
     }
     audio_tools::AudioInfo src=codec.audioInfo();bool ok=mp3Resample.begin(src,22050);
-    if(ok){
-        copier.begin(dec,alarmStream);oledStartSpeak("Tuan, waktunya bangun.");
-        while(alarmStream.available()>0)copier.copy();
-        mp3Resample.flush();mp3Resample.end();
-    }
+    if(ok){copier.begin(dec,alarmStream);oledStartSpeak("Tuan, waktunya bangun.");while(alarmStream.available()>0)copier.copy();mp3Resample.flush();mp3Resample.end();}
     dec.end();pcmProbe.report();playing=false;audioStop();behaviorReset();oledSetStatus(tarsMode==MODE_ONLINE?"LISTENING":"READY");return ok;
 }
 void runAlarm(){
@@ -1217,16 +926,11 @@ bool processOffline(const String&q){
     static const char*hari[]={"hari","hari ini","kata hari","kata hari ini","kata kata","kata kata hari ini","kata kata hari ini tars","kata hari ini tars","tars hari ini","tars kata hari ini"};
 
     if(isPickPaperCmd(q)){runPickPaper();return true;}
-
-    if(cmdMatch(s,hari,sizeof(hari)/sizeof(*hari))){
-        oledShowText("HARI INI","OFFLINE");playLocalMP3(hari_start,hari_end,"Kata-kata hari ini, tuan.");oledSetStatus("READY");return true;
-    }
-
+    if(cmdMatch(s,hari,sizeof(hari)/sizeof(*hari))){oledShowText("HARI INI","OFFLINE");playLocalMP3(hari_start,hari_end,"Kata-kata hari ini, tuan.");oledSetStatus("READY");return true;}
     if(cmdMatch(s,online,sizeof(online)/sizeof(*online))){
         Serial.println("TARS: SWITCH OFFLINE -> ONLINE");oledShowText("ONLINE","OFFLINE");tarsMode=MODE_ONLINE;
         playLocalMP3(online_start,online_end,"Mode online aktif, tuan");Serial.println("TARS: MODE ONLINE");return true;
     }
-
     Serial.println("TARS: OFFLINE REJECTED = "+q);oledSetStatus("READY");return true;
 }
 
@@ -1237,52 +941,29 @@ void processQuestion(const String&q){
     if(tarsMode==MODE_OFFLINE){processOffline(q);return;}
 
     if(nq=="offline"||nq=="off line"||nq=="tars offline"||nq=="tars off line"||nq=="mode offline"||nq=="mode off line"||nq=="tars mode offline"||nq=="tars mode off line"){
-        Serial.println("TARS: SWITCH ONLINE -> OFFLINE");
-        tarsMode=MODE_OFFLINE;closeSTT();
-        sttReady=sttDone=sttError=false;
-        oledShowText("OFFLINE","ONLINE");playLocalMP3(offline_start,offline_end,"Mode offline aktif, tuan");
-        oledSetStatus("READY");Serial.println("TARS: MODE OFFLINE");return;
+        Serial.println("TARS: SWITCH ONLINE -> OFFLINE");tarsMode=MODE_OFFLINE;closeSTT();sttReady=sttDone=sttError=false;
+        oledShowText("OFFLINE","ONLINE");playLocalMP3(offline_start,offline_end,"Mode offline aktif, tuan");oledSetStatus("READY");Serial.println("TARS: MODE OFFLINE");return;
     }
 
     oledShowText(q,"STT");delay(500);
 
     if(needsVision(q)){
-        Serial.println("TARS: ONLINE VISION REQUEST");
-        oledSetStatus("VISION");visionCameraHeldOff=false;
+        Serial.println("TARS: ONLINE VISION REQUEST");oledSetStatus("VISION");visionCameraHeldOff=false;
         String answer=visionAsk(q);
-
-        if(!answer.length()){
-            Serial.println("TARS: VISION FAILED -> ASK");
-            answer=ask(q);
-        }
-
+        if(!answer.length()){Serial.println("TARS: VISION FAILED -> ASK");answer=ask(q);}
         if(!answer.length()){
             oledSetStatus("VISION ERROR");
-            if(visionCameraHeldOff){
-                Serial.println("TARS: VISION ERROR -> CAMERA ON");
-                startCamera();visionCameraHeldOff=false;
-            }
+            if(visionCameraHeldOff){Serial.println("TARS: VISION ERROR -> CAMERA ON");startCamera();visionCameraHeldOff=false;}
             behaviorReset();return;
         }
-
-        oledShowText(answer,"VISION");delay(500);
-        Serial.println("TARS: VISION -> TTS CAMERA OFF");
+        oledShowText(answer,"VISION");delay(500);Serial.println("TARS: VISION -> TTS CAMERA OFF");
         bool ok=streamAudio(String(TARS_CLOUD_URL)+"/tts",answer);
-
-        if(visionCameraHeldOff){
-            Serial.println("TARS: TTS DONE -> CAMERA ON");
-            startCamera();visionCameraHeldOff=false;
-        }
-
+        if(visionCameraHeldOff){Serial.println("TARS: TTS DONE -> CAMERA ON");startCamera();visionCameraHeldOff=false;}
         oledSetStatus(ok?"LISTENING":"AUDIO ERROR");behaviorReset();return;
     }
 
-    bool status=isStatusQuery(q);
-    String answer=status?systemStatus():ask(q);
-    if(!answer.length()){
-        oledSetStatus(status?"STATUS ERROR":"ASK ERROR");behaviorReset();return;
-    }
-
+    bool status=isStatusQuery(q);String answer=status?systemStatus():ask(q);
+    if(!answer.length()){oledSetStatus(status?"STATUS ERROR":"ASK ERROR");behaviorReset();return;}
     oledShowText(answer,"ASK");delay(500);
     bool ok=streamAudio(String(TARS_CLOUD_URL)+"/tts",answer);
     oledSetStatus(ok?"LISTENING":"AUDIO ERROR");behaviorReset();
@@ -1292,14 +973,12 @@ void processQuestion(const String&q){
 void setup(){
     Serial.begin(SERIAL_BAUD);
 
-    /* MUTEX DIBUAT SEBELUM KAMERA DAN OLED TASK AKTIF */
     cameraMux=xSemaphoreCreateMutex();
     busMux=xSemaphoreCreateMutex();
 
-    Wire.begin(OLED_SDA,OLED_SCL);
-    Wire.setClock(400000);
-
+    Wire.begin(OLED_SDA,OLED_SCL);Wire.setClock(400000);
     oledOK=oled.begin(SSD1306_SWITCHCAPVCC,OLED_ADDR);
+
     if(oledOK){
         oled.clearDisplay();oled.setTextColor(SSD1306_WHITE);oled.setTextSize(2);
         oled.setCursor(36,0);oled.print("TARS");oled.setTextSize(1);oled.setCursor(3,27);oled.print("BOOT");
@@ -1347,7 +1026,6 @@ void setup(){
 /* LOOP */
 void loop(){
     ramMonitor();
-
     if(playing){behaviorReset();delay(1);return;}
 
     if(WiFi.status()!=WL_CONNECTED){
@@ -1368,12 +1046,8 @@ void loop(){
 
     String q=tarsMode==MODE_ONLINE?recordRealtime():recordOffline();
 
-    if(q.length()){
-        behaviorReset();
-        processQuestion(q);
-    }else if(!specialActive()){
-        oledSetStatus(tarsMode==MODE_ONLINE?"LISTENING":"READY");
-    }
+    if(q.length()){behaviorReset();processQuestion(q);}
+    else if(!specialActive())oledSetStatus(tarsMode==MODE_ONLINE?"LISTENING":"READY");
 
     delay(1);
 }
