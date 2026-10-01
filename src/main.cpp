@@ -89,7 +89,6 @@ WAVDecoder wav;
 WebSocketsClient sttWS;
 OV7670*camera=nullptr;
 SemaphoreHandle_t cameraMux=nullptr;
-bool visionCameraHeldOff=false;
 
 void ramDiag(const char*tag){
  uint32_t f=ESP.getFreeHeap(),m=ESP.getMinFreeHeap(),a=ESP.getMaxAllocHeap();
