@@ -1,3 +1,4 @@
+
 name: Build TARS ESP32
 
 on:
@@ -24,6 +25,7 @@ jobs:
       - name: Verify partition table
         shell: bash
         run: |
+          set -e
           echo "========================================"
           echo "VERIFY PARTITION TABLE"
           echo "========================================"
@@ -46,10 +48,12 @@ jobs:
           touch data/.gitkeep
 
       - name: Build TARS firmware
+        shell: bash
         run: |
           pio run -e tars
 
       - name: Build LittleFS
+        shell: bash
         run: |
           pio run -e tars -t buildfs
 
@@ -62,74 +66,101 @@ jobs:
           BOOTLOADER_ELF="$FRAMEWORK/tools/sdk/esp32/bin/bootloader_dio_40m.elf"
           BOOT_APP0="$FRAMEWORK/tools/partitions/boot_app0.bin"
 
-          test -f "$BOOTLOADER_ELF" || {
-            echo "ERROR: bootloader_dio_40m.elf tidak ditemukan"
-            exit 1
-          }
-
-          test -f "$BOOT_APP0" || {
-            echo "ERROR: boot_app0.bin tidak ditemukan"
-            exit 1
-          }
-
-          test -f "$ESPTOOL" || {
-            echo "ERROR: esptool.py tidak ditemukan"
-            exit 1
-          }
+          for FILE in "$BOOTLOADER_ELF" "$BOOT_APP0" "$ESPTOOL"; do
+            if [ ! -f "$FILE" ]; then
+              echo "ERROR: File tidak ditemukan: $FILE"
+              exit 1
+            fi
+          done
 
           echo "FRAMEWORK=$FRAMEWORK" >> "$GITHUB_ENV"
           echo "BOOTLOADER_ELF=$BOOTLOADER_ELF" >> "$GITHUB_ENV"
           echo "BOOT_APP0=$BOOT_APP0" >> "$GITHUB_ENV"
           echo "ESPTOOL=$ESPTOOL" >> "$GITHUB_ENV"
 
+          echo "ESP32 tools ditemukan."
+
       - name: Convert bootloader ELF to BIN
         shell: bash
         run: |
+          set -e
+
           python "$ESPTOOL" \
             --chip esp32 \
             elf2image \
             "$BOOTLOADER_ELF" \
             -o bootloader.bin
 
-          test -f bootloader.bin
+          if [ ! -s bootloader.bin ]; then
+            echo "ERROR: bootloader.bin gagal dibuat"
+            exit 1
+          fi
+
+          echo "OK - bootloader.bin berhasil dibuat"
 
       - name: Verify build files
         shell: bash
         run: |
           BUILD=".pio/build/tars"
 
-          test -f bootloader.bin
-          test -f "$BUILD/partitions.bin"
-          test -f "$BUILD/firmware.bin"
-          test -f "$BUILD/littlefs.bin"
-          test -f "$BOOT_APP0"
+          echo "========================================"
+          echo "VERIFY BUILD FILES"
+          echo "========================================"
 
-          echo "Build files:"
-          ls -lh bootloader.bin
-          ls -lh "$BUILD/partitions.bin"
-          ls -lh "$BUILD/firmware.bin"
-          ls -lh "$BUILD/littlefs.bin"
-          ls -lh "$BOOT_APP0"
+          for FILE in \
+            bootloader.bin \
+            "$BUILD/partitions.bin" \
+            "$BUILD/firmware.bin" \
+            "$BUILD/littlefs.bin" \
+            "$BOOT_APP0"
+          do
+            if [ -s "$FILE" ]; then
+              echo "OK: $FILE"
+              ls -lh "$FILE"
+            else
+              echo "ERROR: File hilang atau kosong: $FILE"
+              echo "Isi folder build:"
+              ls -lah "$BUILD" || true
+              exit 1
+            fi
+          done
 
-      - name: Verify LittleFS image size
+          echo "OK - semua file build tersedia"
+
+      - name: Verify image sizes
         shell: bash
         run: |
           BUILD=".pio/build/tars"
-          SIZE=$(stat -c%s "$BUILD/littlefs.bin")
 
-          echo "LittleFS image size: $SIZE bytes"
-          echo "Expected maximum : 524288 bytes"
+          PART_SIZE=$(stat -c%s "$BUILD/partitions.bin")
+          FW_SIZE=$(stat -c%s "$BUILD/firmware.bin")
+          FS_SIZE=$(stat -c%s "$BUILD/littlefs.bin")
 
-          if [ "$SIZE" -gt 524288 ]; then
+          echo "Partition table : $PART_SIZE bytes"
+          echo "Firmware        : $FW_SIZE bytes"
+          echo "LittleFS        : $FS_SIZE bytes"
+
+          if [ "$PART_SIZE" -gt 4096 ]; then
+            echo "ERROR: Partition table terlalu besar"
+            exit 1
+          fi
+
+          if [ "$FW_SIZE" -gt $((0x370000)) ]; then
+            echo "ERROR: Firmware melewati batas area aplikasi"
+            exit 1
+          fi
+
+          if [ "$FS_SIZE" -gt $((0x80000)) ]; then
             echo "ERROR: LittleFS melebihi 512 KB"
             exit 1
           fi
 
-          echo "OK - LittleFS berada dalam batas 512 KB"
+          echo "OK - ukuran seluruh image sesuai"
 
       - name: Merge TARS firmware
         shell: bash
         run: |
+          set -e
           BUILD=".pio/build/tars"
 
           python "$ESPTOOL" \
@@ -145,6 +176,8 @@ jobs:
             0x10000 "$BUILD/firmware.bin" \
             0x380000 "$BUILD/littlefs.bin"
 
+          echo "OK - proses merge selesai"
+
       - name: Verify final BIN
         shell: bash
         run: |
@@ -152,6 +185,10 @@ jobs:
           import os
 
           path = "TARS-ESP32.bin"
+
+          if not os.path.isfile(path):
+              raise SystemExit("ERROR: TARS-ESP32.bin tidak ditemukan")
+
           size = os.path.getsize(path)
 
           print("========================================")
@@ -163,7 +200,7 @@ jobs:
           print("----------------------------------------")
           print("Flash           : 4 MB")
           print("Firmware offset : 0x10000")
-          print("Firmware size   : 0x370000 (3.4375 MB)")
+          print("Firmware limit  : 0x370000")
           print("LittleFS offset : 0x380000")
           print("LittleFS size   : 0x80000 (512 KB)")
           print("----------------------------------------")
