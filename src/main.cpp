@@ -27,6 +27,7 @@
 #include "tars_auto/personality.h"
 #include "tars_auto/autonomy.h"
 #include "tars_auto/auto_speech.h"
+#include "tars_auto/env.h"
 
 #define MIC_PORT I2S_NUM_1
 #define MIC_SCK 18
@@ -160,17 +161,38 @@ void startCamera(){
 
 void drawCameraOLED(){
  if(!cameraLive||!camera||!cameraOK||!oledOK)return;
- static uint8_t preview[128*64];memset(preview,0,sizeof(preview));
- if(cameraMux&&xSemaphoreTake(cameraMux,pdMS_TO_TICKS(2500))!=pdTRUE)return;
- if(!cameraLive||!camera||!cameraOK){if(cameraMux)xSemaphoreGive(cameraMux);return;}
- bool ok=I2SCamera::capturePreview(preview);
- if(ok){
-  oled.clearDisplay();
-  for(int y=0;y<64;y++)for(int x=0;x<128;x++)
-   if(preview[y*128+x])oled.drawPixel(x,y,SSD1306_WHITE);
-  oled.display();
- }
+ static uint8_t preview[128*64];
+ memset(preview,0,sizeof(preview));
+ if(cameraMux&&xSemaphoreTake(cameraMux,pdMS_TO_TICKS(2500))!=pdTRUE)
+   return;
+ bool ok=false;
+ if(cameraLive&&camera&&cameraOK)
+   ok=I2SCamera::capturePreview(preview);
  if(cameraMux)xSemaphoreGive(cameraMux);
+ if(ok){
+  EnvState environment;
+  if(envAnalyze(preview,environment)){
+   autonomySetSafety(environment.valid,environment.centerClear);
+   Serial.printf(
+    "TARS: ENV L=%d C=%d R=%d OBS=%d CONF=%u%%\n",
+    environment.leftClear,
+    environment.centerClear,
+    environment.rightClear,
+    environment.obstacle,
+    environment.confidence
+   );
+  }else{
+   autonomySetSafety(false,false);
+  }
+  oled.clearDisplay();
+  for(int y=0;y<64;y++)
+   for(int x=0;x<128;x++)
+    if(preview[y*128+x])
+     oled.drawPixel(x,y,SSD1306_WHITE);
+  oled.display();
+ }else{
+  autonomySetSafety(false,false);
+ }
 }
 
 /* VISION */
