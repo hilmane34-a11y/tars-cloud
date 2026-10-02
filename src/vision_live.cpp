@@ -1,4 +1,3 @@
-
 #include "vision_live.h"
 #include <Arduino.h>
 #include <WiFi.h>
