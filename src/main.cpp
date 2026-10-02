@@ -650,13 +650,20 @@ bool isStatusQuery(const String&q){
 String systemStatus(){
  String s="DATA STATUS TARS SAAT INI:\n";
  s+="RAM bebas "+String(ESP.getFreeHeap()/1024.0,1)+" KB, minimum "+String(ESP.getMinFreeHeap()/1024.0,1)+" KB, blok terbesar "+String(ESP.getMaxAllocHeap()/1024.0,1)+" KB.\n";
- s+="Flash "+String(ESP.getFlashChipSize()/1024.0/1024.0,1)+" MB, sketch "+String(ESP.getSketchSize()/1024.0,1)+" KB, ruang sketch bebas "+String(ESP.getFreeSketchSpace()/1024.0,1)+" KB.\n";
+ s+="Flash "+String(ESP.getFlashChipSize()/1048576.0,1)+" MB, sketch "+String(ESP.getSketchSize()/1024.0,1)+" KB, ruang sketch bebas "+String(ESP.getFreeSketchSpace()/1024.0,1)+" KB.\n";
  s+="LittleFS total "+String(LittleFS.totalBytes()/1024.0,1)+" KB, terpakai "+String(LittleFS.usedBytes()/1024.0,1)+" KB.\n";
  s+="CPU "+String(getCpuFrequencyMhz())+" MHz, uptime "+String(millis()/3600000UL)+" jam "+String((millis()/60000UL)%60)+" menit.\n";
  s+="Suhu ESP32 "+String(temperatureRead(),1)+" C.\n";
  s+="WiFi "+String(WiFi.status()==WL_CONNECTED?"terhubung":"terputus");
  if(WiFi.status()==WL_CONNECTED)s+="; RSSI "+String(WiFi.RSSI())+" dBm; IP "+WiFi.localIP().toString();
- s+=".\nNTP "+String(ntpOK?"valid":"belum valid")+", OLED "+String(oledOK?"aktif":"error")+", mic "+String(micOK?"aktif":"error")+", DAC "+String(dacOK?"aktif":"off")+", kamera "+String(cameraLive?"aktif":"off")+", audio "+String(playing?"sedang berjalan":"idle")+", motor "+String(wheelsMoving()?"aktif":"idle")+", STT "+String(sttReady?"ready":(sttConnected?"connected":"idle"))+".";
+ s+=".\nNTP "+String(ntpOK?"valid":"belum valid")+
+ ", OLED "+String(oledOK?"aktif":"error")+
+ ", mic "+String(micOK?"aktif":"error")+
+ ", DAC "+String(dacOK?"aktif":"off")+
+ ", kamera "+String(cameraLive?"aktif":"off")+
+ ", audio "+String(playing?"sedang berjalan":"idle")+
+ ", sistem roda siap (tanpa sensor umpan balik gerak)"+
+ ", STT "+String(sttReady?"ready":(sttConnected?"connected":"idle"))+".";
  return s;
 }
 
