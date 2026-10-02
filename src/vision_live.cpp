@@ -1,3 +1,4 @@
+
 #include "vision_live.h"
 #include <Arduino.h>
 #include <WiFi.h>
@@ -116,8 +117,15 @@ static bool buildVisionJSON(const String &question, size_t jpegLength,
                             size_t &bodyLength) {
     bodyLength = 0;
 
-    size_t qlen = serializeJson(question, questionJson,
-                                sizeof(questionJson));
+    JsonDocument questionDoc;
+    questionDoc["question"] = question;
+
+    size_t qlen = serializeJson(
+        questionDoc["question"],
+        questionJson,
+        sizeof(questionJson)
+    );
+
     if (!qlen || qlen >= sizeof(questionJson)) return false;
 
     int prefix = snprintf(
@@ -176,7 +184,6 @@ static String sendVisionJSON(const String &question,
     client.setTimeout(20000);
 
     HTTPClient http;
-    // Endpoint /vision bersifat sementara, disesuaikan dengan Worker.
     if (!http.begin(client, cloudURL() + "/vision")) {
         Serial.println("TARS: VISION HTTP BEGIN FAILED");
         return "";
@@ -279,16 +286,13 @@ String visionLiveAsk(const String &question) {
 
     size_t jpegLength = 0;
 
-    // Foto wajib selesai sebelum kamera dan TLS dimatikan/diaktifkan.
     if (!captureFrame(jpegLength)) return "";
 
-    // Kamera OFF baru setelah JPEG tersimpan.
     if (!stopCameraForTLS()) {
         Serial.println("TARS: VISION CAMERA STOP FAILED");
         return "";
     }
 
-    // TLS baru dimulai setelah kamera OFF.
     String answer = sendVisionJSON(question, jpegLength);
 
     memset(visionJpeg, 0, jpegLength);
