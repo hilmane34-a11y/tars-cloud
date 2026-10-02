@@ -776,6 +776,27 @@ bool autoSpeechCallback(const String &prompt){
 
   return processOnlineRequest(prompt,false,false,true);
 }
+//TTS Tars Oto//
+bool processVisionEvent(){
+ if(tarsMode!=MODE_ONLINE||playing||sttConnected)return false;
+ if(!pendingVisionCheck)return false;
+ if(millis()-lastVisionEventAt<VISION_EVENT_COOLDOWN_MS)return false;
+ if(!wifiOK())return false;
+
+ pendingVisionCheck=false;
+ lastVisionEventAt=millis();
+
+ static const char*prompts[]={
+  "Periksa gambar di depanmu. Jika terlihat manusia, sapa dengan ramah. Jika terlihat penghalang atau jalan tertutup, komentari secara alami. Jika tidak yakin, jangan menebak. Gunakan kalimat Indonesia singkat dan bervariasi.",
+  "Amati keadaan di depanmu. Apakah ada manusia, benda besar, atau sesuatu yang menghalangi jalan? Berikan komentar spontan yang santai. Jangan mengarang objek yang tidak terlihat.",
+  "Lihat lingkungan sekitarmu. Jika ada manusia, berikan sapaan singkat. Jika ada penghalang, ceritakan secara ringan. Jika tidak ada hal penting, katakan secara singkat bahwa keadaan terlihat biasa saja."
+ };
+
+ String prompt=prompts[random(0,3)];
+ Serial.println("TARS: AUTO VISION EVENT");
+
+ return processOnlineRequest(prompt,true,false,true);
+}
 /* STATUS */
 bool isStatusQuery(const String&q){
  String s=normCmd(q);s.replace("statuse","status");
@@ -989,9 +1010,11 @@ void loop(){
     return;
   }
   // STT sedang menunggu dan merekam suara pengguna.
-  wheelsStop();
+    wheelsStop();
   autonomyStop();
+
   String q=tarsMode==MODE_ONLINE?recordRealtime():recordOffline();
+
   if(q.length()){
     wheelsStop();
     autonomyStop();
@@ -999,15 +1022,20 @@ void loop(){
     processQuestion(q);
   }else{
     personalityUpdate(false,false,false);
+
     if(!specialActive())
       oledSetStatus(tarsMode==MODE_ONLINE?"LISTENING":"READY");
   }
-  // Tidak ada gerakan selama sesi STT.
+
   wheelsStop();
   autonomyStop();
-  // Auto speech hanya boleh dipertimbangkan setelah sesi STT ditutup.
-  if(!playing && tarsMode==MODE_ONLINE && !sttConnected){
-    autoSpeechUpdate(true,false,false);
+
+  if(!playing&&tarsMode==MODE_ONLINE&&!sttConnected){
+    if(pendingVisionCheck){
+      processVisionEvent();
+    }else{
+      autoSpeechUpdate(true,false,false);
+    }
   }
+
   delay(1);
-}
