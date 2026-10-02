@@ -91,6 +91,7 @@ WAVDecoder wav;
 WebSocketsClient sttWS;
 OV7670*camera=nullptr;
 SemaphoreHandle_t cameraMux=nullptr;
+portMUX_TYPE visionEventMux=portMUX_INITIALIZER_UNLOCKED;
 
 void ramDiag(const char*tag){
  uint32_t f=ESP.getFreeHeap(),m=ESP.getMinFreeHeap(),a=ESP.getMaxAllocHeap();
@@ -209,8 +210,11 @@ void drawCameraOLED(){
   EnvState environment={};
   if(envAnalyze(preview,environment)){
    autonomySetEnvironment(environment);
-   if(environment.event!=ENV_NONE)
-     pendingVisionCheck=true;
+if(environment.event!=ENV_NONE){
+  portENTER_CRITICAL(&visionEventMux);
+  pendingVisionCheck=true;
+  portEXIT_CRITICAL(&visionEventMux);
+}
    Serial.printf("TARS: ENV L=%d C=%d R=%d OBS=%d CONF=%u%% EVENT=%d\n",
     environment.leftClear,environment.centerClear,
     environment.rightClear,environment.obstacle,
@@ -787,22 +791,23 @@ bool autoSpeechCallback(const String &prompt){
 //TTS Tars Oto//
 bool processVisionEvent(){
  if(tarsMode!=MODE_ONLINE||playing||sttConnected)return false;
- if(!pendingVisionCheck)return false;
- if(millis()-lastVisionEventAt<VISION_EVENT_COOLDOWN_MS)return false;
  if(!wifiOK())return false;
-
- pendingVisionCheck=false;
- lastVisionEventAt=millis();
-
- static const char*prompts[]={
-  "Periksa gambar di depanmu. Jika terlihat manusia, sapa dengan ramah. Jika terlihat penghalang atau jalan tertutup, komentari secara alami. Jika tidak yakin, jangan menebak. Gunakan kalimat Indonesia singkat dan bervariasi.",
-  "Amati keadaan di depanmu. Apakah ada manusia, benda besar, atau sesuatu yang menghalangi jalan? Berikan komentar spontan yang santai. Jangan mengarang objek yang tidak terlihat.",
-  "Lihat lingkungan sekitarmu. Jika ada manusia, berikan sapaan singkat. Jika ada penghalang, ceritakan secara ringan. Jika tidak ada hal penting, katakan secara singkat bahwa keadaan terlihat biasa saja."
+ bool eventReady=false;
+ portENTER_CRITICAL(&visionEventMux);
+ if(pendingVisionCheck &&
+    millis()-lastVisionEventAt>=VISION_EVENT_COOLDOWN_MS){
+  pendingVisionCheck=false;
+  lastVisionEventAt=millis();
+  eventReady=true;
+ }
+ portEXIT_CRITICAL(&visionEventMux);
+if(!eventReady)return false; static const char*prompts[]={
+  "Periksa gambar di depanmu. Jika yakin melihat manusia, sapa dengan ramah. Jika terlihat penghalang, komentari secara alami. Jangan menebak.",
+  "Amati lingkungan di depanmu. Jika ada manusia atau penghalang yang jelas, berikan komentar singkat dan santai. Jangan mengarang.",
+  "Perhatikan keadaan di depanmu. Berikan sapaan jika manusia terlihat jelas, atau komentar ringan jika ada sesuatu yang menarik. Jika tidak ada hal penting, jangan membuat komentar."
  };
-
  String prompt=prompts[random(0,3)];
  Serial.println("TARS: AUTO VISION EVENT");
-
  return processOnlineRequest(prompt,true,false,true);
 }
 /* STATUS */
