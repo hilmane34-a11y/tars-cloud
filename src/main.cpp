@@ -719,52 +719,45 @@ String ask(const String&q){
 /* TTS */
 bool streamAudio(const String&url,const String&text){
  if(!wifiOK())return false;
- bool camOff=ttsCameraOff();ramDiag("PRE-TTS");
- if(!audioStart()){ttsCameraOn(camOff);return false;}
+ ramDiag("PRE-TTS");
+ if(!audioStart())return false;
 
  WiFiClientSecure c;c.setInsecure();c.setTimeout(20000);HTTPClient h;
  uint32_t total=millis();
- if(!h.begin(c,url)){audioStop();ttsCameraOn(camOff);return false;}
+ if(!h.begin(c,url)){audioStop();return false;}
  h.setTimeout(20000);h.addHeader("Content-Type","application/json");
  const char*keys[]={"Content-Type","X-TARS-TTS","X-TARS-TTS-FORMAT"};h.collectHeaders(keys,3);
-
  {
   JsonDocument j;j["text"]=text;String body;serializeJson(j,body);
   int code=h.POST(body);Serial.printf("TARS: AUDIO HTTP=%d\n",code);
-  if(code<200||code>=300){h.end();audioStop();ttsCameraOn(camOff);return false;}
+  if(code<200||code>=300){h.end();audioStop();return false;}
  }
-
  String ct=h.header("Content-Type"),fmt=h.header("X-TARS-TTS");ct.toLowerCase();WiFiClient*stream=h.getStreamPtr();
- if(!stream){h.end();audioStop();ttsCameraOn(camOff);return false;}
-
+ if(!stream){h.end();audioStop();return false;}
  int contentLen=h.getSize();bool isWav=ct.indexOf("wav")>=0||fmt.equalsIgnoreCase("WAV");
  audioRing.start(*stream,contentLen);playing=true;motorStop();
-
  size_t target=AUDIO_PREBUFFER;
  if(contentLen>0)target=min(target,(size_t)contentLen);
  uint32_t ps=millis();
-
  while(audioRing.available()<(int)target&&!audioRing.finished()){
   if(millis()-ps>10000){
-   audioRing.stop();h.end();playing=false;audioStop();ttsCameraOn(camOff);return false;
+   audioRing.stop();h.end();playing=false;audioStop();return false;
   }
   delay(1);yield();
  }
  if(!audioRing.available()){
-  audioRing.stop();h.end();playing=false;audioStop();ttsCameraOn(camOff);return false;
+  audioRing.stop();h.end();playing=false;audioStop();return false;
  }
-
  ramDiag("BEFORE-DECODER");pcmProbe.reset();bool started=false;
-
  if(!isWav){
   if(!dec.begin()){
    ramDiag("HELIX-ALLOC-FAIL");
    Serial.printf("TARS: HELIX START FAILED HEAP=%u MAX=%u INTMAX=%u\n",ESP.getFreeHeap(),ESP.getMaxAllocHeap(),heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT));
-   audioRing.stop();h.end();playing=false;audioStop();ttsCameraOn(camOff);return false;
+   audioRing.stop();h.end();playing=false;audioStop();return false;
   }
   ramDiag("HELIX-READY");audio_tools::AudioInfo src=codec.audioInfo();
   if(!mp3Resample.begin(src,22050)){
-   dec.end();audioRing.stop();h.end();playing=false;audioStop();ttsCameraOn(camOff);return false;
+   dec.end();audioRing.stop();h.end();playing=false;audioStop();return false;
   }
   copier.begin(dec,audioRing);
   while(true){
@@ -777,7 +770,7 @@ bool streamAudio(const String&url,const String&text){
  }else{
   wavDec.begin();audio_tools::AudioInfo src=wav.audioInfo();
   if(!wavResample.begin(src,22050)){
-   wavDec.end();audioRing.stop();h.end();playing=false;audioStop();ttsCameraOn(camOff);return false;
+   wavDec.end();audioRing.stop();h.end();playing=false;audioStop();return false;
   }
   oledStartSpeak(text);copier.begin(wavDec,audioRing);
   while(true){
@@ -788,9 +781,8 @@ bool streamAudio(const String&url,const String&text){
   }
   wavResample.flush();wavResample.end();wavDec.end();
  }
-
  audioRing.stop();pcmProbe.report();h.end();ramDiag("TTS-DONE");
- playing=false;audioStop();ttsCameraOn(camOff);behaviorReset();oledSetListening();
+ playing=false;audioStop();behaviorReset();oledSetListening();
  Serial.printf("TARS: AUDIO TOTAL=%lu ms\n",(unsigned long)(millis()-total));
  return started;
 }
