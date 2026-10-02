@@ -17,11 +17,11 @@
 #error "Tambahkan TARS_LIVE_TOKEN di config.h"
 #endif
 
-#define VISION_LIVE_JPEG_MAX       10000
-#define VISION_LIVE_INTERVAL       2000
-#define VISION_HEAP_MIN            40000
-#define VISION_LARGEST_MIN         30000
-#define VISION_LOCK_WAIT           15000
+#define VISION_LIVE_JPEG_MAX  10000
+#define VISION_LIVE_INTERVAL  2000
+#define VISION_HEAP_MIN       40000
+#define VISION_LARGEST_MIN    30000
+#define VISION_LOCK_WAIT      15000
 
 extern OV7670 *camera;
 extern SemaphoreHandle_t cameraMux;
@@ -29,20 +29,20 @@ extern SemaphoreHandle_t cameraMux;
 extern bool cameraLive;
 extern bool cameraOK;
 extern bool playing;
-extern bool sttConnected;
 
 extern bool wifiOK();
 extern bool visionLiveEnabled();
 extern void stopCamera();
+extern void startCamera();
 
 static uint8_t visionJpeg[VISION_LIVE_JPEG_MAX];
-
 static TaskHandle_t visionTaskHandle = nullptr;
 
 static portMUX_TYPE visionLock =
     portMUX_INITIALIZER_UNLOCKED;
 
 static volatile bool visionBusy = false;
+static volatile bool visionPaused = false;
 
 
 // =====================================================
@@ -60,18 +60,14 @@ static bool acquireVision() {
     }
 
     portEXIT_CRITICAL(&visionLock);
-
     return ok;
 }
 
 static bool acquireVisionWait(uint32_t timeoutMs) {
     uint32_t started = millis();
 
-    while ((millis() - started) < timeoutMs) {
-        if (acquireVision()) {
-            return true;
-        }
-
+    while (millis() - started < timeoutMs) {
+        if (acquireVision()) return true;
         vTaskDelay(pdMS_TO_TICKS(20));
     }
 
@@ -110,17 +106,12 @@ static bool visionHeapReady() {
 
     Serial.printf(
         "TARS: LIVE HEAP FREE=%u LARGEST=%u\n",
-        freeHeap,
-        largest
+        freeHeap, largest
     );
 
     if (freeHeap < VISION_HEAP_MIN ||
         largest < VISION_LARGEST_MIN) {
-
-        Serial.println(
-            "TARS: LIVE TLS SKIPPED - LOW HEAP"
-        );
-
+        Serial.println("TARS: LIVE TLS SKIPPED - LOW HEAP");
         return false;
     }
 
@@ -135,41 +126,38 @@ static bool visionHeapReady() {
 static bool captureFrame(size_t &jpegLength) {
     jpegLength = 0;
 
-    if (!camera || !cameraLive || !cameraOK) {
+    if (!cameraMux) {
+        Serial.println("TARS: LIVE CAMERA MUTEX NULL");
         return false;
     }
 
-    if (cameraMux &&
-        xSemaphoreTake(
-            cameraMux,
-            pdMS_TO_TICKS(2000)
-        ) != pdTRUE) {
+    if (xSemaphoreTake(
+        cameraMux,
+        pdMS_TO_TICKS(2000)
+    ) != pdTRUE) {
+        Serial.println("TARS: LIVE CAMERA MUTEX TIMEOUT");
+        return false;
+    }
 
-        Serial.println(
-            "TARS: LIVE CAMERA MUTEX TIMEOUT"
+    // Periksa ulang setelah mutex didapat.
+    bool ready = camera && cameraLive && cameraOK;
+
+    bool captured = false;
+
+    if (ready) {
+        captured = I2SCamera::encodeFrameToJPEG(
+            visionJpeg,
+            &jpegLength,
+            25
         );
-
-        return false;
     }
 
-    bool captured = I2SCamera::encodeFrameToJPEG(
-        visionJpeg,
-        &jpegLength,
-        25
-    );
-
-    if (cameraMux) {
-        xSemaphoreGive(cameraMux);
-    }
+    xSemaphoreGive(cameraMux);
 
     if (!captured ||
         jpegLength == 0 ||
         jpegLength > VISION_LIVE_JPEG_MAX) {
-
-        Serial.println(
-            "TARS: LIVE JPEG FAILED"
-        );
-
+        Serial.println("TARS: LIVE JPEG FAILED");
         jpegLength = 0;
         return false;
     }
@@ -184,15 +172,9 @@ static bool captureFrame(size_t &jpegLength) {
 
 static bool uploadFrame(size_t jpegLength) {
     if (!jpegLength ||
-        jpegLength > VISION_LIVE_JPEG_MAX) {
-        return false;
-    }
-
-    if (WiFi.status() != WL_CONNECTED) {
-        return false;
-    }
-
-    if (!visionHeapReady()) {
+        jpegLength > VISION_LIVE_JPEG_MAX ||
+        WiFi.status() != WL_CONNECTED ||
+        !visionHeapReady()) {
         return false;
     }
 
@@ -202,46 +184,30 @@ static bool uploadFrame(size_t jpegLength) {
 
     HTTPClient http;
 
-    if (!http.begin(
-        client,
-        cloudURL() + "/live/frame"
-    )) {
-        Serial.println(
-            "TARS: LIVE FRAME BEGIN FAILED"
-        );
-
+    if (!http.begin(client, cloudURL() + "/live/frame")) {
+        Serial.println("TARS: LIVE FRAME BEGIN FAILED");
         return false;
     }
 
     http.setTimeout(12000);
-
-    http.addHeader(
-        "Content-Type",
-        "image/jpeg"
-    );
-
+    http.addHeader("Content-Type", "image/jpeg");
     http.addHeader(
         "Authorization",
         String("Bearer ") + TARS_LIVE_TOKEN
     );
 
-    int code = http.POST(
-        visionJpeg,
-        jpegLength
-    );
+    int code = http.POST(visionJpeg, jpegLength);
 
     Serial.printf(
         "TARS: LIVE FRAME HTTP=%d SIZE=%u\n",
-        code,
-        (unsigned)jpegLength
+        code, (unsigned)jpegLength
     );
 
-    bool ok = (code >= 200 && code < 300);
+    bool ok = code >= 200 && code < 300;
 
     if (!ok) {
         Serial.println(
-            "TARS: LIVE FRAME ERROR " +
-            http.getString()
+            "TARS: LIVE FRAME ERROR " + http.getString()
         );
     }
 
@@ -264,9 +230,7 @@ static bool uploadFrame(size_t jpegLength) {
 static bool captureAndUpload() {
     size_t jpegLength = 0;
 
-    if (!captureFrame(jpegLength)) {
-        return false;
-    }
+    if (!captureFrame(jpegLength)) return false;
 
     return uploadFrame(jpegLength);
 }
@@ -277,11 +241,8 @@ static bool captureAndUpload() {
 // =====================================================
 
 static String analyzeLatest(const String &question) {
-    if (WiFi.status() != WL_CONNECTED) {
-        return "";
-    }
-
-    if (!visionHeapReady()) {
+    if (WiFi.status() != WL_CONNECTED ||
+        !visionHeapReady()) {
         return "";
     }
 
@@ -291,31 +252,19 @@ static String analyzeLatest(const String &question) {
 
     HTTPClient http;
 
-    if (!http.begin(
-        client,
-        cloudURL() + "/live/analyze"
-    )) {
-        Serial.println(
-            "TARS: LIVE ANALYZE BEGIN FAILED"
-        );
-
+    if (!http.begin(client, cloudURL() + "/live/analyze")) {
+        Serial.println("TARS: LIVE ANALYZE BEGIN FAILED");
         return "";
     }
 
     http.setTimeout(30000);
-
-    http.addHeader(
-        "Content-Type",
-        "application/json"
-    );
-
+    http.addHeader("Content-Type", "application/json");
     http.addHeader(
         "Authorization",
         String("Bearer ") + TARS_LIVE_TOKEN
     );
 
     JsonDocument requestDoc;
-
     requestDoc["question"] = question;
 
     String body;
@@ -323,38 +272,27 @@ static String analyzeLatest(const String &question) {
 
     int code = http.POST(body);
 
-    Serial.printf(
-        "TARS: LIVE ANALYZE HTTP=%d\n",
-        code
-    );
+    Serial.printf("TARS: LIVE ANALYZE HTTP=%d\n", code);
 
     if (code < 200 || code >= 300) {
         Serial.println(
-            "TARS: LIVE ANALYZE ERROR " +
-            http.getString()
+            "TARS: LIVE ANALYZE ERROR " + http.getString()
         );
-
         http.end();
         return "";
     }
 
     String response = http.getString();
-
     http.end();
 
     JsonDocument result;
 
     if (deserializeJson(result, response)) {
-        Serial.println(
-            "TARS: LIVE ANALYZE JSON ERROR"
-        );
-
+        Serial.println("TARS: LIVE ANALYZE JSON ERROR");
         return "";
     }
 
-    String answer =
-        result["response"].as<String>();
-
+    String answer = result["response"].as<String>();
     answer.trim();
 
     return answer;
@@ -366,28 +304,26 @@ static String analyzeLatest(const String &question) {
 // =====================================================
 
 static void visionLiveTask(void *) {
-    Serial.println(
-        "TARS: LIVE UPLOAD TASK START"
-    );
+    Serial.println("TARS: LIVE UPLOAD TASK START");
 
     TickType_t lastWake = xTaskGetTickCount();
 
     for (;;) {
-
-        if (visionLiveEnabled() &&
+        if (!visionPaused &&
+            visionLiveEnabled() &&
             WiFi.status() == WL_CONNECTED &&
             cameraLive &&
             cameraOK &&
             !playing &&
             acquireVision()) {
 
-            /*
-             * STT BOLEH TETAP AKTIF.
-             * HTTPS upload berjalan bersamaan
-             * dengan koneksi STT WebSocket.
-             */
-
-            captureAndUpload();
+            if (!visionPaused &&
+                visionLiveEnabled() &&
+                cameraLive &&
+                cameraOK &&
+                !playing) {
+                captureAndUpload();
+            }
 
             releaseVision();
         }
@@ -405,9 +341,7 @@ static void visionLiveTask(void *) {
 // =====================================================
 
 void visionLiveBegin() {
-    if (visionTaskHandle) {
-        return;
-    }
+    if (visionTaskHandle) return;
 
     BaseType_t result = xTaskCreatePinnedToCore(
         visionLiveTask,
@@ -421,61 +355,83 @@ void visionLiveBegin() {
 
     if (result != pdPASS) {
         visionTaskHandle = nullptr;
-
-        Serial.println(
-            "TARS: LIVE TASK CREATE FAILED"
-        );
+        Serial.println("TARS: LIVE TASK CREATE FAILED");
     } else {
-        Serial.println(
-            "TARS: LIVE TASK READY"
-        );
+        Serial.println("TARS: LIVE TASK READY");
     }
 }
 
 
 // =====================================================
-// STOP UPLOAD + ANALYZE LATEST FRAME
+// PAUSE LIVE + STOP CAMERA
+// =====================================================
+
+bool visionLivePause() {
+    if (!visionLiveEnabled()) return false;
+
+    if (visionPaused) return true;
+
+    // Tunggu upload yang sedang berjalan selesai.
+    if (!acquireVisionWait(VISION_LOCK_WAIT)) {
+        Serial.println("TARS: LIVE PAUSE LOCK TIMEOUT");
+        return false;
+    }
+
+    // Lock tetap ditahan sampai visionLiveResume().
+    visionPaused = true;
+
+    Serial.println("TARS: LIVE PAUSE - STOP CAMERA");
+
+    stopCamera();
+
+    Serial.printf(
+        "TARS: LIVE PAUSED HEAP=%u LARGEST=%u\n",
+        ESP.getFreeHeap(),
+        ESP.getMaxAllocHeap()
+    );
+
+    return true;
+}
+
+
+// =====================================================
+// RESUME LIVE + RESTART CAMERA
+// =====================================================
+
+void visionLiveResume() {
+    if (!visionPaused) return;
+
+    Serial.println("TARS: LIVE RESUME");
+
+    if (visionLiveEnabled() &&
+        WiFi.status() == WL_CONNECTED) {
+        startCamera();
+    }
+
+    visionPaused = false;
+    releaseVision();
+
+    Serial.println("TARS: LIVE UPLOAD RESUMED");
+}
+
+
+// =====================================================
+// ANALYZE LATEST FRAME
+// Kamera harus sudah dipause oleh main.cpp.
 // =====================================================
 
 String visionLiveAsk(const String &question) {
-    if (!visionLiveEnabled()) {
+    if (!visionLiveEnabled()) return "";
+
+    if (!visionPaused || !visionBusy) {
+        Serial.println("TARS: LIVE ASK REQUIRES PAUSE");
         return "";
     }
 
-    if (WiFi.status() != WL_CONNECTED &&
-        !wifiOK()) {
-
-        Serial.println(
-            "TARS: LIVE ASK WIFI ERROR"
-        );
-
+    if (WiFi.status() != WL_CONNECTED && !wifiOK()) {
+        Serial.println("TARS: LIVE ASK WIFI ERROR");
         return "";
     }
-
-    /*
-     * Tunggu upload yang sedang berjalan selesai.
-     * Setelah lock didapat, task upload tidak
-     * dapat memulai capture/upload baru.
-     */
-
-    if (!acquireVisionWait(VISION_LOCK_WAIT)) {
-        Serial.println(
-            "TARS: LIVE LOCK TIMEOUT"
-        );
-
-        return "";
-    }
-
-    Serial.println(
-        "TARS: VISION STOP CAMERA"
-    );
-
-    /*
-     * Lepaskan kamera dan resource OV7670
-     * sebelum koneksi TLS analisis.
-     */
-
-    stopCamera();
 
     Serial.printf(
         "TARS: VISION TLS HEAP=%u LARGEST=%u\n",
@@ -483,11 +439,7 @@ String visionLiveAsk(const String &question) {
         ESP.getMaxAllocHeap()
     );
 
-    /*
-     * Tidak capture JPEG lagi.
-     * Gunakan frame terakhir di Cloudflare KV.
-     */
-
+    // Tidak capture ulang. Analisis frame terakhir di KV.
     String answer = analyzeLatest(question);
 
     Serial.printf(
@@ -495,8 +447,6 @@ String visionLiveAsk(const String &question) {
         ESP.getFreeHeap(),
         ESP.getMaxAllocHeap()
     );
-
-    releaseVision();
 
     return answer;
 }
