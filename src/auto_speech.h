@@ -13,5 +13,6 @@ void autoSpeechUpdate(
 );
 
 void autoSpeechNotifyVisionEvent(EnvEvent event);
+void autoSpeechNotifyVision(const String &description);
 
 void autoSpeechDone();
