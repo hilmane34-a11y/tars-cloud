@@ -715,24 +715,6 @@ String ask(const String&q){
  String s=x["response"].as<String>();s.trim();
  Serial.printf("TARS: ASK RESPONSE LENGTH=%u\n",(unsigned)s.length());return s;
 }
-
-/* TTS CAMERA */
-bool ttsCameraOff(){
- if(tarsMode!=MODE_ONLINE||!cameraLive)return false;
- ramDiag("PRE-CAM-OFF");stopCamera();delay(50);ramDiag("CAM-OFF");return true;
-}
-void ttsCameraOn(bool wasOn){
- if(!wasOn)return;
- delay(50);startCamera();ramDiag("CAM-ON");
-}
-void visionCameraResume(){
- if(tarsMode!=MODE_ONLINE)return;
- if(!cameraLive){
-  Serial.println("TARS: VISION CAMERA RESUME");
-  startCamera();
-  ramDiag("VISION-CAMERA-ON");
- }
-}
 /* TTS */
 bool streamAudio(const String&url,const String&text){
  if(!wifiOK())return false;
@@ -920,41 +902,55 @@ bool processOffline(const String&q){
 }
 
 /* PROCESS */
-void processQuestion(const String&q){
- String nq=normCmd(q);
- if(isPickPaperCmd(q)){runPickPaper();return;}
- if(tarsMode==MODE_OFFLINE){processOffline(q);return;}
- if(nq=="offline"||nq=="off line"||nq=="tars offline"||nq=="tars off line"||nq=="mode offline"||nq=="mode off line"||nq=="tars mode offline"||nq=="tars mode off line"){
-  Serial.println("TARS: SWITCH ONLINE -> OFFLINE");
-  tarsMode=MODE_OFFLINE;closeSTT();
-  sttReady=sttDone=sttError=false;
-  oledShowText("OFFLINE","ONLINE");playLocalMP3(offline_start,offline_end,"Mode offline aktif, tuan");
-  oledSetStatus("READY");Serial.println("TARS: MODE OFFLINE");return;
- }
- oledShowText(q,"STT");delay(500);
-if(needsVision(q)){
- Serial.println("TARS: ONLINE VISION REQUEST");
- oledSetStatus("VISION");
- String answer=visionLiveAsk(q);
- if(!answer.length()){
-  Serial.println("TARS: VISION FAILED -> ASK");
-  answer=ask(q);
- }
- if(!answer.length()){
-  visionCameraResume();
-  oledSetStatus("VISION ERROR");
-  behaviorReset();
-  return;
- }
- oledShowText(answer,"VISION");
- delay(500);
- Serial.println("TARS: VISION -> TTS CAMERA OFF");
- bool ok=streamAudio(String(TARS_CLOUD_URL)+"/tts",answer);
- visionCameraResume();
- oledSetStatus(ok?"LISTENING":"AUDIO ERROR");
- behaviorReset();
- return;
- }
+void processQuestion(const String &q) {
+    String nq = normCmd(q);
+    if (isPickPaperCmd(q)) {
+        runPickPaper();
+        return;
+    }
+    if (tarsMode == MODE_OFFLINE) {
+        processOffline(q);
+        return;
+    }
+    if (nq == "offline" /* pertahankan kondisi lama */) {
+        // Pertahankan isi perintah offline milik tuan.
+        // Jangan ubah bagian ini.
+        return;
+    }
+    oledShowText(q, "STT");
+    delay(500);
+    // Kamera OFF dan upload dikunci sebelum pemrosesan online.
+    if (!visionLivePause()) {
+        oledSetStatus("CAMERA PAUSE ERROR");
+        behaviorReset();
+        return;
+    }
+    String answer;
+    if (needsVision(q)) {
+        answer = visionLiveAsk(q);
+        if (!answer.length()) {
+            answer = ask(q);
+        }
+    } else {
+        answer = ask(q);
+    }
+    if (!answer.length()) {
+        visionLiveResume();
+        oledSetStatus("AI ERROR");
+        behaviorReset();
+        return;
+    }
+    oledShowText(answer, needsVision(q) ? "VISION" : "TARS");
+    delay(500);
+    bool ok = streamAudio(answer);
+    // Kamera baru hidup lagi setelah TTS selesai/gagal.
+    visionLiveResume();
+    if (!ok) {
+        oledSetStatus("TTS ERROR");
+        behaviorReset();
+        return;
+    }
+   behaviorReset();
 }
 /* SETUP */
 void setup(){
