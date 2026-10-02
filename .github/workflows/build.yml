@@ -54,12 +54,35 @@ jobs:
           mkdir -p data
           touch data/.gitkeep
 
+      - name: Build LittleFS
+        shell: bash
+        run: |
+          echo "========================================"
+          echo "BUILD LITTLEFS"
+          echo "========================================"
+
+          pio run -e tars -t buildfs
+
+          if [ ! -s .pio/build/tars/littlefs.bin ]; then
+            echo "ERROR: littlefs.bin gagal dibuat"
+            exit 1
+          fi
+
+          echo "OK - LittleFS berhasil dibuat"
+          ls -lh .pio/build/tars/littlefs.bin
+
       - name: Build TARS firmware
         shell: bash
         run: |
+          echo "========================================"
+          echo "BUILD TARS FIRMWARE"
+          echo "========================================"
+
           pio run -e tars
 
-      - name: Verify PlatformIO build outputs
+          echo "OK - proses build firmware selesai"
+
+      - name: Verify PlatformIO outputs
         shell: bash
         run: |
           BUILD=".pio/build/tars"
@@ -78,31 +101,26 @@ jobs:
             -printf "%p (%s bytes)\n"
 
           echo "========================================"
-          echo "CHECK PARTITION BIN"
+          echo "CHECK REQUIRED FILES"
           echo "========================================"
 
-          if [ ! -s "$BUILD/partitions.bin" ]; then
-            echo "ERROR: PlatformIO tidak menghasilkan partitions.bin"
-            echo "Periksa board_build.partitions dan partitions.csv"
-            echo "Isi folder build:"
-            ls -lah "$BUILD"
-            exit 1
-          fi
+          for FILE in \
+            "$BUILD/partitions.bin" \
+            "$BUILD/firmware.bin" \
+            "$BUILD/littlefs.bin"
+          do
+            if [ ! -s "$FILE" ]; then
+              echo "ERROR: File tidak ditemukan: $FILE"
+              echo "Isi folder build:"
+              ls -lah "$BUILD"
+              exit 1
+            fi
 
-          echo "OK - partitions.bin dihasilkan PlatformIO"
-          ls -lh "$BUILD/partitions.bin"
+            echo "OK: $FILE"
+            ls -lh "$FILE"
+          done
 
-          if [ ! -s "$BUILD/firmware.bin" ]; then
-            echo "ERROR: firmware.bin tidak ditemukan"
-            exit 1
-          fi
-
-          echo "OK - firmware.bin ditemukan"
-
-      - name: Build LittleFS
-        shell: bash
-        run: |
-          pio run -e tars -t buildfs
+          echo "OK - seluruh output PlatformIO tersedia"
 
       - name: Locate ESP32 tools
         shell: bash
