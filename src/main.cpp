@@ -110,6 +110,7 @@ MP3SYM(siang) MP3SYM(sore) MP3SYM(malam)
 bool wifiOK();
 bool visionLiveEnabled(){return tarsMode==MODE_ONLINE;}
 String normCmd(String);
+String systemStatus();
 bool playLocalMP3(const uint8_t*,const uint8_t*,const String&,bool=false);
 
 /* CAMERA DIAGNOSTIC */
