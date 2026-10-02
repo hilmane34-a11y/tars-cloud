@@ -26,7 +26,7 @@ struct EnvState {
   EnvEvent event;
   uint8_t motionLevel;
 };
-
 void envBegin();
+void envResetMotion();
 bool envAnalyze(const uint8_t* image, EnvState &result);
 EnvState envGet();
