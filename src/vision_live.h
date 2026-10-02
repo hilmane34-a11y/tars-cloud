@@ -2,6 +2,6 @@
 #include <Arduino.h>
 
 void visionLiveBegin();
-bool visionLivePause(bool captureVision);
+bool visionLivePause();
 void visionLiveResume();
 String visionLiveAsk(const String &question);
