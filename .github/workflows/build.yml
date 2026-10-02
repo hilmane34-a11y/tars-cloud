@@ -18,6 +18,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install PlatformIO
+        shell: bash
         run: |
           python -m pip install --upgrade pip
           pip install -U platformio
@@ -26,9 +27,15 @@ jobs:
         shell: bash
         run: |
           set -e
+
           echo "========================================"
           echo "VERIFY PARTITION TABLE"
           echo "========================================"
+
+          if [ ! -f partitions.csv ]; then
+            echo "ERROR: partitions.csv tidak ditemukan"
+            exit 1
+          fi
 
           cat partitions.csv
 
@@ -52,6 +59,46 @@ jobs:
         run: |
           pio run -e tars
 
+      - name: Verify PlatformIO build outputs
+        shell: bash
+        run: |
+          BUILD=".pio/build/tars"
+
+          echo "========================================"
+          echo "PLATFORMIO BUILD OUTPUTS"
+          echo "========================================"
+
+          if [ ! -d "$BUILD" ]; then
+            echo "ERROR: Folder build tidak ditemukan"
+            exit 1
+          fi
+
+          find "$BUILD" -maxdepth 2 -type f \
+            \( -name "*.bin" -o -name "*.elf" \) \
+            -printf "%p (%s bytes)\n"
+
+          echo "========================================"
+          echo "CHECK PARTITION BIN"
+          echo "========================================"
+
+          if [ ! -s "$BUILD/partitions.bin" ]; then
+            echo "ERROR: PlatformIO tidak menghasilkan partitions.bin"
+            echo "Periksa board_build.partitions dan partitions.csv"
+            echo "Isi folder build:"
+            ls -lah "$BUILD"
+            exit 1
+          fi
+
+          echo "OK - partitions.bin dihasilkan PlatformIO"
+          ls -lh "$BUILD/partitions.bin"
+
+          if [ ! -s "$BUILD/firmware.bin" ]; then
+            echo "ERROR: firmware.bin tidak ditemukan"
+            exit 1
+          fi
+
+          echo "OK - firmware.bin ditemukan"
+
       - name: Build LittleFS
         shell: bash
         run: |
@@ -67,7 +114,7 @@ jobs:
           BOOT_APP0="$FRAMEWORK/tools/partitions/boot_app0.bin"
 
           for FILE in "$BOOTLOADER_ELF" "$BOOT_APP0" "$ESPTOOL"; do
-            if [ ! -f "$FILE" ]; then
+            if [ ! -s "$FILE" ]; then
               echo "ERROR: File tidak ditemukan: $FILE"
               exit 1
             fi
@@ -78,7 +125,7 @@ jobs:
           echo "BOOT_APP0=$BOOT_APP0" >> "$GITHUB_ENV"
           echo "ESPTOOL=$ESPTOOL" >> "$GITHUB_ENV"
 
-          echo "ESP32 tools ditemukan."
+          echo "OK - ESP32 tools ditemukan"
 
       - name: Convert bootloader ELF to BIN
         shell: bash
@@ -97,6 +144,7 @@ jobs:
           fi
 
           echo "OK - bootloader.bin berhasil dibuat"
+          ls -lh bootloader.bin
 
       - name: Verify build files
         shell: bash
@@ -161,6 +209,7 @@ jobs:
         shell: bash
         run: |
           set -e
+
           BUILD=".pio/build/tars"
 
           python "$ESPTOOL" \
