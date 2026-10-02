@@ -1,8 +1,8 @@
 #pragma once
-#include <Arduino.h>
+#include "env.h"
 
 void autonomyBegin();
 void autonomyStop();
-void autonomySetSafety(bool cameraValid,bool pathClear);
-void autonomyUpdate(bool enabled,bool busy);
+void autonomySetEnvironment(const EnvState &environment);
+void autonomyUpdate(bool enabled, bool busy);
 bool autonomyIsMoving();
