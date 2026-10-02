@@ -1,6 +1,6 @@
-
 #pragma once
 #include <Arduino.h>
+#include "env.h"
 
 typedef bool (*AutoSpeechCallback)(const String &prompt);
 
