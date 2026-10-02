@@ -854,7 +854,7 @@ Serial.println("TARS: LIFE READY");
 Serial.println("TARS: PERSONALITY READY");
 Serial.println("TARS: AUTONOMY READY");
 Serial.println("TARS: AUTO SPEECH READY");
-
+}
 /* LOOP */
 void loop(){
   ramMonitor();
