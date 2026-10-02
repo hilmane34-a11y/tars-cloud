@@ -642,7 +642,23 @@ bool streamAudio(const String&url,const String&text){
  playing=false;audioStop();wheelsStop();oledSetListening();
  Serial.printf("TARS: AUDIO TOTAL=%lu ms\n",(unsigned long)(millis()-total));return started;
 }
+/* AUTO SPEECH — di luar streamAudio */
+bool autoSpeechCallback(const String &prompt){
+  if(tarsMode!=MODE_ONLINE || playing || sttConnected)return false;
+  if(!wifiOK())return false;
 
+  wheelsStop();
+  String answer=ask(prompt);
+  if(!answer.length())return false;
+
+  oledShowText(answer,"AUTO SPEECH");
+  bool ok=streamAudio(String(TARS_CLOUD_URL)+"/tts",answer);
+
+  wheelsStop();
+  if(ok)autoSpeechDone();
+  oledSetStatus("LISTENING");
+  return ok;
+}
 /* STATUS */
 bool isStatusQuery(const String&q){
  String s=normCmd(q);s.replace("statuse","status");
