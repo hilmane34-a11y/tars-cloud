@@ -866,14 +866,16 @@ void setup(){
  if(wifiManagerConnect(true))if(syncTime())checkTimeGreeting();
 
 oledSetStatus("READY");
-startCamera();
-visionLiveBegin();
+
 envBegin();
+visionLiveBegin();
 personalityBegin();
 autonomyBegin();
 autoSpeechBegin(autoSpeechCallback);
+startCamera();
 ramDiag("READY");
 wheelsStop();
+
 Serial.println("TARS: LIFE READY");
 Serial.println("TARS: PERSONALITY READY");
 Serial.println("TARS: AUTONOMY READY");
