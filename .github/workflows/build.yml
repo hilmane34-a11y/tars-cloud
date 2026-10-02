@@ -32,17 +32,16 @@ jobs:
           echo "VERIFY PARTITION TABLE"
           echo "========================================"
 
-          if [ ! -f partitions.csv ]; then
+          test -f partitions.csv || {
             echo "ERROR: partitions.csv tidak ditemukan"
             exit 1
-          fi
+          }
 
           cat partitions.csv
 
           grep -Eq '^spiffs,[[:space:]]*data,[[:space:]]*spiffs,[[:space:]]*0x380000,[[:space:]]*0x80000' partitions.csv || {
             echo "ERROR: Partisi LittleFS tidak sesuai!"
-            echo "Harus:"
-            echo "spiffs,data,spiffs,0x380000,0x80000"
+            echo "Harus: spiffs,data,spiffs,0x380000,0x80000"
             exit 1
           }
 
@@ -51,50 +50,77 @@ jobs:
       - name: Prepare LittleFS
         shell: bash
         run: |
+          set -e
           mkdir -p data
           touch data/.gitkeep
+          echo "OK - folder data siap"
 
       - name: Build LittleFS
         shell: bash
         run: |
+          set -e
+
           echo "========================================"
           echo "BUILD LITTLEFS"
           echo "========================================"
 
           pio run -e tars -t buildfs
 
-          if [ ! -s .pio/build/tars/littlefs.bin ]; then
-            echo "ERROR: littlefs.bin gagal dibuat"
+          echo "========================================"
+          echo "SEARCH LITTLEFS IMAGE"
+          echo "========================================"
+
+          find .pio -type f -name "littlefs.bin" -printf "%p (%s bytes)\n" || true
+
+          BUILD=".pio/build/tars"
+          mkdir -p "$BUILD"
+
+          if [ ! -s "$BUILD/littlefs.bin" ]; then
+            FOUND=$(find .pio -type f -name "littlefs.bin" -size +0c | head -n 1)
+
+            if [ -n "$FOUND" ]; then
+              echo "Menyalin image dari: $FOUND"
+              cp "$FOUND" "$BUILD/littlefs.bin"
+            fi
+          fi
+
+          if [ ! -s "$BUILD/littlefs.bin" ]; then
+            echo "ERROR: littlefs.bin tidak berhasil dibuat"
+            echo "Isi folder .pio:"
+            find .pio -maxdepth 4 -type f -name "*.bin" -printf "%p (%s bytes)\n" || true
             exit 1
           fi
 
           echo "OK - LittleFS berhasil dibuat"
-          ls -lh .pio/build/tars/littlefs.bin
+          ls -lh "$BUILD/littlefs.bin"
 
       - name: Build TARS firmware
         shell: bash
         run: |
+          set -e
+
           echo "========================================"
           echo "BUILD TARS FIRMWARE"
           echo "========================================"
 
           pio run -e tars
 
-          echo "OK - proses build firmware selesai"
+          echo "OK - firmware berhasil dibuat"
 
       - name: Verify PlatformIO outputs
         shell: bash
         run: |
+          set -e
           BUILD=".pio/build/tars"
 
           echo "========================================"
           echo "PLATFORMIO BUILD OUTPUTS"
           echo "========================================"
 
-          if [ ! -d "$BUILD" ]; then
+          test -d "$BUILD" || {
             echo "ERROR: Folder build tidak ditemukan"
             exit 1
-          fi
+          }
 
           find "$BUILD" -maxdepth 2 -type f \
             \( -name "*.bin" -o -name "*.elf" \) \
@@ -111,7 +137,6 @@ jobs:
           do
             if [ ! -s "$FILE" ]; then
               echo "ERROR: File tidak ditemukan: $FILE"
-              echo "Isi folder build:"
               ls -lah "$BUILD"
               exit 1
             fi
@@ -120,11 +145,13 @@ jobs:
             ls -lh "$FILE"
           done
 
-          echo "OK - seluruh output PlatformIO tersedia"
+          echo "OK - seluruh output tersedia"
 
       - name: Locate ESP32 tools
         shell: bash
         run: |
+          set -e
+
           FRAMEWORK="$HOME/.platformio/packages/framework-arduinoespressif32"
           ESPTOOL="$HOME/.platformio/packages/tool-esptoolpy/esptool.py"
 
@@ -156,10 +183,10 @@ jobs:
             "$BOOTLOADER_ELF" \
             -o bootloader.bin
 
-          if [ ! -s bootloader.bin ]; then
+          test -s bootloader.bin || {
             echo "ERROR: bootloader.bin gagal dibuat"
             exit 1
-          fi
+          }
 
           echo "OK - bootloader.bin berhasil dibuat"
           ls -lh bootloader.bin
@@ -167,6 +194,7 @@ jobs:
       - name: Verify build files
         shell: bash
         run: |
+          set -e
           BUILD=".pio/build/tars"
 
           echo "========================================"
@@ -185,17 +213,17 @@ jobs:
               ls -lh "$FILE"
             else
               echo "ERROR: File hilang atau kosong: $FILE"
-              echo "Isi folder build:"
               ls -lah "$BUILD" || true
               exit 1
             fi
           done
 
-          echo "OK - semua file build tersedia"
+          echo "OK - semua file tersedia"
 
       - name: Verify image sizes
         shell: bash
         run: |
+          set -e
           BUILD=".pio/build/tars"
 
           PART_SIZE=$(stat -c%s "$BUILD/partitions.bin")
@@ -212,7 +240,7 @@ jobs:
           fi
 
           if [ "$FW_SIZE" -gt $((0x370000)) ]; then
-            echo "ERROR: Firmware melewati batas area aplikasi"
+            echo "ERROR: Firmware melewati batas aplikasi"
             exit 1
           fi
 
@@ -221,13 +249,17 @@ jobs:
             exit 1
           fi
 
-          echo "OK - ukuran seluruh image sesuai"
+          if [ "$FS_SIZE" -ne $((0x80000)) ]; then
+            echo "ERROR: Ukuran image LittleFS bukan 512 KB"
+            exit 1
+          fi
+
+          echo "OK - ukuran image sesuai"
 
       - name: Merge TARS firmware
         shell: bash
         run: |
           set -e
-
           BUILD=".pio/build/tars"
 
           python "$ESPTOOL" \
@@ -248,6 +280,8 @@ jobs:
       - name: Verify final BIN
         shell: bash
         run: |
+          set -e
+
           python - <<'PY'
           import os
 
@@ -271,9 +305,6 @@ jobs:
           print("LittleFS offset : 0x380000")
           print("LittleFS size   : 0x80000 (512 KB)")
           print("----------------------------------------")
-
-          if size > 0x400000:
-              raise SystemExit("ERROR: BIN melebihi 4 MB")
 
           if size != 0x400000:
               raise SystemExit("ERROR: merged BIN bukan 4 MB penuh")
