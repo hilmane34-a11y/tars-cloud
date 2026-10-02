@@ -23,7 +23,6 @@
 #include "wifi_manager.h"
 #include <string.h>
 #include "Log.h"
-#include "../tars_roda/wheels.h"
 #include "wheels.h"
 #include "tars_auto/personality.h"
 #include "tars_auto/autonomy.h"
