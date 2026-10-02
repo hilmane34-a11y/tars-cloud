@@ -23,11 +23,11 @@
 #include "wifi_manager.h"
 #include <string.h>
 #include "Log.h"
+#include "personality.h"
+#include "autonomy.h"
+#include "auto_speech.h"
 #include "wheels.h"
-#include "tars_auto/personality.h"
-#include "tars_auto/autonomy.h"
-#include "tars_auto/auto_speech.h"
-#include "tars_auto/env.h"
+#include "env.h"
 
 #define MIC_PORT I2S_NUM_1
 #define MIC_SCK 18
