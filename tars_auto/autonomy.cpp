@@ -1,4 +1,3 @@
-
 #include "autonomy.h"
 #include "../tars_roda/wheels.h"
 #include "personality.h"
