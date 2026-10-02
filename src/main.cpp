@@ -172,7 +172,7 @@ void drawCameraOLED(){
  if(ok){
   EnvState environment;
   if(envAnalyze(preview,environment)){
-   autonomySetSafety(environment.valid,environment.centerClear);
+   autonomySetEnvironment(environment);
    Serial.printf(
     "TARS: ENV L=%d C=%d R=%d OBS=%d CONF=%u%%\n",
     environment.leftClear,
@@ -182,7 +182,8 @@ void drawCameraOLED(){
     environment.confidence
    );
   }else{
-   autonomySetSafety(false,false);
+   EnvState invalid = {};
+autonomySetEnvironment(invalid);
   }
   oled.clearDisplay();
   for(int y=0;y<64;y++)
@@ -191,7 +192,8 @@ void drawCameraOLED(){
      oled.drawPixel(x,y,SSD1306_WHITE);
   oled.display();
  }else{
-  autonomySetSafety(false,false);
+  EnvState invalid = {};
+autonomySetEnvironment(invalid);
  }
 }
 
