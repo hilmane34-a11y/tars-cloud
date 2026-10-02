@@ -642,22 +642,46 @@ bool streamAudio(const String&url,const String&text){
  playing=false;audioStop();wheelsStop();oledSetListening();
  Serial.printf("TARS: AUDIO TOTAL=%lu ms\n",(unsigned long)(millis()-total));return started;
 }
-/* AUTO SPEECH — di luar streamAudio */
+/* SHARED ONLINE AI CYCLE */
+bool processOnlineRequest(const String &q,bool vision,bool status,bool automatic=false){
+  wheelsStop();
+  ramDiag("BEFORE-CAMERA-PAUSE");
+  if(!visionLivePause()){
+    Serial.println("TARS: AI REQUEST ABORTED - CAMERA PAUSE FAILED");
+    oledSetStatus("CAMERA PAUSE ERROR");
+    wheelsStop();
+    return false;
+  }
+  ramDiag("CAMERA-OFF-TLS");
+  String answer;
+  if(vision) answer=visionLiveAsk(q);
+  else if(status) answer=systemStatus();
+  else answer=ask(q);
+  if(!answer.length()){
+    Serial.println("TARS: AI EMPTY RESPONSE");
+    visionLiveResume();
+    oledSetStatus("AI ERROR");
+    wheelsStop();
+    return false;
+  }
+  oledShowText(answer,automatic?"AUTO SPEECH":(vision?"VISION":(status?"STATUS":"ASK")));
+  delay(300);
+  ramDiag("BEFORE-TTS");
+  bool ok=streamAudio(String(TARS_CLOUD_URL)+"/tts",answer);
+  ramDiag("AFTER-TTS");
+  // Kamera baru aktif kembali setelah TTS selesai.
+  visionLiveResume();
+  wheelsStop();
+  oledSetStatus(ok?"LISTENING":"AUDIO ERROR");
+  if(automatic && ok) autoSpeechDone();
+  return ok;
+}
+/* AUTO SPEECH */
 bool autoSpeechCallback(const String &prompt){
   if(tarsMode!=MODE_ONLINE || playing || sttConnected)return false;
   if(!wifiOK())return false;
 
-  wheelsStop();
-  String answer=ask(prompt);
-  if(!answer.length())return false;
-
-  oledShowText(answer,"AUTO SPEECH");
-  bool ok=streamAudio(String(TARS_CLOUD_URL)+"/tts",answer);
-
-  wheelsStop();
-  if(ok)autoSpeechDone();
-  oledSetStatus("LISTENING");
-  return ok;
+  return processOnlineRequest(prompt,false,false,true);
 }
 /* STATUS */
 bool isStatusQuery(const String&q){
@@ -757,31 +781,33 @@ bool processOffline(const String&q){
 }
 
 /* PROCESS */
+/* PROCESS */
 void processQuestion(const String&q){
- String nq=normCmd(q);
- if(tarsMode==MODE_OFFLINE){processOffline(q);return;}
- if(nq=="offline"||nq=="off line"||nq=="tars offline"||nq=="tars off line"||
-    nq=="mode offline"||nq=="mode off line"||nq=="tars mode offline"||nq=="tars mode off line"){
-  Serial.println("TARS: SWITCH ONLINE -> OFFLINE");closeSTT();tarsMode=MODE_OFFLINE;
-  sttReady=sttDone=sttError=false;oledShowText("OFFLINE","ONLINE");
-  playLocalMP3(offline_start,offline_end,"Mode offline aktif, tuan");
-  oledSetStatus("READY");Serial.println("TARS: MODE OFFLINE");return;
- }
- oledShowText(q,"STT");delay(500);
- if(!visionLivePause()){
-  Serial.println("TARS: CAMERA PAUSE FAILED");oledSetStatus("CAMERA PAUSE ERROR");wheelsStop();return;
- }
- bool vision=needsVision(q),status=isStatusQuery(q);String answer;
- if(vision){Serial.println("TARS: ONLINE VISION REQUEST");oledSetStatus("VISION");answer=visionLiveAsk(q);}
- else answer=status?systemStatus():ask(q);
- if(!answer.length()){
-  visionLiveResume();oledSetStatus(vision?"VISION ERROR":(status?"STATUS ERROR":"ASK ERROR"));wheelsStop();return;
- }
- oledShowText(answer,vision?"VISION":(status?"STATUS":"ASK"));delay(500);
- bool ok=streamAudio(String(TARS_CLOUD_URL)+"/tts",answer);
- visionLiveResume();oledSetStatus(ok?"LISTENING":"AUDIO ERROR");wheelsStop();
+  String nq=normCmd(q);
+  if(tarsMode==MODE_OFFLINE){
+    processOffline(q);
+    return;
+  }
+  if(nq=="offline"||nq=="off line"||nq=="tars offline"||
+     nq=="tars off line"||nq=="mode offline"||
+     nq=="mode off line"||nq=="tars mode offline"||
+     nq=="tars mode off line"){
+    Serial.println("TARS: SWITCH ONLINE -> OFFLINE");
+    closeSTT();
+    tarsMode=MODE_OFFLINE;
+    sttReady=sttDone=sttError=false;
+    oledShowText("OFFLINE","ONLINE");
+    playLocalMP3(offline_start,offline_end,"Mode offline aktif, tuan");
+    oledSetStatus("READY");
+    Serial.println("TARS: MODE OFFLINE");
+    return;
+  }
+  oledShowText(q,"STT");
+  delay(300);
+  bool vision=needsVision(q);
+  bool status=isStatusQuery(q);
+  processOnlineRequest(q,vision,status,false);
 }
-
 /* SETUP */
 void setup(){
  Serial.begin(SERIAL_BAUD);Wire.begin(OLED_SDA,OLED_SCL);Wire.setClock(400000);
@@ -790,9 +816,7 @@ void setup(){
   oled.clearDisplay();oled.setTextColor(SSD1306_WHITE);oled.setTextSize(2);
   oled.setCursor(36,0);oled.print("TARS");oled.setTextSize(1);oled.setCursor(3,27);oled.print("BOOT");oled.display();
  }
-
  wheelsBegin();cameraMux=xSemaphoreCreateMutex();micOK=initMic();
-
  if(!LittleFS.begin(true))Serial.println("TARS: LITTLEFS ERROR");
  else Serial.printf("TARS: LITTLEFS READY %u/%u KB\n",(unsigned)(LittleFS.usedBytes()/1024),(unsigned)(LittleFS.totalBytes()/1024));
 
