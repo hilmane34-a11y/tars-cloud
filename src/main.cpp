@@ -200,27 +200,23 @@ void drawCameraOLED(){
  if(!cameraLive||!camera||!cameraOK||!oledOK)return;
  static uint8_t preview[128*64];
  memset(preview,0,sizeof(preview));
- if(cameraMux&&xSemaphoreTake(cameraMux,pdMS_TO_TICKS(2500))!=pdTRUE)
-   return;
+ if(cameraMux&&xSemaphoreTake(cameraMux,pdMS_TO_TICKS(2500))!=pdTRUE)return;
  bool ok=false;
  if(cameraLive&&camera&&cameraOK)
    ok=I2SCamera::capturePreview(preview);
  if(cameraMux)xSemaphoreGive(cameraMux);
  if(ok){
-  EnvState environment;
+  EnvState environment={};
   if(envAnalyze(preview,environment)){
    autonomySetEnvironment(environment);
-   Serial.printf(
-    "TARS: ENV L=%d C=%d R=%d OBS=%d CONF=%u%%\n",
-    environment.leftClear,
-    environment.centerClear,
-    environment.rightClear,
-    environment.obstacle,
-    environment.confidence
-   );
+   if(environment.event!=ENV_NONE)
+     pendingVisionCheck=true;
+   Serial.printf("TARS: ENV L=%d C=%d R=%d OBS=%d CONF=%u%% EVENT=%d\n",
+    environment.leftClear,environment.centerClear,
+    environment.rightClear,environment.obstacle,
+    environment.confidence,(int)environment.event);
   }else{
-   EnvState invalid = {};
-autonomySetEnvironment(invalid);
+   autonomySetEnvironment(EnvState{});
   }
   oled.clearDisplay();
   for(int y=0;y<64;y++)
@@ -229,11 +225,9 @@ autonomySetEnvironment(invalid);
      oled.drawPixel(x,y,SSD1306_WHITE);
   oled.display();
  }else{
-  EnvState invalid = {};
-autonomySetEnvironment(invalid);
+  autonomySetEnvironment(EnvState{});
  }
 }
-
 /* VISION */
 bool needsVision(String q){
  q.toLowerCase();
