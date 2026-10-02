@@ -1,5 +1,5 @@
 #include "autonomy.h"
-#include "../tars_roda/wheels.h"
+#include "wheels.h"
 #include "personality.h"
 
 #define AUTO_SPEED 65
