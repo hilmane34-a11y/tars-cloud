@@ -705,14 +705,25 @@ bool processOnlineRequest(const String &q,bool vision,bool status,bool automatic
   wheelsStop();
   autonomyStop();
   ramDiag("BEFORE-CAMERA-CYCLE");
-  // Vision: capture JPEG dahulu.
-  // Pertanyaan biasa: kamera langsung dimatikan.
-  if(!visionLivePause(vision)){
-    Serial.println("TARS: CAMERA PAUSE FAILED");
+  // Kunci siklus vision terlebih dahulu
+  if(!visionLivePause()){
+    Serial.println("TARS: VISION PAUSE FAILED");
     wheelsStop();
     autonomyStop();
     oledSetStatus("CAMERA ERROR");
     return false;
+  }
+  // Permintaan biasa tidak membutuhkan foto
+  // Vision akan mengambil foto sendiri di visionLiveAsk()
+  if(!vision){
+    stopCamera();
+    if(camera || cameraLive || cameraOK){
+      Serial.println("TARS: CAMERA OFF FAILED");
+      visionLiveResume();
+      startCamera();
+      oledSetStatus("CAMERA ERROR");
+      return false;
+    }
   }
   wheelsStop();
   autonomyStop();
@@ -725,8 +736,12 @@ bool processOnlineRequest(const String &q,bool vision,bool status,bool automatic
     Serial.println("TARS: AI EMPTY RESPONSE");
     wheelsStop();
     autonomyStop();
+    // Vision resume menghidupkan kamera jika sebelumnya dimatikan.
     visionLiveResume();
+    // Untuk permintaan biasa, kamera dihidupkan di sini.
+    if(!vision) startCamera();
     oledSetStatus("AI ERROR");
+    ramDiag("AFTER-AI-ERROR");
     return false;
   }
   wheelsStop();
@@ -738,21 +753,24 @@ bool processOnlineRequest(const String &q,bool vision,bool status,bool automatic
   delay(300);
   ramDiag("BEFORE-TTS");
   bool ok=streamAudio(String(TARS_CLOUD_URL)+"/tts",answer);
-  // Pastikan seluruh jalur audio sudah berhenti.
+  // Pastikan seluruh audio sudah berhenti
   audioRing.stop();
   audioStop();
   playing=false;
   wheelsStop();
   autonomyStop();
   ramDiag("AFTER-TTS-AUDIO-OFF");
-  // Kamera baru dialokasikan ulang setelah audio selesai.
-  bool camOK=startCamera();
+  // Lepaskan kunci dan pulihkan kamera
+  visionLiveResume();
+  // Vision resume sudah menghidupkan kamera sendiri.
+  // Permintaan biasa perlu menghidupkannya di sini.
+  if(!vision) startCamera();
   wheelsStop();
   autonomyStop();
-  oledSetStatus(ok?(camOK?"LISTENING":"CAMERA ERROR"):"AUDIO ERROR");
-  if(automatic && ok)autoSpeechDone();
+  oledSetStatus(ok?"LISTENING":"AUDIO ERROR");
+  if(automatic && ok) autoSpeechDone();
   ramDiag("AFTER-CAMERA-RESTART");
-  return ok && camOK;
+  return ok;
 }
 /* AUTO SPEECH */
 bool autoSpeechCallback(const String &prompt){
