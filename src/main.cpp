@@ -817,26 +817,77 @@ void setup(){
  wifiManagerBegin();
  if(wifiManagerConnect(true))if(syncTime())checkTimeGreeting();
 
- oledSetStatus("READY");startCamera();visionLiveBegin();ramDiag("READY");wheelsStop();
- Serial.println("TARS: LIFE READY");
-}
+oledSetStatus("READY");
+startCamera();
+visionLiveBegin();
+personalityBegin();
+autonomyBegin();
+autoSpeechBegin(autoSpeechCallback);
+ramDiag("READY");
+wheelsStop();
+Serial.println("TARS: LIFE READY");
+Serial.println("TARS: PERSONALITY READY");
+Serial.println("TARS: AUTONOMY READY");
+Serial.println("TARS: AUTO SPEECH READY");
 
 /* LOOP */
 void loop(){
- ramMonitor();
- if(playing){wheelsStop();delay(1);return;}
- if(WiFi.status()!=WL_CONNECTED){
-  if(!wifiOK()){oledSetStatus("WIFI ERROR");wheelsStop();delay(500);return;}
- }
- if(alarmDue()){runAlarm();return;}
- checkTimeGreeting();
- if(playing){wheelsStop();delay(1);return;}
- if(sttCooling()){
-  if(!specialActive())oledSetStatus(tarsMode==MODE_ONLINE?"LISTENING":"READY");
-  delay(100);return;
- }
- String q=tarsMode==MODE_ONLINE?recordRealtime():recordOffline();
- if(q.length()){wheelsStop();processQuestion(q);}
- else if(!specialActive())oledSetStatus(tarsMode==MODE_ONLINE?"LISTENING":"READY");
- delay(1);
+  ramMonitor();
+  if(playing){
+    wheelsStop();
+    personalityUpdate(true,false,false);
+    autonomyStop();
+    delay(1);
+    return;
+  }
+  if(WiFi.status()!=WL_CONNECTED){
+    if(!wifiOK()){
+      oledSetStatus("WIFI ERROR");
+      wheelsStop();
+      autonomyStop();
+      delay(500);
+      return;
+    }
+  }
+  if(alarmDue()){
+    autonomyStop();
+    runAlarm();
+    return;
+  }
+  checkTimeGreeting();
+  if(playing){
+    wheelsStop();
+    autonomyStop();
+    return;
+  }
+  if(sttCooling()){
+    personalityUpdate(true,false,false);
+    autonomyStop();
+    if(!specialActive())
+      oledSetStatus(tarsMode==MODE_ONLINE?"LISTENING":"READY");
+    delay(100);
+    return;
+  }
+  // STT sedang menunggu dan merekam suara pengguna.
+  wheelsStop();
+  autonomyStop();
+  String q=tarsMode==MODE_ONLINE?recordRealtime():recordOffline();
+  if(q.length()){
+    wheelsStop();
+    autonomyStop();
+    personalityUpdate(true,false,false);
+    processQuestion(q);
+  }else{
+    personalityUpdate(false,false,false);
+    if(!specialActive())
+      oledSetStatus(tarsMode==MODE_ONLINE?"LISTENING":"READY");
+  }
+  // Tidak ada gerakan selama sesi STT.
+  wheelsStop();
+  autonomyStop();
+  // Auto speech hanya boleh dipertimbangkan setelah sesi STT ditutup.
+  if(!playing && tarsMode==MODE_ONLINE && !sttConnected){
+    autoSpeechUpdate(true,false,false);
+  }
+  delay(1);
 }
