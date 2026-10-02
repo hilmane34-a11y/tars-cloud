@@ -55,6 +55,31 @@ jobs:
           touch data/.gitkeep
           echo "OK - folder data siap"
 
+      - name: Build TARS firmware
+        shell: bash
+        run: |
+          set -e
+
+          echo "========================================"
+          echo "BUILD TARS FIRMWARE"
+          echo "========================================"
+
+          pio run -e tars
+
+          test -s .pio/build/tars/firmware.bin || {
+            echo "ERROR: firmware.bin gagal dibuat"
+            exit 1
+          }
+
+          test -s .pio/build/tars/partitions.bin || {
+            echo "ERROR: partitions.bin gagal dibuat"
+            exit 1
+          }
+
+          echo "OK - firmware dan partition berhasil dibuat"
+          ls -lh .pio/build/tars/firmware.bin
+          ls -lh .pio/build/tars/partitions.bin
+
       - name: Build LittleFS
         shell: bash
         run: |
@@ -70,47 +95,42 @@ jobs:
           echo "SEARCH LITTLEFS IMAGE"
           echo "========================================"
 
-          find .pio -type f -name "littlefs.bin" -printf "%p (%s bytes)\n" || true
+          find .pio -type f -name "*.bin" \
+            -printf "%p (%s bytes)\n" || true
 
-          BUILD=".pio/build/tars"
-          mkdir -p "$BUILD"
+          BUILD=".pio/build/tars/littlefs.bin"
 
-          if [ ! -s "$BUILD/littlefs.bin" ]; then
+          if [ ! -s "$BUILD" ]; then
             FOUND=$(find .pio -type f -name "littlefs.bin" -size +0c | head -n 1)
 
             if [ -n "$FOUND" ]; then
               echo "Menyalin image dari: $FOUND"
-              cp "$FOUND" "$BUILD/littlefs.bin"
+              cp "$FOUND" "$BUILD"
             fi
           fi
 
-          if [ ! -s "$BUILD/littlefs.bin" ]; then
+          if [ ! -s "$BUILD" ]; then
             echo "ERROR: littlefs.bin tidak berhasil dibuat"
-            echo "Isi folder .pio:"
-            find .pio -maxdepth 4 -type f -name "*.bin" -printf "%p (%s bytes)\n" || true
+            find .pio/build/tars -maxdepth 3 -type f \
+              -printf "%p (%s bytes)\n" || true
             exit 1
           fi
 
-          echo "OK - LittleFS berhasil dibuat"
-          ls -lh "$BUILD/littlefs.bin"
+          cp "$BUILD" littlefs.bin
 
-      - name: Build TARS firmware
-        shell: bash
-        run: |
-          set -e
+          if [ ! -s littlefs.bin ]; then
+            echo "ERROR: Salinan LittleFS gagal"
+            exit 1
+          fi
 
-          echo "========================================"
-          echo "BUILD TARS FIRMWARE"
-          echo "========================================"
-
-          pio run -e tars
-
-          echo "OK - firmware berhasil dibuat"
+          echo "OK - LittleFS berhasil dibuat dan diamankan"
+          ls -lh littlefs.bin
 
       - name: Verify PlatformIO outputs
         shell: bash
         run: |
           set -e
+
           BUILD=".pio/build/tars"
 
           echo "========================================"
@@ -133,7 +153,7 @@ jobs:
           for FILE in \
             "$BUILD/partitions.bin" \
             "$BUILD/firmware.bin" \
-            "$BUILD/littlefs.bin"
+            littlefs.bin
           do
             if [ ! -s "$FILE" ]; then
               echo "ERROR: File tidak ditemukan: $FILE"
@@ -195,6 +215,7 @@ jobs:
         shell: bash
         run: |
           set -e
+
           BUILD=".pio/build/tars"
 
           echo "========================================"
@@ -205,7 +226,7 @@ jobs:
             bootloader.bin \
             "$BUILD/partitions.bin" \
             "$BUILD/firmware.bin" \
-            "$BUILD/littlefs.bin" \
+            littlefs.bin \
             "$BOOT_APP0"
           do
             if [ -s "$FILE" ]; then
@@ -224,11 +245,12 @@ jobs:
         shell: bash
         run: |
           set -e
+
           BUILD=".pio/build/tars"
 
           PART_SIZE=$(stat -c%s "$BUILD/partitions.bin")
           FW_SIZE=$(stat -c%s "$BUILD/firmware.bin")
-          FS_SIZE=$(stat -c%s "$BUILD/littlefs.bin")
+          FS_SIZE=$(stat -c%s littlefs.bin)
 
           echo "Partition table : $PART_SIZE bytes"
           echo "Firmware        : $FW_SIZE bytes"
@@ -244,13 +266,8 @@ jobs:
             exit 1
           fi
 
-          if [ "$FS_SIZE" -gt $((0x80000)) ]; then
-            echo "ERROR: LittleFS melebihi 512 KB"
-            exit 1
-          fi
-
           if [ "$FS_SIZE" -ne $((0x80000)) ]; then
-            echo "ERROR: Ukuran image LittleFS bukan 512 KB"
+            echo "ERROR: Ukuran LittleFS bukan 512 KB"
             exit 1
           fi
 
@@ -260,6 +277,7 @@ jobs:
         shell: bash
         run: |
           set -e
+
           BUILD=".pio/build/tars"
 
           python "$ESPTOOL" \
@@ -273,7 +291,7 @@ jobs:
             0x8000 "$BUILD/partitions.bin" \
             0xE000 "$BOOT_APP0" \
             0x10000 "$BUILD/firmware.bin" \
-            0x380000 "$BUILD/littlefs.bin"
+            0x380000 littlefs.bin
 
           echo "OK - proses merge selesai"
 
