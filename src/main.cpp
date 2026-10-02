@@ -901,9 +901,7 @@ bool processOffline(const String&q){
 
  Serial.println("TARS: OFFLINE REJECTED = "+q);oledSetStatus("READY");return true;
 }
-
 /* PROCESS */
-
 void processQuestion(const String &q) {
     String nq = normCmd(q);
     // STT OFFLINE TETAP SEPERTI SEMULA
