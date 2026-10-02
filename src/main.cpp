@@ -866,6 +866,7 @@ void setup(){
 oledSetStatus("READY");
 startCamera();
 visionLiveBegin();
+envBegin();
 personalityBegin();
 autonomyBegin();
 autoSpeechBegin(autoSpeechCallback);
