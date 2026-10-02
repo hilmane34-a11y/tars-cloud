@@ -527,7 +527,10 @@ String stopSTT(uint32_t samples,bool offline=false){
 String recordSTT(bool offline){
  if(!startSTT(offline))return "";
  if(offline)oledSetStatus("READY");else oledSetListening();
- size_t prePos=0,preCount=0;uint32_t voiceStart=0,lastVoice=0,samples=0;bool voice=false;
+  size_t prePos=0,preCount=0;
+ uint32_t voiceStart=0,lastVoice=0,samples=0;
+ uint32_t listenStart=millis();
+ bool voice=false;
  for(;;){
   sttWS.loop();if(sttError)break;
   size_t bytes=0;
@@ -539,6 +542,11 @@ String recordSTT(bool offline){
   }
   uint32_t rms=count?(uint32_t)sqrt((double)sum/count):0;
   if(!voice){
+   if(!offline&&millis()-listenStart>=STT_IDLE_TIMEOUT_MS){
+    Serial.println("TARS: STT IDLE TIMEOUT - CLOSE NORMAL");
+    closeSTT();
+    return "";
+   }
    for(size_t i=0;i<count;i++){preBuf[prePos]=pcmBuf[i];prePos=(prePos+1)%PREROLL_SAMPLES;if(preCount<PREROLL_SAMPLES)preCount++;}
    if(peak>=MIC_THRESHOLD||rms>=3000){
     voice=true;voiceStart=lastVoice=millis();
