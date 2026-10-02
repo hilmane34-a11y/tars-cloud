@@ -4,66 +4,67 @@
 #include "personality.h"
 
 static AutoSpeechCallback speakCallback = nullptr;
-
 static bool pending = false;
-static bool eventPending = false;
+static String visionPrompt;
+static String lastDescription;
 
-static String eventPrompt;
+static uint32_t nextSpeechTime = 0;
 
-static uint32_t lastAttempt = 0;
-static uint32_t lastEvent = 0;
+#define AUTO_SPEECH_MIN 180000UL
+#define AUTO_SPEECH_MAX 420000UL
 
-#define AUTO_SPEECH_COOLDOWN 120000
-#define VISION_SPEECH_COOLDOWN 30000
+static void scheduleNext() {
+  nextSpeechTime = millis() +
+    random(AUTO_SPEECH_MIN, AUTO_SPEECH_MAX + 1);
+}
 
 void autoSpeechBegin(AutoSpeechCallback callback) {
   speakCallback = callback;
-
   pending = false;
-  eventPending = false;
+  visionPrompt = "";
+  lastDescription = "";
+  nextSpeechTime = millis() + AUTO_SPEECH_MIN;
+}
 
-  eventPrompt = "";
+void autoSpeechNotifyVision(const String &description) {
+  if (pending || !description.length()) return;
+  if (description == lastDescription) return;
 
-  lastAttempt = 0;
-  lastEvent = 0;
+  visionPrompt =
+    "Kamu adalah TARS, robot AI buatan Ilman. "
+    "Berikut hasil pengamatan visual yang benar-benar terdeteksi: " +
+    description +
+    ". Sampaikan pengamatan tersebut secara singkat, sopan, "
+    "dan natural kepada tuan. Jangan mengarang objek, "
+    "identitas, warna, atau kejadian. Maksimal 20 kata. "
+    "Jika informasinya tidak cukup, jangan berbicara.";
+
+  lastDescription = description;
 }
 
 void autoSpeechNotifyVisionEvent(EnvEvent event) {
-  if (pending || eventPending) return;
-
-  if (millis() - lastEvent < VISION_SPEECH_COOLDOWN)
-    return;
-
   switch (event) {
     case ENV_MOTION_LEFT:
-      eventPrompt =
-        "TARS mendeteksi perubahan gerakan di sebelah kiri. "
-        "Buat pengumuman singkat dan natural kepada tuan. "
-        "Jangan mengklaim bahwa itu manusia atau hewan.";
+      autoSpeechNotifyVision(
+        "Terlihat perubahan gerakan di sebelah kiri kamera."
+      );
       break;
 
     case ENV_MOTION_CENTER:
-      eventPrompt =
-        "TARS mendeteksi sesuatu bergerak di depan. "
-        "Buat pengumuman singkat dan natural kepada tuan. "
-        "Jangan mengklaim identitas objek.";
+      autoSpeechNotifyVision(
+        "Terlihat perubahan gerakan di depan kamera."
+      );
       break;
 
     case ENV_MOTION_RIGHT:
-      eventPrompt =
-        "TARS mendeteksi perubahan gerakan di sebelah kanan. "
-        "Buat pengumuman singkat kepada tuan. "
-        "Jangan mengarang identitas objek.";
+      autoSpeechNotifyVision(
+        "Terlihat perubahan gerakan di sebelah kanan kamera."
+      );
       break;
 
-    case ENV_SCENE_CHANGED:
-    case ENV_NONE:
     default:
-      return;
+      break;
   }
-
-  eventPending = true;
-  lastEvent = millis();
 }
 
 void autoSpeechUpdate(
@@ -75,31 +76,18 @@ void autoSpeechUpdate(
       pending || !speakCallback)
     return;
 
-  if (eventPending) {
-    pending = true;
-    eventPending = false;
-
-    if (!speakCallback(eventPrompt))
-      pending = false;
-
-    eventPrompt = "";
-    return;
-  }
-
-  if (millis() - lastAttempt < AUTO_SPEECH_COOLDOWN)
+  if ((int32_t)(millis() - nextSpeechTime) < 0)
     return;
 
-  if (!personalityWantsSpeak())
+  if (!visionPrompt.length())
     return;
 
-  lastAttempt = millis();
   pending = true;
 
-  if (!speakCallback(
-    "Kamu adalah TARS, robot AI buatan Ilman. "
-    "Buat ucapan spontan singkat dalam bahasa Indonesia "
-    "kepada tuan. Natural, sedikit penasaran, maksimal 20 kata."
-  )) {
+  if (speakCallback(visionPrompt)) {
+    visionPrompt = "";
+    scheduleNext();
+  } else {
     pending = false;
   }
 }
