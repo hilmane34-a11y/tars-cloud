@@ -206,15 +206,18 @@ void drawCameraOLED(){
  if(cameraLive&&camera&&cameraOK)
    ok=I2SCamera::capturePreview(preview);
  if(cameraMux)xSemaphoreGive(cameraMux);
+ vTaskDelay(1);
  if(ok){
   EnvState environment={};
-  if(envAnalyze(preview,environment)){
+  bool analyzed=envAnalyze(preview,environment);
+  vTaskDelay(1);
+  if(analyzed){
    autonomySetEnvironment(environment);
-if(environment.event!=ENV_NONE){
-  portENTER_CRITICAL(&visionEventMux);
-  pendingVisionCheck=true;
-  portEXIT_CRITICAL(&visionEventMux);
-}
+   if(environment.event!=ENV_NONE){
+    portENTER_CRITICAL(&visionEventMux);
+    pendingVisionCheck=true;
+    portEXIT_CRITICAL(&visionEventMux);
+   }
    Serial.printf("TARS: ENV L=%d C=%d R=%d OBS=%d CONF=%u%% EVENT=%d\n",
     environment.leftClear,environment.centerClear,
     environment.rightClear,environment.obstacle,
@@ -223,10 +226,13 @@ if(environment.event!=ENV_NONE){
    autonomySetEnvironment(EnvState{});
   }
   oled.clearDisplay();
-  for(int y=0;y<64;y++)
-   for(int x=0;x<128;x++)
+  for(int y=0;y<64;y++){
+   for(int x=0;x<128;x++){
     if(preview[y*128+x])
      oled.drawPixel(x,y,SSD1306_WHITE);
+   }
+   if((y&3)==3)vTaskDelay(1);
+  }
   oled.display();
  }else{
   autonomySetEnvironment(EnvState{});
@@ -370,43 +376,85 @@ void drawSpecialOLED(uint8_t m){
 }
 void oledTask(void*){
  for(;;){
-  if(!oledOK){vTaskDelay(50);continue;}
+  if(!oledOK){vTaskDelay(pdMS_TO_TICKS(50));continue;}
   uint32_t now=millis();
   if(oledSpecial){
-   if(oledSpecial==2&&now>=oledDeadUntil){oledSpecial=0;oledSetStatus(tarsMode==MODE_ONLINE?"LISTENING":"READY");}
-   else{drawSpecialOLED(oledSpecial);vTaskDelay(20);continue;}
+   if(oledSpecial==2&&now>=oledDeadUntil){
+    oledSpecial=0;
+    oledSetStatus(tarsMode==MODE_ONLINE?"LISTENING":"READY");
+   }else{
+    drawSpecialOLED(oledSpecial);
+    vTaskDelay(pdMS_TO_TICKS(20));
+    continue;
+   }
   }
-  if(cameraLive&&!playing&&!oledText.length()){drawCameraOLED();vTaskDelay(1000);continue;}
-  if(oledText.length()&&oledTypePos<oledText.length()&&now-oledLastType>=OLED_TYPE_MS)oledTypePos++,oledLastType=now;
+  if(cameraLive&&!playing&&!oledText.length()){
+   drawCameraOLED();
+   vTaskDelay(pdMS_TO_TICKS(1000));
+   continue;
+  }
+  if(oledText.length()&&oledTypePos<oledText.length()&&now-oledLastType>=OLED_TYPE_MS)
+   oledTypePos++,oledLastType=now;
   if(now-oledLastWave>=OLED_WAVE_MS){
-   oledLastWave=now;oled.clearDisplay();oled.setTextColor(1);oled.setTextSize(2);oled.setCursor(36,0);oled.print("TARS");
-   oled.setTextSize(1);oled.setCursor(3,17);oled.print(oledStatus);
+   oledLastWave=now;
+   oled.clearDisplay();
+   oled.setTextColor(1);
+   oled.setTextSize(2);
+   oled.setCursor(36,0);
+   oled.print("TARS");
+   oled.setTextSize(1);
+   oled.setCursor(3,17);
+   oled.print(oledStatus);
    if(oledText.length()){
     String s=oledText.substring(0,min(oledTypePos,(uint32_t)oledText.length()));
-    uint32_t lineNo=0,target=oledPage*4;uint8_t shown=0;String line;bool next=false;
+    uint32_t lineNo=0,target=oledPage*4;
+    uint8_t shown=0;
+    String line;
+    bool next=false;
     for(size_t i=0;i<=s.length();i++){
      char c=i<s.length()?s[i]:'\0';
      if(c=='\n'||c=='\0'){
-      if(lineNo>=target&&shown<4){oled.setCursor(3,29+shown*8);oled.print(line);shown++;}
-      line="";lineNo++;if(shown>=4){next=i<s.length();break;}continue;
+      if(lineNo>=target&&shown<4){
+       oled.setCursor(3,29+shown*8);
+       oled.print(line);
+       shown++;
+      }
+      line="";
+      lineNo++;
+      if(shown>=4){next=i<s.length();break;}
+      continue;
      }
      line+=c;
      if(line.length()>=20){
       int cut=line.lastIndexOf(' ');
       if(cut>0){
-       String rest=line.substring(cut+1);line=line.substring(0,cut);
-       if(lineNo>=target&&shown<4){oled.setCursor(3,29+shown*8);oled.print(line);shown++;}
-       line=rest;lineNo++;if(shown>=4){next=i+1<s.length();break;}
+       String rest=line.substring(cut+1);
+       line=line.substring(0,cut);
+       if(lineNo>=target&&shown<4){
+        oled.setCursor(3,29+shown*8);
+        oled.print(line);
+        shown++;
+       }
+       line=rest;
+       lineNo++;
+       if(shown>=4){next=i+1<s.length();break;}
       }
      }
+     if((i&63)==63)vTaskDelay(1);
     }
-    if(oledStatus=="SPEAKING"&&now-oledLastPage>=OLED_PAGE_MS){if(next)oledPage++;oledLastPage=now;}
+    if(oledStatus=="SPEAKING"&&now-oledLastPage>=OLED_PAGE_MS){
+     if(next)oledPage++;
+     oledLastPage=now;
+    }
    }
-   if(oledStatus=="LISTENING"){int x=64+(int)(sin(now/120.0)*25);oled.drawCircle(x,56,4,1);}
-   else if(oledStatus=="SPEAKING"){int w=8+(now/40)%18;oled.fillRect(64-w/2,51,w,6,1);}
-   oled.display();
-  }
-  vTaskDelay(10);
+   if(oledStatus=="LISTENING"){
+    int x=64+(int)(sin(now/120.0)*25);
+    oled.drawCircle(x,56,4,1);   }else if(oledStatus=="SPEAKING"){
+    int w=8+(now/40)%18;
+    oled.fillRect(64-w/2,51,w,6,1);
+   }
+   oled.display();  }
+  vTaskDelay(pdMS_TO_TICKS(10));
  }
 }
 
