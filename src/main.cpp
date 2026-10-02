@@ -24,7 +24,7 @@
 #include <string.h>
 #include "Log.h"
 #include "../tars_roda/wheels.h"
-#include "../tars_roda/wheels.cpp"
+#include "wheels.h"
 #include "tars_auto/personality.h"
 #include "tars_auto/autonomy.h"
 #include "tars_auto/auto_speech.h"
