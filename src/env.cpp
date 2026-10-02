@@ -1,4 +1,3 @@
-
 #include "env.h"
 
 #define ENV_WIDTH 128
@@ -6,78 +5,53 @@
 
 #define GRID_W 16
 #define GRID_H 8
-#define GRID_SIZE (GRID_W * GRID_H)
-
-#define SAMPLE_STEP 4
+#define DARK_THRESHOLD 1
 #define MOTION_THRESHOLD 25
-#define MOTION_MIN_CELLS 3
+#define MIN_MOTION_CELLS 3
+#define GLOBAL_CHANGE_CELLS 30
 
 static EnvState state = {};
-static uint8_t previousGrid[GRID_SIZE];
+static uint8_t previousGrid[GRID_W * GRID_H] = {};
 static bool previousValid = false;
 
-void envBegin() {
+void envBegin()
+{
   state = {};
   memset(previousGrid, 0, sizeof(previousGrid));
   previousValid = false;
 }
 
-bool envAnalyze(const uint8_t* image, EnvState &result) {
+bool envAnalyze(const uint8_t* image, EnvState &result)
+{
   result = {};
 
   if (!image) {
     state = result;
-    previousValid = false;
     return false;
   }
 
-  uint8_t currentGrid[GRID_SIZE] = {};
-  uint16_t bright[3] = {};
+  uint16_t dark[3] = {};
   uint16_t total[3] = {};
 
-  // Ambil sampel kecil dari setiap area 8x8.
-  for (int gy = 0; gy < GRID_H; gy++) {
-    for (int gx = 0; gx < GRID_W; gx++) {
-      uint16_t sum = 0;
-      uint8_t count = 0;
+  uint8_t currentGrid[GRID_W * GRID_H] = {};
+  uint8_t changedCells = 0;
+  uint8_t changedRegion[3] = {};
 
-      for (int y = 0; y < 8; y += SAMPLE_STEP) {
-        for (int x = 0; x < 8; x += SAMPLE_STEP) {
-          int px = gx * 8 + x;
-          int py = gy * 8 + y;
+  // Hitung tingkat gelap berdasarkan output kamera:
+  // 1 = gelap, 0 = terang.
+  for (int y = 8; y < 60; y += 2) {
+    for (int x = 0; x < ENV_WIDTH; x += 2) {
+      uint8_t region = x < 42 ? 0 : (x < 86 ? 1 : 2);
 
-          if (py < 12 || py >= 58) continue;
+      total[region]++;
 
-          // Asumsi: nilai bukan nol = piksel terang OLED.
-          if (image[py * ENV_WIDTH + px])
-            sum += 100;
-
-          count++;
-        }
-      }
-
-      uint8_t index = gy * GRID_W + gx;
-
-      currentGrid[index] =
-        count ? sum / count : 0;
+      if (image[y * ENV_WIDTH + x] == DARK_THRESHOLD)
+        dark[region]++;
     }
   }
 
-  // Hitung kecerahan kiri, tengah, kanan.
-  for (int gy = 0; gy < GRID_H; gy++) {
-    for (int gx = 0; gx < GRID_W; gx++) {
-      if (gy < 2 || gy > 6) continue;
-
-      uint8_t region =
-        gx < 5 ? 0 : (gx < 11 ? 1 : 2);
-
-      bright[region] += currentGrid[gy * GRID_W + gx];
-      total[region] += 100;
-    }
-  }
-
-  uint8_t clear[3];
-  uint8_t brightness[3];
+  uint8_t darkRate[3] = {};
+  uint8_t clear[3] = {};
 
   for (int i = 0; i < 3; i++) {
     if (!total[i]) {
@@ -85,97 +59,105 @@ bool envAnalyze(const uint8_t* image, EnvState &result) {
       return false;
     }
 
-    brightness[i] =
-      (uint32_t)bright[i] * 100 / total[i];
+    darkRate[i] = (uint32_t)dark[i] * 100 / total[i];
 
-    // Area terang bukan bukti bahwa ada manusia/hewan.
-    clear[i] = brightness[i] >= 55;
+    // Clear berarti area relatif terang, bukan jaminan bebas halangan.
+    clear[i] = darkRate[i] < 45;
   }
 
-  result.valid = true;
-  result.leftBright = brightness[0];
-  result.centerBright = brightness[1];
-  result.rightBright = brightness[2];
-
-  result.leftClear = clear[0];
-  result.centerClear = clear[1];
-  result.rightClear = clear[2];
-
-  // Indikator kepadatan visual gelap, bukan deteksi
-  // rintangan fisik yang sudah terkonfirmasi.
-  result.obstacle = !clear[1];
-
-  uint8_t clearCount =
-    clear[0] + clear[1] + clear[2];
-
-  result.confidence = clearCount * 100 / 3;
-
-  // Frame pertama hanya menjadi referensi.
-  if (!previousValid) {
-    memcpy(previousGrid, currentGrid, GRID_SIZE);
-    previousValid = true;
-    state = result;
-    return true;
-  }
-
-  uint8_t changed[3] = {};
-  uint8_t globalChanged = 0;
-  uint8_t globalDirection = 0;
-
-  for (int gy = 1; gy < 7; gy++) {
+  // Buat grid tingkat kegelapan untuk membandingkan gerakan.
+  for (int gy = 0; gy < GRID_H; gy++) {
     for (int gx = 0; gx < GRID_W; gx++) {
-      uint8_t index = gy * GRID_W + gx;
+      int x0 = gx * ENV_WIDTH / GRID_W;
+      int x1 = (gx + 1) * ENV_WIDTH / GRID_W;
+      int y0 = gy * ENV_HEIGHT / GRID_H;
+      int y1 = (gy + 1) * ENV_HEIGHT / GRID_H;
 
-      int diff =
-        (int)currentGrid[index] -
-        (int)previousGrid[index];
+      uint16_t darkCount = 0;
+      uint16_t pixelCount = 0;
 
-      if (abs(diff) >= MOTION_THRESHOLD) {
-        uint8_t region =
-          gx < 5 ? 0 : (gx < 11 ? 1 : 2);
+      for (int y = y0; y < y1; y += 2) {
+        for (int x = x0; x < x1; x += 2) {
+          darkCount += image[y * ENV_WIDTH + x] ? 1 : 0;
+          pixelCount++;
+        }
+      }
 
-        changed[region]++;
-        globalChanged++;
+      uint8_t rate = pixelCount
+        ? (uint32_t)darkCount * 100 / pixelCount
+        : 0;
 
-        if (diff > 0) globalDirection++;
+      currentGrid[gy * GRID_W + gx] = rate;
+    }
+  }
+
+  // Deteksi perubahan lokal antarb­ingkai.
+  if (previousValid) {
+    for (int gy = 0; gy < GRID_H; gy++) {
+      for (int gx = 0; gx < GRID_W; gx++) {
+        int index = gy * GRID_W + gx;
+
+        int difference =
+          abs((int)currentGrid[index] - (int)previousGrid[index]);
+
+        if (difference >= MOTION_THRESHOLD) {
+          changedCells++;
+
+          int centerX = gx * ENV_WIDTH / GRID_W
+                      + ENV_WIDTH / GRID_W / 2;
+
+          uint8_t region =
+            centerX < 42 ? 0 : (centerX < 86 ? 1 : 2);
+
+          changedRegion[region]++;
+        }
       }
     }
   }
 
-  uint8_t changedTotal =
-    changed[0] + changed[1] + changed[2];
+  memcpy(previousGrid, currentGrid, sizeof(previousGrid));
+  previousValid = true;
 
-  // Perubahan global biasanya disebabkan perubahan cahaya.
-  bool lightingChange = globalChanged >= 30;
+  result.valid = true;
+  result.leftClear = clear[0];
+  result.centerClear = clear[1];
+  result.rightClear = clear[2];
 
-  if (!lightingChange &&
-      changedTotal >= MOTION_MIN_CELLS) {
+  // Informasi visual, bukan deteksi penghalang fisik.
+  result.obstacle = !clear[1];
 
-    result.motion = true;
-    result.motionLevel = changedTotal;
+  uint8_t clearCount = clear[0] + clear[1] + clear[2];
+  result.confidence = clearCount * 100 / 3;
 
-    if (changed[0] >= changed[1] &&
-        changed[0] >= changed[2]) {
-      result.event = ENV_MOTION_LEFT;
-    }
-    else if (changed[2] >= changed[0] &&
-             changed[2] >= changed[1]) {
-      result.event = ENV_MOTION_RIGHT;
-    }
-    else {
-      result.event = ENV_MOTION_CENTER;
-    }
-  }
-  else if (lightingChange) {
+  result.motion = changedCells >= MIN_MOTION_CELLS;
+  result.motionLevel = changedCells;
+
+  // Perubahan hampir di seluruh gambar kemungkinan pencahayaan berubah.
+  if (changedCells >= GLOBAL_CHANGE_CELLS) {
     result.event = ENV_SCENE_CHANGED;
   }
+  else if (result.motion) {
+    if (changedRegion[0] >= changedRegion[1] &&
+        changedRegion[0] >= changedRegion[2]) {
+      result.event = ENV_MOTION_LEFT;
+    }
+    else if (changedRegion[1] >= changedRegion[0] &&
+             changedRegion[1] >= changedRegion[2]) {
+      result.event = ENV_MOTION_CENTER;
+    }
+    else {
+      result.event = ENV_MOTION_RIGHT;
+    }
+  }
+  else {
+    result.event = ENV_NONE;
+  }
 
-  memcpy(previousGrid, currentGrid, GRID_SIZE);
   state = result;
-
   return true;
 }
 
-EnvState envGet() {
+EnvState envGet()
+{
   return state;
 }
