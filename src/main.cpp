@@ -1,4 +1,3 @@
-
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
@@ -26,6 +25,9 @@
 #include "Log.h"
 #include "../tars_roda/wheels.h"
 #include "../tars_roda/wheels.cpp"
+#include "tars_auto/personality.h"
+#include "tars_auto/autonomy.h"
+#include "tars_auto/auto_speech.h"
 
 #define MIC_PORT I2S_NUM_1
 #define MIC_SCK 18
