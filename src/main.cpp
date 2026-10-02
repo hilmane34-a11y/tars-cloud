@@ -703,36 +703,56 @@ bool streamAudio(const String&url,const String&text){
 /* SHARED ONLINE AI CYCLE */
 bool processOnlineRequest(const String &q,bool vision,bool status,bool automatic=false){
   wheelsStop();
-  ramDiag("BEFORE-CAMERA-PAUSE");
-  if(!visionLivePause()){
-    Serial.println("TARS: AI REQUEST ABORTED - CAMERA PAUSE FAILED");
-    oledSetStatus("CAMERA PAUSE ERROR");
+  autonomyStop();
+  ramDiag("BEFORE-CAMERA-CYCLE");
+  // Vision: capture JPEG dahulu.
+  // Pertanyaan biasa: kamera langsung dimatikan.
+  if(!visionLivePause(vision)){
+    Serial.println("TARS: CAMERA PAUSE FAILED");
     wheelsStop();
+    autonomyStop();
+    oledSetStatus("CAMERA ERROR");
     return false;
   }
-  ramDiag("CAMERA-OFF-TLS");
+  wheelsStop();
+  autonomyStop();
+  ramDiag("CAMERA-OFF-BEFORE-TLS");
   String answer;
   if(vision) answer=visionLiveAsk(q);
   else if(status) answer=systemStatus();
   else answer=ask(q);
   if(!answer.length()){
     Serial.println("TARS: AI EMPTY RESPONSE");
+    wheelsStop();
+    autonomyStop();
     visionLiveResume();
     oledSetStatus("AI ERROR");
-    wheelsStop();
     return false;
   }
-  oledShowText(answer,automatic?"AUTO SPEECH":(vision?"VISION":(status?"STATUS":"ASK")));
+  wheelsStop();
+  autonomyStop();
+  oledShowText(answer,
+    automatic?"AUTO SPEECH":
+    vision?"VISION":
+    status?"STATUS":"ASK");
   delay(300);
   ramDiag("BEFORE-TTS");
   bool ok=streamAudio(String(TARS_CLOUD_URL)+"/tts",answer);
-  ramDiag("AFTER-TTS");
-  // Kamera baru aktif kembali setelah TTS selesai.
-  visionLiveResume();
+  // Pastikan seluruh jalur audio sudah berhenti.
+  audioRing.stop();
+  audioStop();
+  playing=false;
   wheelsStop();
-  oledSetStatus(ok?"LISTENING":"AUDIO ERROR");
-  if(automatic && ok) autoSpeechDone();
-  return ok;
+  autonomyStop();
+  ramDiag("AFTER-TTS-AUDIO-OFF");
+  // Kamera baru dialokasikan ulang setelah audio selesai.
+  bool camOK=startCamera();
+  wheelsStop();
+  autonomyStop();
+  oledSetStatus(ok?(camOK?"LISTENING":"CAMERA ERROR"):"AUDIO ERROR");
+  if(automatic && ok)autoSpeechDone();
+  ramDiag("AFTER-CAMERA-RESTART");
+  return ok && camOK;
 }
 /* AUTO SPEECH */
 bool autoSpeechCallback(const String &prompt){
