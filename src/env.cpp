@@ -20,7 +20,11 @@ void envBegin()
   memset(previousGrid, 0, sizeof(previousGrid));
   previousValid = false;
 }
-
+void envResetMotion()
+{
+  memset(previousGrid, 0, sizeof(previousGrid));
+  previousValid = false;
+}
 bool envAnalyze(const uint8_t* image, EnvState &result)
 {
   result = {};
