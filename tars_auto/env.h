@@ -11,6 +11,5 @@ struct EnvState {
 };
 
 void envBegin();
-bool envAnalyze(const uint8_t* frame, uint16_t width,
-                uint16_t height, EnvState &result);
+bool envAnalyze(const uint8_t* image, EnvState &result);
 EnvState envGet();
