@@ -410,7 +410,7 @@ void oledTask(void*){
   }
   if(cameraLive&&!playing&&!oledText.length()){
    drawCameraOLED();
-   vTaskDelay(pdMS_TO_TICKS(250));
+   vTaskDelay(pdMS_TO_TICKS(800));
    continue;
   }
   if(oledText.length()&&oledTypePos<oledText.length()&&now-oledLastType>=OLED_TYPE_MS)
@@ -1062,7 +1062,7 @@ void setup(){
  Serial.printf("TARS: AUDIO RING=%u PREBUFFER=%u\n",(unsigned)AUDIO_RING_SIZE,(unsigned)AUDIO_PREBUFFER);
 
  ramDiag("BOOT");
- if(oledOK)xTaskCreatePinnedToCore(oledTask,"TARS_OLED",4096,nullptr,0,nullptr,0);
+ if(oledOK)xTaskCreatePinnedToCore(oledTask,"TARS_OLED",4096,nullptr,1,nullptr,0);
  wifiManagerBegin();
  if(wifiManagerConnect(true))if(syncTime())checkTimeGreeting();
 
