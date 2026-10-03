@@ -27,6 +27,6 @@ void wheelsDrive(int16_t left, int16_t right) {
 
 void wheelsForward(uint8_t speed)  { wheelsDrive(speed, speed); }
 void wheelsBackward(uint8_t speed) { wheelsDrive(-speed, -speed); }
-void wheelsLeft(uint8_t speed)     { wheelsDrive(-speed, speed); }
-void wheelsRight(uint8_t speed)    { wheelsDrive(speed, -speed); }
+void wheelsLeft(uint8_t speed)     { wheelsDrive(0, speed); }
+void wheelsRight(uint8_t speed)    { wheelsDrive(speed, 0); }
 void wheelsStop()                  { wheelsDrive(0, 0); }
