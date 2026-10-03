@@ -6,6 +6,7 @@ static AutoSpeechCallback speakCallback=nullptr;
 static bool pending=false;
 static String visionPrompt;
 static uint32_t nextSpeechTime=0;
+static bool visionUrgent=false;
 
 #define AUTO_SPEECH_MIN 180000UL
 #define AUTO_SPEECH_MAX 900000UL
@@ -29,12 +30,13 @@ void autoSpeechBegin(AutoSpeechCallback callback){
   speakCallback=callback;
   pending=false;
   visionPrompt="";
+  visionUrgent=false;
   randomSeed(esp_random());
   scheduleNext();
 }
 
 void autoSpeechNotifyVision(const String &description){
-  if(pending||!description.length())return;
+  if(!description.length())return;
 
   visionPrompt=
     "Amati gambar kamera secara langsung. Informasi tambahan: "+
@@ -45,6 +47,8 @@ void autoSpeechNotifyVision(const String &description){
     "komentari secara singkat dan relevan. "
     "Jangan menebak identitas, jarak, atau kondisi yang tidak terlihat. "
     "Jika tidak ada hal penting, jawab tepat [DIAM].";
+
+  visionUrgent=true;
 }
 
 void autoSpeechNotifyVisionEvent(EnvEvent event){
@@ -68,7 +72,7 @@ void autoSpeechNotifyVisionEvent(EnvEvent event){
 
 void autoSpeechUpdate(bool enabled,bool listening,bool speaking){
   if(!enabled||listening||speaking||pending||!speakCallback)return;
-  if((int32_t)(millis()-nextSpeechTime)<0)return;
+  if(!visionUrgent&&(int32_t)(millis()-nextSpeechTime)<0)return;
 
   String prompt=visionPrompt;
   if(!prompt.length()){
@@ -91,6 +95,7 @@ void autoSpeechUpdate(bool enabled,bool listening,bool speaking){
   pending=true;
   if(speakCallback(prompt)){
     visionPrompt="";
+    visionUrgent=false;
     scheduleNext();
   }else{
     pending=false;
