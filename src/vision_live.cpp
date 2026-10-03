@@ -98,20 +98,17 @@ static bool captureFrame(size_t &length) {
 }
 
 // KAMERA OFF SETELAH JPEG BERHASIL
-static bool stopCameraForTLS() {
+static bool stopCameraForTLS(){
+    cameraStoppedForVision=true;
     stopCamera();
 
-    cameraStoppedForVision =
-        !camera && !cameraLive && !cameraOK;
+    bool stopped=!camera && !cameraLive && !cameraOK;
 
     Serial.printf("TARS: VISION CAMERA OFF=%d HEAP=%u LARGEST=%u\n",
-                  cameraStoppedForVision,
-                  ESP.getFreeHeap(),
-                  ESP.getMaxAllocHeap());
+        stopped,ESP.getFreeHeap(),ESP.getMaxAllocHeap());
 
-    return cameraStoppedForVision;
+    return stopped;
 }
-
 // JSON + BASE64 JPEG
 static bool buildVisionJSON(const String &question, size_t jpegLength,
                             size_t &bodyLength) {
@@ -247,28 +244,24 @@ bool visionLivePause() {
 }
 
 // RESUME: DIPANGGIL SETELAH TTS DAN AUDIO SELESAI
-void visionLiveResume() {
+   void visionLiveResume() {
     if (!visionPaused) return;
 
     if (playing) {
         Serial.println("TARS: VISION RESUME BLOCKED - AUDIO ACTIVE");
         return;
     }
-
     if (cameraStoppedForVision &&
         visionLiveEnabled() &&
         WiFi.status() == WL_CONNECTED) {
         startCamera();
     }
-
     cameraStoppedForVision = false;
     visionPaused = false;
     releaseVision();
-
     Serial.printf("TARS: VISION CYCLE END HEAP=%u LARGEST=%u\n",
                   ESP.getFreeHeap(), ESP.getMaxAllocHeap());
 }
-
 // ASK: CAPTURE -> CAMERA OFF -> TLS -> JSON
 String visionLiveAsk(const String &question) {
     if (!visionLiveEnabled() || !visionPaused || !visionBusy)
