@@ -198,7 +198,8 @@ bool startCamera(){
   return true;
 }
 void drawCameraOLED(){
- if(!oledOK)return;
+ if(!oledOK || !camera || !cameraOK || !cameraLive || playing)
+ return;
  static uint8_t preview[128*64];
  memset(preview,0,sizeof(preview));
  vTaskDelay(1);
