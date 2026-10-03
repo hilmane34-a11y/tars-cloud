@@ -834,30 +834,27 @@ bool processOnlineRequest(const String &q,bool vision,bool status,bool automatic
 bool autoSpeechCallback(const String &prompt){
   if(tarsMode!=MODE_ONLINE || playing || sttConnected)return false;
   if(!wifiOK())return false;
-
-  return processOnlineRequest(prompt,false,false,true);
-}
-//TTS Tars Oto//
-bool processVisionEvent(){
- if(tarsMode!=MODE_ONLINE||playing||sttConnected)return false;
- if(!wifiOK())return false;
- bool eventReady=false;
- portENTER_CRITICAL(&visionEventMux);
- if(pendingVisionCheck &&
-    millis()-lastVisionEventAt>=VISION_EVENT_COOLDOWN_MS){
-  pendingVisionCheck=false;
-  lastVisionEventAt=millis();
-  eventReady=true;
+// Auto-speech harus mengamati gambar kamera. 
+   return processOnlineRequest(prompt,true,false,true);
  }
- portEXIT_CRITICAL(&visionEventMux);
-if(!eventReady)return false; static const char*prompts[]={
-  "Periksa gambar di depanmu. Jika yakin melihat manusia, sapa dengan ramah. Jika terlihat penghalang, komentari secara alami. Jangan menebak.",
-  "Amati lingkungan di depanmu. Jika ada manusia atau penghalang yang jelas, berikan komentar singkat dan santai. Jangan mengarang.",
-  "Perhatikan keadaan di depanmu. Berikan sapaan jika manusia terlihat jelas, atau komentar ringan jika ada sesuatu yang menarik. Jika tidak ada hal penting, jangan membuat komentar."
- };
- String prompt=prompts[random(0,3)];
- Serial.println("TARS: AUTO VISION EVENT");
- return processOnlineRequest(prompt,true,false,true);
+//TTS Tars Oto//
+
+/* VISION EVENT */
+void processVisionEvent(){
+  bool eventReady=false;
+  portENTER_CRITICAL(&visionEventMux);
+  if(pendingVisionCheck){
+    pendingVisionCheck=false;
+    eventReady=true;
+  }
+  portEXIT_CRITICAL(&visionEventMux);
+  if(eventReady){
+    autoSpeechNotifyVision(
+      "Kamera mendeteksi perubahan gerakan atau tampilan lingkungan. "
+      "Periksa gambar terbaru sebelum memberikan komentar."
+    );
+    Serial.println("TARS: VISION EVENT QUEUED");
+  }
 }
 /* STATUS */
 bool isStatusQuery(const String&q){
@@ -985,10 +982,19 @@ void processQuestion(const String&q){
     return;
   }
   oledShowText(q,"STT");
-  delay(300);
-  bool vision=needsVision(q);
-  bool status=isStatusQuery(q);
-  processOnlineRequest(q,vision,status,false);
+  delay(300);  
+bool vision=needsVision(q);
+bool status=isStatusQuery(q);
+String request=q;
+switch(random(0,5)){
+  case 0: request+=" Jawab dengan gaya santai dan natural.";break;
+  case 1: request+=" Gunakan pilihan kata yang segar dan tidak kaku.";break;
+  case 2: request+=" Jawab dengan gaya cerdas dan sedikit humor jika sesuai.";break;
+  case 3: request+=" Gunakan kalimat natural dan variasikan cara penyampaian.";break;
+  default:request+=" Jawab secara ramah, singkat, dan tidak monoton.";break;
+}
+request+=" Jangan mengulang kalimat atau sapaan yang sama jika tidak diperlukan.";
+processOnlineRequest(request,vision,status,false);
 }
 /* SETUP */
 void setup(){
@@ -1125,14 +1131,10 @@ void loop(){
 
   wheelsStop();
   autonomyStop();
-
-  if(!playing&&tarsMode==MODE_ONLINE&&!sttConnected){
-    if(pendingVisionCheck){
-      processVisionEvent();
-    }else{
-      autoSpeechUpdate(true,false,false);
-    }
-  }
+    if(!playing&&tarsMode==MODE_ONLINE&&!sttConnected){
+  processVisionEvent();
+  autoSpeechUpdate(true,false,false);
+ }
 
   delay(1);
 }
