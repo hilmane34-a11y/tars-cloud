@@ -28,6 +28,7 @@
 #include "auto_speech.h"
 #include "wheels.h"
 #include "env.h"
+#include "deep_sleep.h"
 
 #define MIC_PORT I2S_NUM_1
 #define MIC_SCK 18
@@ -916,13 +917,12 @@ bool isDoorCmd(const String&s){
 
 /* ALARM */
 bool alarmDue(){
-  if(!ntpOK||alarmRunning)return false;
+  if(!ntpOK||alarmRunning||deepSleepAlarmDone())return false;
   time_t now=time(nullptr);
   if(now<1704067200)return false;
   struct tm t;
   localtime_r(&now,&t);
-  return t.tm_hour==6&&t.tm_min<=2&&
-         alarmLastDay!=t.tm_yday;
+  return t.tm_hour==6&&t.tm_min<=2;
 }
 bool playLocalAlarm(){
  if(!audioStart())return false;
@@ -942,13 +942,31 @@ bool playLocalAlarm(){
 }
 void runAlarm(){
  if(!alarmDue())return;
- time_t now=time(nullptr);struct tm t;localtime_r(&now,&t);alarmLastDay=t.tm_yday;
- alarmRunning=true;wheelsStop();uint32_t st=millis();
- while(millis()-st<ALARM_DURATION_MS){if(!playLocalAlarm())break;delay(500);}
- playing=false;alarmRunning=false;wheelsStop();oledSetStatus(tarsMode==MODE_ONLINE?"LISTENING":"READY");
-}
+ deepSleepMarkAlarmDone();
+ wheelsStop(); uint32_t st=millis(); while(millis()-st<ALARM_DURATION_MS) { 
+ if(!playLocalAlarm())break;  delay(500); }
+ playing=false;
+ alarmRunning=false;
+ wheelsStop();
+ oledSetStatus(tarsMode==MODE_ONLINE?"LISTENING":"READY"); }
 bool specialActive(){return oledSpecial!=0;}
-
+//deepsleep\\
+void enterTarsDeepSleep(){
+  Serial.println("TARS: PREPARING DEEP SLEEP");
+  wheelsStop();
+  autonomyStop();
+  oledSetStatus("SLEEPING");
+  stopCamera();
+  if(micOK){
+    i2s_driver_uninstall(MIC_PORT);
+    micOK=false;
+  }
+  audioStop();
+  sttWS.disconnect();
+  oledOK=false;
+  delay(200);
+  deepSleepEnter();
+}
 /* OFFLINE */
 bool processOffline(const String&q){
  String s=normCmd(q);
@@ -1033,6 +1051,7 @@ autoSpeechBegin(autoSpeechCallback);
 startCamera();
 ramDiag("READY");
 wheelsStop();
+deepSleepBegin();
 
 Serial.println("TARS: LIFE READY");
 Serial.println("TARS: PERSONALITY READY");
@@ -1069,6 +1088,10 @@ void loop(){
     autonomyStop();
     return;
   }
+ if(ntpOK&&deepSleepDue()&&!alarmRunning&&!greetingPlaying&&!sttConnected){
+  enterTarsDeepSleep();
+  return;
+}
   if(sttCooling()){
     personalityUpdate(true,false,false);
     autonomyStop();
