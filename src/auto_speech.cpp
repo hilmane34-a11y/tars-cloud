@@ -1,5 +1,6 @@
 #include "auto_speech.h"
 #include "personality.h"
+#include <esp_system.h>
 
 static AutoSpeechCallback speakCallback=nullptr;
 static bool pending=false;
@@ -11,6 +12,17 @@ static uint32_t nextSpeechTime=0;
 
 static void scheduleNext(){
   nextSpeechTime=millis()+random(AUTO_SPEECH_MIN,AUTO_SPEECH_MAX+1);
+}
+
+static String randomStyle(){
+  switch(random(0,6)){
+    case 0:return "Gunakan gaya santai dan spontan.";
+    case 1:return "Gunakan komentar ringan dan sedikit humor.";
+    case 2:return "Gunakan gaya penasaran dan natural.";
+    case 3:return "Gunakan kalimat singkat, cerdas, dan tidak kaku.";
+    case 4:return "Gunakan gaya ramah dengan pilihan kata berbeda.";
+    default:return "Gunakan gaya bicara kasual dan sedikit cuek.";
+  }
 }
 
 void autoSpeechBegin(AutoSpeechCallback callback){
@@ -27,26 +39,27 @@ void autoSpeechNotifyVision(const String &description){
   visionPrompt=
     "Amati gambar kamera secara langsung. Informasi tambahan: "+
     description+
-    " Pastikan informasi tersebut sesuai gambar. "
-    "Jika manusia terlihat jelas, sapa dengan ramah. "
-    "Jika ada benda atau keadaan menarik yang benar-benar terlihat, "
-    "komentari secara singkat. Jangan menebak identitas atau jarak. "
+    " Pastikan sesuai dengan gambar. "
+    "Jika manusia terlihat jelas, sapa secara natural. "
+    "Jika ada hewan, objek menarik, atau potensi bahaya yang terlihat jelas, "
+    "komentari secara singkat dan relevan. "
+    "Jangan menebak identitas, jarak, atau kondisi yang tidak terlihat. "
     "Jika tidak ada hal penting, jawab tepat [DIAM].";
 }
 
 void autoSpeechNotifyVisionEvent(EnvEvent event){
   switch(event){
     case ENV_MOTION_LEFT:
-      autoSpeechNotifyVision("Ada perubahan gerakan di sisi kiri gambar.");
+      autoSpeechNotifyVision("Terdeteksi perubahan gerakan di sisi kiri gambar.");
       break;
     case ENV_MOTION_CENTER:
-      autoSpeechNotifyVision("Ada perubahan gerakan di bagian tengah gambar.");
+      autoSpeechNotifyVision("Terdeteksi perubahan gerakan di tengah gambar.");
       break;
     case ENV_MOTION_RIGHT:
-      autoSpeechNotifyVision("Ada perubahan gerakan di sisi kanan gambar.");
+      autoSpeechNotifyVision("Terdeteksi perubahan gerakan di sisi kanan gambar.");
       break;
     case ENV_SCENE_CHANGED:
-      autoSpeechNotifyVision("Terjadi perubahan tampilan lingkungan.");
+      autoSpeechNotifyVision("Tampilan lingkungan mengalami perubahan.");
       break;
     default:
       break;
@@ -61,12 +74,19 @@ void autoSpeechUpdate(bool enabled,bool listening,bool speaking){
   if(!prompt.length()){
     prompt=
       "Amati gambar kamera saat ini. "
-      "Jika manusia terlihat jelas, sapa dengan ramah. "
-      "Jika ada benda atau keadaan menarik yang benar-benar terlihat, "
-      "berikan komentar singkat dan natural. "
-      "Jangan menebak identitas, warna, atau jarak. "
+      "Bicaralah hanya jika ada sesuatu yang benar-benar menarik atau penting. "
+      "Jika manusia atau hewan terlihat jelas, boleh menyapa atau berkomentar. "
+      "Jika ada halangan atau potensi bahaya yang terlihat jelas, beri peringatan. "
       "Jika tidak ada hal penting, jawab tepat [DIAM].";
   }
+
+  prompt+=" "+randomStyle();
+  prompt+=
+    " Buat kalimat baru dan bervariasi setiap kali berbicara. "
+    "Jangan mengulang sapaan, lelucon, atau kalimat sebelumnya. "
+    "Jangan menggunakan kalimat suara bawaan atau rekaman firmware. "
+    "Gunakan bahasa Indonesia yang natural, singkat, dan sesuai kepribadian TARS. "
+    "Jangan menyebutkan bahwa kamu sedang menjalankan sistem otomatis.";
 
   pending=true;
   if(speakCallback(prompt)){
