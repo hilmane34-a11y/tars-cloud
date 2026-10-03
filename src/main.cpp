@@ -75,7 +75,7 @@ uint32_t oledPage=0,oledLastPage=0,ramDiagAt=0;
 portMUX_TYPE visionEventMux = portMUX_INITIALIZER_UNLOCKED;
 volatile bool pendingVisionCheck = false;
 volatile uint32_t lastVisionEventAt = 0;
-const uint32_t VISION_EVENT_COOLDOWN_MS = 3000;
+const uint32_t VISION_EVENT_COOLDOWN_MS = 10000;
 /* STT LIFECYCLE */
 const uint32_t STT_NORMAL_COOLDOWN=1000;
 const uint32_t STT_ERROR_COOLDOWN=6000;
@@ -806,19 +806,7 @@ bool processOnlineRequest(const String &q,bool vision,bool status,bool automatic
     ramDiag("AFTER-AI-ERROR");
     return false;
   }
- answer.trim();
-String checkAnswer=answer;
-checkAnswer.replace("\r","");
-checkAnswer.replace("\n","");
-checkAnswer.trim();
-if(automatic&&checkAnswer.equalsIgnoreCase("[DIAM]")){
-  Serial.println("TARS: AUTO VISION - SILENT");
-  visionLiveResume();
-  autoSpeechDone();
-  oledSetStatus("LISTENING");
-  return true;
-}
- wheelsStop();
+  wheelsStop();
   autonomyStop();
   oledShowText(answer,
     automatic?"AUTO SPEECH":
@@ -828,29 +816,23 @@ if(automatic&&checkAnswer.equalsIgnoreCase("[DIAM]")){
   ramDiag("BEFORE-TTS");
   bool ok=streamAudio(String(TARS_CLOUD_URL)+"/tts",answer);
   // Pastikan seluruh audio sudah berhenti
-audioRing.stop();
-audioStop();
-playing=false;
-
-wheelsStop();
-autonomyStop();
-ramDiag("AFTER-TTS-AUDIO-OFF");
-
-visionLiveResume();
-if(!vision) startCamera();
-
-wheelsStop();
-autonomyStop();
-
-if(cameraOK && cameraLive){
-  oledSetStatus("CAMERA");
-}else{
-  oledSetStatus("CAMERA ERROR");
-}
-
-if(automatic && ok) autoSpeechDone();
-ramDiag("AFTER-CAMERA-RESTART");
-return ok;
+  audioRing.stop();
+  audioStop();
+  playing=false;
+  wheelsStop();
+  autonomyStop();
+  ramDiag("AFTER-TTS-AUDIO-OFF");
+  // Lepaskan kunci dan pulihkan kamera
+  visionLiveResume();
+  // Vision resume sudah menghidupkan kamera sendiri.
+  // Permintaan biasa perlu menghidupkannya di sini.
+  if(!vision) startCamera();
+  wheelsStop();
+  autonomyStop();
+  oledSetStatus(ok?"LISTENING":"AUDIO ERROR");
+  if(automatic && ok) autoSpeechDone();
+  ramDiag("AFTER-CAMERA-RESTART");
+  return ok;
 }
 /* AUTO SPEECH */
 bool autoSpeechCallback(const String &prompt){
@@ -1053,7 +1035,7 @@ void setup(){
  Serial.printf("TARS: AUDIO RING=%u PREBUFFER=%u\n",(unsigned)AUDIO_RING_SIZE,(unsigned)AUDIO_PREBUFFER);
 
  ramDiag("BOOT");
- if(oledOK)xTaskCreatePinnedToCore(oledTask,"TARS_OLED",4096,nullptr,0,nullptr,0);
+ if(oledOK)xTaskCreatePinnedToCore(oledTask,"TARS_OLED",4096,nullptr,1,nullptr,0);
  wifiManagerBegin();
  if(wifiManagerConnect(true))if(syncTime())checkTimeGreeting();
 
