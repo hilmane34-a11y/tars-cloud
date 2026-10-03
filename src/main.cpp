@@ -980,6 +980,27 @@ void runAlarm(){
  alarmRunning=false; wheelsStop();
  oledSetStatus(tarsMode==MODE_ONLINE?"LISTENING":"READY");
 }
+/* OFFLINE */
+bool processOffline(const String&q){
+ String s=normCmd(q);
+ static const char*online[]={"online","on line","tars online","tars on line","mode online","tars mode online"};
+ static const char*hari[]={"hari","hari ini","kata hari","kata hari ini","kata kata","kata kata hari ini","kata kata hari ini tars","kata hari ini tars","tars hari ini","tars kata hari ini"};
+ if(cmdMatch(s,hari,sizeof(hari)/sizeof(*hari))){
+  oledShowText("HARI INI","OFFLINE");playLocalMP3(hari_start,hari_end,"Kata-kata hari ini, tuan.");oledSetStatus("READY");return true;
+ }
+if(cmdMatch(s,online,sizeof(online)/sizeof(*online))){
+  Serial.println("TARS: SWITCH OFFLINE -> ONLINE");
+  oledShowText("ONLINE","OFFLINE");
+  tarsMode=MODE_ONLINE;
+  portENTER_CRITICAL(&visionEventMux);
+  pendingVisionCheck=false;
+  portEXIT_CRITICAL(&visionEventMux);
+  autoSpeechResetTimer();
+  playLocalMP3(online_start,online_end,"Mode online aktif, tuan");
+  Serial.println("TARS: MODE ONLINE");
+  return true;
+ }
+
 /* PROCESS */
 void processQuestion(const String&q){
   String nq=normCmd(q);
