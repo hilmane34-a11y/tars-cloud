@@ -28,6 +28,7 @@
 #include "auto_speech.h"
 #include "wheels.h"
 #include "env.h"
+#include "deep_sleep.h"
 
 #define MIC_PORT I2S_NUM_1
 #define MIC_SCK 18
