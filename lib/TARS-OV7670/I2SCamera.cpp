@@ -427,7 +427,7 @@ bool I2SCamera::capturePreview(uint8_t* out)
       }
       previewFiltered[y*128+x]=(count>=total/2+1)?1:0;
     }
-    if((y&7)==0)vTaskDelay(1);
+    if((y&3)==0)vTaskDelay(1);
   }
   memcpy(out,previewFiltered,128*64);
   return true;
