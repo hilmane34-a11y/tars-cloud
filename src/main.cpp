@@ -412,7 +412,9 @@ void oledTask(void*){
    }
   }
 if(cameraLive&&!playing&&!oledText.length()){
+  personalityUpdate(false,autonomyIsMoving(),false);
   drawCameraOLED();
+  autonomyUpdate(true,false);
   vTaskDelay(pdMS_TO_TICKS(200));
   taskYIELD();
   continue;
@@ -1090,60 +1092,54 @@ void enterTarsDeepSleep(){
  ramDiag("BEFORE-DEEP-SLEEP");
  deepSleepEnter();
 }
-/* LOOP */
+//Loop\\
 void loop(){
   if(deepSleepDue()){
     enterTarsDeepSleep();
     return;
   }
+
   ramMonitor();
+
   if(playing){
     wheelsStop();
-    personalityUpdate(true,false,false);
     autonomyStop();
     delay(1);
     return;
   }
-  if(WiFi.status()!=WL_CONNECTED){
-    if(!wifiOK()){
-      oledSetStatus("WIFI ERROR");
-      wheelsStop();
-      autonomyStop();
-      delay(500);
-      return;
-    }
+
+  if(tarsMode==MODE_ONLINE&&!wifiOK()){
+    oledSetStatus("WIFI ERROR");
+    delay(500);
+    return;
   }
+
   if(alarmDue()){
     autonomyStop();
     runAlarm();
     return;
   }
+
   checkTimeGreeting();
+
   if(playing){
     wheelsStop();
     autonomyStop();
     return;
   }
-  // STT sedang menunggu dan merekam suara pengguna.
-  wheelsStop();
-  autonomyStop();
 
-  String q=tarsMode==MODE_ONLINE?recordRealtime():recordOffline();
+  // Jangan hentikan otonomi selama STT mendengarkan.
+  String q=tarsMode==MODE_ONLINE?
+    recordRealtime():recordOffline();
 
   if(q.length()){
     wheelsStop();
     autonomyStop();
-    personalityUpdate(true,false,false);
     processQuestion(q);
   }else{
-    personalityUpdate(false,false,false);
-
     if(!oledSpecial)
       oledSetStatus(tarsMode==MODE_ONLINE?"LISTENING":"READY");
   }
-
-  wheelsStop();
-  autonomyStop();
 
   if(!playing&&tarsMode==MODE_ONLINE&&!sttConnected){
     processVisionEvent();
