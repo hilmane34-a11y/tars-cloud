@@ -1067,7 +1067,7 @@ void setup(){
  Serial.printf("TARS: AUDIO RING=%u PREBUFFER=%u\n",(unsigned)AUDIO_RING_SIZE,(unsigned)AUDIO_PREBUFFER);
 
  ramDiag("BOOT");
- if(oledOK)xTaskCreatePinnedToCore(oledTask,"TARS_OLED",4096,nullptr,1,nullptr,0);
+ if(oledOK)xTaskCreatePinnedToCore(oledTask,"TARS_OLED",4096,nullptr,1,nullptr,1);
  wifiManagerBegin();
  if(wifiManagerConnect(true))if(syncTime())checkTimeGreeting();
 
