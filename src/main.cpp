@@ -752,9 +752,15 @@ bool streamAudio(const String&url,const String&text){
   }
   wavResample.flush();wavResample.end();wavDec.end();
  }
- audioRing.stop();pcmProbe.report();h.end();ramDiag("TTS-DONE");
- playing=false;audioStop();wheelsStop();oledSetListening();
- Serial.printf("TARS: AUDIO TOTAL=%lu ms\n",(unsigned long)(millis()-total));return started;
+audioRing.stop();pcmProbe.report();h.end();ramDiag("TTS-DONE");
+playing=false;audioStop();wheelsStop();
+if(cameraLive){
+  oledText="";
+  oledStatus="CAMERA";
+}else{
+  oledSetListening();
+}
+Serial.printf("TARS: AUDIO TOTAL=%lu ms\n",(unsigned long)(millis()-total));return started;
 }
 /* SHARED ONLINE AI CYCLE */
 bool processOnlineRequest(const String &q,bool vision,bool status,bool automatic=false){
