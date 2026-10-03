@@ -409,7 +409,7 @@ void oledTask(void*){
   }
   if(cameraLive&&!playing&&!oledText.length()){
    drawCameraOLED();
-   vTaskDelay(pdMS_TO_TICKS(250));
+   vTaskDelay(pdMS_TO_TICKS(1000));
    continue;
   }
   if(oledText.length()&&oledTypePos<oledText.length()&&now-oledLastType>=OLED_TYPE_MS)
@@ -430,34 +430,44 @@ void oledTask(void*){
     uint8_t shown=0;
     String line;
     bool next=false;
-    for(size_t i=0;i<=s.length();i++){
-     char c=i<s.length()?s[i]:'\0';
-     if(c=='\n'||c=='\0'){
-      if(lineNo>=target&&shown<4){
-       oled.setCursor(3,29+shown*8);
-       oled.print(line);
-       shown++;
-      }
-      line="";
-      lineNo++;
-      if(shown>=4){next=i<s.length();break;}
-      continue;
-     }
-     line+=c;
-     if(line.length()>=20){
-      int cut=line.lastIndexOf(' ');
-      if(cut>0){
-       String rest=line.substring(cut+1);
-       line=line.substring(0,cut);
-       if(lineNo>=target&&shown<4){
-        oled.setCursor(3,29+shown*8);
-        oled.print(line);
-        shown++;
-       }
-       line=rest;
-       lineNo++;
-       if(shown>=4){next=i+1<s.length();break;}
-      }
+ for(size_t i=0;i<=s.length();i++){
+ char c=i<s.length()?s[i]:'\0';
+ if(c=='\n'||c=='\0'){
+  if(lineNo>=target&&shown<4){
+   oled.setCursor(3,29+shown*8);
+   oled.print(line);
+   shown++;
+  }
+  line="";
+  lineNo++;
+  if(shown>=4){
+   next=i<s.length();
+   break;
+  }
+  continue;
+ }
+ line+=c;
+ if(line.length()>=20){
+  int cut=line.lastIndexOf(' ');
+  if(cut>0){
+   String rest=line.substring(cut+1);
+   line=line.substring(0,cut);
+   if(lineNo>=target&&shown<4){
+    oled.setCursor(3,29+shown*8);
+    oled.print(line);
+    shown++;
+   }
+   line=rest;
+   lineNo++;
+
+   if(shown>=4){
+    next=i+1<s.length();
+    break;
+   }
+  }
+ // Yield setiap 64 karakter.
+ if((i&63)==63)vTaskDelay(1);
+}
      }
      if((i&63)==63)vTaskDelay(1);
     }
