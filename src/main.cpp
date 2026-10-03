@@ -49,7 +49,7 @@
 #define CAM_HREF 14
 #define CAM_PCLK 12
 
-const uint32_t MIC_RATE=16000,RECORD_MIN_MS=500,SILENCE_MS=1000,PREROLL_MS=250,OLED_TYPE_MS=39,OLED_WAVE_MS=70,AUDIO_IDLE_MS=2500,OLED_PAGE_MS=2200,STREAM_EOF_IDLE_MS=5000,OFFLINE_MAX_MS=4000,ALARM_DURATION_MS=120000;
+const uint32_t MIC_RATE=16000,RECORD_MIN_MS=500,SILENCE_MS=1000,PREROLL_MS=250,OLED_TYPE_MS=39,OLED_WAVE_MS=70,AUDIO_IDLE_MS=2500,OLED_PAGE_MS=2200,STREAM_EOF_IDLE_MS=5000,OFFLINE_MAX_MS=4000,ALARM_DURATION_MS=180000;
 const int32_t MIC_THRESHOLD=12000,MIC_SILENCE=8000;
 const size_t BUF=256,PREROLL_SAMPLES=MIC_RATE*PREROLL_MS/1000;
 const int MP3_COPY_BUFFER=512;
@@ -70,8 +70,6 @@ uint8_t lastGreetingPeriod=255;
 String sttFinal,sttPartial,oledText,oledStatus="READY";
 uint32_t oledTypePos=0,oledLastType=0,oledLastWave=0;
 uint32_t oledPage=0,oledLastPage=0,ramDiagAt=0;
-volatile bool pendingVisionCheck=false;
-uint32_t lastVisionEventAt=0;
 
 /* STT LIFECYCLE */
 const uint32_t STT_NORMAL_COOLDOWN=1000;
@@ -79,7 +77,6 @@ const uint32_t STT_ERROR_COOLDOWN=6000;
 const uint32_t STT_QUOTA_COOLDOWN=15000;
 const uint32_t STT_RECONNECT_GUARD=60000;
 const uint32_t STT_IDLE_TIMEOUT_MS=8000;
-const uint32_t VISION_EVENT_COOLDOWN_MS=45000;
 
 static int32_t rawBuf[BUF/4];
 static int16_t pcmBuf[BUF/4],preBuf[PREROLL_SAMPLES],sendBuf[256];
@@ -91,7 +88,6 @@ WAVDecoder wav;
 WebSocketsClient sttWS;
 OV7670*camera=nullptr;
 SemaphoreHandle_t cameraMux=nullptr;
-portMUX_TYPE visionEventMux=portMUX_INITIALIZER_UNLOCKED;
 
 void ramDiag(const char*tag){
  uint32_t f=ESP.getFreeHeap(),m=ESP.getMinFreeHeap(),a=ESP.getMaxAllocHeap();
@@ -214,9 +210,7 @@ void drawCameraOLED(){
   if(analyzed){
    autonomySetEnvironment(environment);
    if(environment.event!=ENV_NONE){
-    portENTER_CRITICAL(&visionEventMux);
-    pendingVisionCheck=true;
-    portEXIT_CRITICAL(&visionEventMux);
+    autoSpeechNotifyVisionEvent(environment.event);
    }
    Serial.printf("TARS: ENV L=%d C=%d R=%d OBS=%d CONF=%u%% EVENT=%d\n",
     environment.leftClear,environment.centerClear,
@@ -801,7 +795,19 @@ bool processOnlineRequest(const String &q,bool vision,bool status,bool automatic
     ramDiag("AFTER-AI-ERROR");
     return false;
   }
-  wheelsStop();
+ answer.trim();
+String checkAnswer=answer;
+checkAnswer.replace("\r","");
+checkAnswer.replace("\n","");
+checkAnswer.trim();
+if(automatic&&checkAnswer.equalsIgnoreCase("[DIAM]")){
+  Serial.println("TARS: AUTO VISION - SILENT");
+  visionLiveResume();
+  autoSpeechDone();
+  oledSetStatus("LISTENING");
+  return true;
+}
+ wheelsStop();
   autonomyStop();
   oledShowText(answer,
     automatic?"AUTO SPEECH":
@@ -831,10 +837,9 @@ bool processOnlineRequest(const String &q,bool vision,bool status,bool automatic
 }
 /* AUTO SPEECH */
 bool autoSpeechCallback(const String &prompt){
-  if(tarsMode!=MODE_ONLINE || playing || sttConnected)return false;
+  if(tarsMode!=MODE_ONLINE||playing||sttConnected)return false;
   if(!wifiOK())return false;
-
-  return processOnlineRequest(prompt,false,false,true);
+  return processOnlineRequest(prompt,true,false,true);
 }
 //TTS Tars Oto//
 bool processVisionEvent(){
@@ -954,8 +959,6 @@ bool processOffline(const String&q){
  }
  Serial.println("TARS: OFFLINE REJECTED = "+q);oledSetStatus("READY");return true;
 }
-
-/* PROCESS */
 /* PROCESS */
 void processQuestion(const String&q){
   String nq=normCmd(q);
@@ -1073,9 +1076,7 @@ void loop(){
   // STT sedang menunggu dan merekam suara pengguna.
     wheelsStop();
   autonomyStop();
-
   String q=tarsMode==MODE_ONLINE?recordRealtime():recordOffline();
-
   if(q.length()){
     wheelsStop();
     autonomyStop();
@@ -1083,21 +1084,13 @@ void loop(){
     processQuestion(q);
   }else{
     personalityUpdate(false,false,false);
-
     if(!specialActive())
       oledSetStatus(tarsMode==MODE_ONLINE?"LISTENING":"READY");
   }
-
   wheelsStop();
   autonomyStop();
-
   if(!playing&&tarsMode==MODE_ONLINE&&!sttConnected){
-    if(pendingVisionCheck){
-      processVisionEvent();
-    }else{
-      autoSpeechUpdate(true,false,false);
-    }
+  autoSpeechUpdate(true,false,false);
   }
-
   delay(1);
 }
