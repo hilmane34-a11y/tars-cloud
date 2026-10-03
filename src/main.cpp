@@ -1125,20 +1125,15 @@ void loop(){
     autonomyStop();
     return;
   }
-  if(sttCooling()){
-    personalityUpdate(true,false,false);
-    autonomyStop();
-    if(!specialActive())
-      oledSetStatus(tarsMode==MODE_ONLINE?"LISTENING":"READY");
-    delay(100);
-    return;
-  }
+}else{
+  personalityUpdate(false,false,false);
+  if(!oledSpecial)
+    oledSetStatus(tarsMode==MODE_ONLINE?"LISTENING":"READY");
+}
   // STT sedang menunggu dan merekam suara pengguna.
     wheelsStop();
   autonomyStop();
-
   String q=tarsMode==MODE_ONLINE?recordRealtime():recordOffline();
-
   if(q.length()){
     wheelsStop();
     autonomyStop();
