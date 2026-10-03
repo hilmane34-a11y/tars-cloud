@@ -1091,6 +1091,7 @@ void enterTarsDeepSleep(){
  }
  ramDiag("BEFORE-DEEP-SLEEP");
  deepSleepEnter();
+ }
 }
 //Loop\\
 void loop(){
@@ -1098,40 +1099,32 @@ void loop(){
     enterTarsDeepSleep();
     return;
   }
-
   ramMonitor();
-
   if(playing){
     wheelsStop();
     autonomyStop();
     delay(1);
     return;
   }
-
   if(tarsMode==MODE_ONLINE&&!wifiOK()){
     oledSetStatus("WIFI ERROR");
     delay(500);
     return;
   }
-
   if(alarmDue()){
     autonomyStop();
     runAlarm();
     return;
   }
-
   checkTimeGreeting();
-
   if(playing){
     wheelsStop();
     autonomyStop();
     return;
   }
-
   // Jangan hentikan otonomi selama STT mendengarkan.
   String q=tarsMode==MODE_ONLINE?
     recordRealtime():recordOffline();
-
   if(q.length()){
     wheelsStop();
     autonomyStop();
