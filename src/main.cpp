@@ -63,8 +63,6 @@ bool alarmRunning=false,greetingPlaying=false;
 bool cameraOK=false,cameraLive=false,oledOK=false,micOK=false,dacOK=false;
 bool playing=false,ntpOK=false,sttConnected=false,sttReady=false;
 bool sttDone=false,sttError=false,sttClosing=false,dacLinksReady=false;
-volatile bool previewFrameReady=false;
-volatile bool sttPreviewGate=false;
 volatile bool ntpSyncEvent=false;
 volatile uint8_t oledSpecial=0;
 volatile uint32_t oledDeadUntil=0,oledDoorStart=0;
@@ -78,7 +76,6 @@ portMUX_TYPE visionEventMux = portMUX_INITIALIZER_UNLOCKED;
 volatile bool pendingVisionCheck = false;
 volatile uint32_t lastVisionEventAt = 0;
 const uint32_t VISION_EVENT_COOLDOWN_MS = 10000;
-
 /* STT LIFECYCLE */
 const uint32_t STT_NORMAL_COOLDOWN=1000;
 const uint32_t STT_ERROR_COOLDOWN=6000;
@@ -202,35 +199,27 @@ bool startCamera(){
 }
 void drawCameraOLED(){
  if(!oledOK)return;
-
  static uint8_t preview[128*64];
  memset(preview,0,sizeof(preview));
  vTaskDelay(1);
-
  if(cameraMux&&xSemaphoreTake(cameraMux,pdMS_TO_TICKS(100))!=pdTRUE)
   return;
-
  bool ok=false;
  if(cameraLive&&camera&&cameraOK)
   ok=I2SCamera::capturePreview(preview);
-
  if(cameraMux)xSemaphoreGive(cameraMux);
  vTaskDelay(1);
-
  if(!ok){
   autonomySetEnvironment(EnvState{});
   return;
  }
-
  EnvState environment={};
  bool analyzed=envAnalyze(preview,environment);
  vTaskDelay(1);
-
  if(analyzed){
   autonomySetEnvironment(environment);
   if(environment.event!=ENV_NONE)
    autoSpeechNotifyVisionEvent(environment.event);
-
   Serial.printf("TARS: ENV L=%d C=%d R=%d OBS=%d CONF=%u%% EVENT=%d\n",
    environment.leftClear,environment.centerClear,
    environment.rightClear,environment.obstacle,
@@ -238,7 +227,6 @@ void drawCameraOLED(){
  }else{
   autonomySetEnvironment(EnvState{});
  }
-
  oled.clearDisplay();
  for(int y=0;y<64;y++){
   for(int x=0;x<128;x++){
@@ -247,9 +235,7 @@ void drawCameraOLED(){
   }
   if((y&3)==3)vTaskDelay(1);
  }
-
  oled.display();
- previewFrameReady=true;
 }
 /* VISION */
 bool needsVision(String q){
@@ -836,24 +822,23 @@ bool processOnlineRequest(const String &q,bool vision,bool status,bool automatic
   wheelsStop();
   autonomyStop();
   ramDiag("AFTER-TTS-AUDIO-OFF");
- // Pulihkan kamera sebelum STT dilanjutkan
-  previewFrameReady=false;
-  sttPreviewGate=true;
-
+  // Lepaskan kunci dan pulihkan kamera
   visionLiveResume();
+  // Vision resume sudah menghidupkan kamera sendiri.
+  // Permintaan biasa perlu menghidupkannya di sini.
   if(!vision) startCamera();
-
   wheelsStop();
   autonomyStop();
-
-  if(cameraLive){
-    oledText="";
-    oledStatus="CAMERA";
-  }else{
-    sttPreviewGate=false;
-    oledSetStatus(ok?"LISTENING":"AUDIO ERROR");
-  }
+  oledSetStatus(ok?"LISTENING":"AUDIO ERROR");
   if(automatic && ok) autoSpeechDone();
+  ramDiag("AFTER-CAMERA-RESTART");
+  return ok;
+}
+/* AUTO SPEECH */
+bool autoSpeechCallback(const String &prompt){
+  if(tarsMode!=MODE_ONLINE||playing||sttConnected)return false;
+  if(!wifiOK())return false;
+  return processOnlineRequest(prompt,true,false,true);
 }
 //TTS Tars Oto//
 bool processVisionEvent(){
@@ -1106,20 +1091,7 @@ void loop(){
   return;
 }
   if(sttCooling()){
-      // Tunggu satu frame kamera benar-benar tampil di OLED
-  if(sttPreviewGate){
-    if(!previewFrameReady){
-      wheelsStop();
-      autonomyStop();
-      delay(20);
-      return;
-    }
-    sttPreviewGate=false;
-    Serial.println("TARS: CAMERA PREVIEW READY - STT RESUME");
-    delay(20);
-    return;
-  }
-   personalityUpdate(true,false,false);
+    personalityUpdate(true,false,false);
     autonomyStop();
     if(!specialActive())
       oledSetStatus(tarsMode==MODE_ONLINE?"LISTENING":"READY");
