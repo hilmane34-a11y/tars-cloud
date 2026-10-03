@@ -471,7 +471,7 @@ bool I2SCamera::capturePreview(uint8_t* out)
     int blockY=blocksDone*STREAM_LINES;
 
     for(int y=0;y<STREAM_LINES;y++){
-      if((y&3)==0)vTaskDelay(1);
+      if((y&7)==0)vTaskDelay(1);
 
       int oy=(blockY+y)*64/yres;
       if(oy>=64)continue;
@@ -517,7 +517,7 @@ bool I2SCamera::capturePreview(uint8_t* out)
       previewFiltered[y*128+x]=(count>=total/2+1)?1:0;
     }
 
-    if((y&3)==0)vTaskDelay(1);
+    if((y&7)==0)vTaskDelay(1);
   }
 
   memcpy(out,previewFiltered,128*64);
