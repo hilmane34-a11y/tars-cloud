@@ -259,6 +259,8 @@ void drawCameraOLED(){
  }else{
   autonomySetEnvironment(EnvState{});
  }
+  oled.display();
+  vTaskDelay(pdMS_TO_TICKS(10));
 }
 /* VISION */
 bool needsVision(String q){
@@ -410,11 +412,12 @@ void oledTask(void*){
     continue;
    }
   }
-  if(cameraLive&&!playing&&!oledText.length()){
-   drawCameraOLED();
-   vTaskDelay(pdMS_TO_TICKS(1000));
-   continue;
-  }
+if(cameraLive&&!playing&&!oledText.length()){
+  drawCameraOLED();
+  vTaskDelay(pdMS_TO_TICKS(200));
+  taskYIELD();
+  continue;
+}
   if(oledText.length()&&oledTypePos<oledText.length()&&now-oledLastType>=OLED_TYPE_MS)
    oledTypePos++,oledLastType=now;
   if(now-oledLastWave>=OLED_WAVE_MS){
