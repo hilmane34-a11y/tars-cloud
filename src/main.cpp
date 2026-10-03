@@ -835,6 +835,7 @@ if(camera && cameraOK && cameraLive){
         cameraLive,
         ESP.getFreeHeap(),
         ESP.getMaxAllocHeap());
+ }
 }
 /* AUTO SPEECH */
 bool autoSpeechCallback(const String &prompt){
