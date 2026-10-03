@@ -1124,35 +1124,31 @@ void loop(){
     autonomyStop();
     return;
   }
-}
- else{
-  personalityUpdate(false,false,false);
-  if(!oledSpecial)
-    oledSetStatus(tarsMode==MODE_ONLINE?"LISTENING":"READY");
-}
   // STT sedang menunggu dan merekam suara pengguna.
-    wheelsStop();
+  wheelsStop();
   autonomyStop();
+
   String q=tarsMode==MODE_ONLINE?recordRealtime():recordOffline();
+
   if(q.length()){
     wheelsStop();
     autonomyStop();
     personalityUpdate(true,false,false);
     processQuestion(q);
-}
   }else{
     personalityUpdate(false,false,false);
 
-    if(!specialActive())
+    if(!oledSpecial)
       oledSetStatus(tarsMode==MODE_ONLINE?"LISTENING":"READY");
   }
 
   wheelsStop();
   autonomyStop();
-    if(!playing&&tarsMode==MODE_ONLINE&&!sttConnected){
-  processVisionEvent();
-  autoSpeechUpdate(true,false,false);
- }
+
+  if(!playing&&tarsMode==MODE_ONLINE&&!sttConnected){
+    processVisionEvent();
+    autoSpeechUpdate(true,false,false);
+  }
 
   delay(1);
 }
