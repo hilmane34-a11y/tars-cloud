@@ -31,6 +31,19 @@ static volatile int readyQueue[STREAM_BLOCKS]={0};
 static volatile int readyHead=0,readyTail=0;
 static volatile bool streamFrameDone=false,streamError=false;
 
+// Penantian VSYNC dibatasi agar task tidak terkunci.
+static bool waitVSync(int level,uint32_t timeout)
+{
+  uint32_t start=millis();
+
+  while(gpio_get_level(I2SCamera::vSyncPin)!=level){
+    if(millis()-start>=timeout)return false;
+    delay(1);
+  }
+
+  return true;
+}
+
 void IRAM_ATTR I2SCamera::i2sInterrupt(void* arg)
 {
   I2S0.int_clr.val=I2S0.int_raw.val;
@@ -70,17 +83,20 @@ void IRAM_ATTR I2SCamera::i2sInterrupt(void* arg)
     framesReceived++;
     streamFrameDone=true;
 
+    // Hentikan penerimaan pada akhir frame tanpa
+    // memanggil reset I2S dari dalam ISR.
     if(stopSignal){
-      i2sStop();
+      I2S0.conf.rx_start=0;
       stopSignal=false;
     }
   }
 }
+
 void IRAM_ATTR I2SCamera::vSyncInterrupt(void* arg)
 {
   gpio_intr_disable(vSyncPin);
 
-  if (gpio_get_level(vSyncPin)) {
+  if(gpio_get_level(vSyncPin)){
   }
 
   gpio_intr_enable(vSyncPin);
@@ -88,52 +104,76 @@ void IRAM_ATTR I2SCamera::vSyncInterrupt(void* arg)
 
 void I2SCamera::i2sStop()
 {
-  esp_intr_disable(i2sInterruptHandle);
-  esp_intr_disable(vSyncInterruptHandle);
+  if(i2sInterruptHandle)
+    esp_intr_disable(i2sInterruptHandle);
+
+  if(vSyncInterruptHandle)
+    esp_intr_disable(vSyncInterruptHandle);
+
+  I2S0.conf.rx_start=0;
   i2sConfReset();
-  I2S0.conf.rx_start = 0;
 }
 
-void I2SCamera::i2sRun()
+bool I2SCamera::i2sRunChecked()
 {
   DEBUG_PRINTLN("I2S Run");
 
-  while (gpio_get_level(vSyncPin) == 0);
-  while (gpio_get_level(vSyncPin) != 0);
+  if(!dmaBuffer||dmaBufferCount<=0||!i2sInterruptHandle){
+    DEBUG_PRINTLN("I2S DMA NOT READY");
+    return false;
+  }
+
+  if(!waitVSync(1,50)||!waitVSync(0,50)){
+    DEBUG_PRINTLN("I2S VSYNC TIMEOUT");
+    return false;
+  }
 
   esp_intr_disable(i2sInterruptHandle);
-  i2sConfReset();
-  blocksReceived = 0;
-  dmaBufferActive = 0;
-  framePointer = 0;
+
+  if(!i2sConfReset()){
+    DEBUG_PRINTLN("I2S RESET TIMEOUT");
+    return false;
+  }
+
+  blocksReceived=0;
+  dmaBufferActive=0;
+  framePointer=0;
 
   DEBUG_PRINT("Sample count ");
   DEBUG_PRINTLN(dmaBuffer[0]->sampleCount());
 
-  I2S0.rx_eof_num = dmaBuffer[0]->sampleCount();
-  I2S0.in_link.addr = (uint32_t)&(dmaBuffer[0]->descriptor);
-  I2S0.in_link.start = 1;
-  I2S0.int_clr.val = I2S0.int_raw.val;
-  I2S0.int_ena.val = 0;
-  I2S0.int_ena.in_done = 1;
+  I2S0.rx_eof_num=dmaBuffer[0]->sampleCount();
+  I2S0.in_link.addr=(uint32_t)&(dmaBuffer[0]->descriptor);
+  I2S0.in_link.start=1;
+  I2S0.int_clr.val=I2S0.int_raw.val;
+  I2S0.int_ena.val=0;
+  I2S0.int_ena.in_done=1;
 
   esp_intr_enable(i2sInterruptHandle);
   esp_intr_enable(vSyncInterruptHandle);
-  I2S0.conf.rx_start = 1;
+  I2S0.conf.rx_start=1;
+
+  return true;
+}
+
+// Tetap void agar kompatibel dengan pemanggil lama.
+void I2SCamera::i2sRun()
+{
+  (void)i2sRunChecked();
 }
 
 bool I2SCamera::initVSync(int pin)
 {
   DEBUG_PRINT("Initializing VSYNC... ");
 
-  vSyncPin = (gpio_num_t)pin;
-  gpio_set_intr_type(vSyncPin, GPIO_INTR_POSEDGE);
+  vSyncPin=(gpio_num_t)pin;
+  gpio_set_intr_type(vSyncPin,GPIO_INTR_POSEDGE);
 
-  if (gpio_isr_register(
-        &I2SCamera::vSyncInterrupt,
-        (void*)"vSyncInterrupt",
-        ESP_INTR_FLAG_INTRDISABLED | ESP_INTR_FLAG_IRAM,
-        &vSyncInterruptHandle) != ESP_OK)
+  if(gpio_isr_register(
+       &I2SCamera::vSyncInterrupt,
+       (void*)"vSyncInterrupt",
+       ESP_INTR_FLAG_INTRDISABLED|ESP_INTR_FLAG_IRAM,
+       &vSyncInterruptHandle)!=ESP_OK)
   {
     DEBUG_PRINTLN("vSync ISR registration failed!");
     return false;
@@ -146,47 +186,55 @@ bool I2SCamera::initVSync(int pin)
 
 void I2SCamera::deinitVSync()
 {
-  if (vSyncInterruptHandle) {
-    esp_intr_disable(vSyncInterruptHandle);
-    esp_intr_free(vSyncInterruptHandle);
-    vSyncInterruptHandle = 0;
-  }
-}
-
-void I2SCamera::deinit()
-{
-  i2sStop();
-  for(int i=0;i<STREAM_BLOCKS;i++){
-    if(streamBlock[i]){
-      free(streamBlock[i]);
-      streamBlock[i]=nullptr;
-    }
-  }
-  dmaBufferDeinit();
-  if(frame){
-    free(frame);
-    frame=nullptr;
-  }
-  if(i2sInterruptHandle){
-    esp_intr_disable(i2sInterruptHandle);
-    esp_intr_free(i2sInterruptHandle);
-    i2sInterruptHandle=0;
-  }
   if(vSyncInterruptHandle){
     esp_intr_disable(vSyncInterruptHandle);
     esp_intr_free(vSyncInterruptHandle);
     vSyncInterruptHandle=0;
   }
 }
+
+void I2SCamera::deinit()
+{
+  i2sStop();
+
+  for(int i=0;i<STREAM_BLOCKS;i++){
+    if(streamBlock[i]){
+      free(streamBlock[i]);
+      streamBlock[i]=nullptr;
+    }
+  }
+
+  dmaBufferDeinit();
+
+  if(frame){
+    free(frame);
+    frame=nullptr;
+  }
+
+  if(i2sInterruptHandle){
+    esp_intr_disable(i2sInterruptHandle);
+    esp_intr_free(i2sInterruptHandle);
+    i2sInterruptHandle=0;
+  }
+
+  if(vSyncInterruptHandle){
+    esp_intr_disable(vSyncInterruptHandle);
+    esp_intr_free(vSyncInterruptHandle);
+    vSyncInterruptHandle=0;
+  }
+}
+
 void I2SCamera::dmaBufferDeinit()
 {
   if(!dmaBuffer)return;
+
   for(int i=0;i<dmaBufferCount;i++){
     if(dmaBuffer[i]){
       delete dmaBuffer[i];
       dmaBuffer[i]=nullptr;
     }
   }
+
   free(dmaBuffer);
   dmaBuffer=nullptr;
   dmaBufferCount=0;
@@ -211,6 +259,7 @@ bool I2SCamera::init(
 
   for(int i=0;i<STREAM_BLOCKS;i++){
     streamBlock[i]=(uint8_t*)malloc(XRES*STREAM_LINES*2);
+
     if(!streamBlock[i]){
       DEBUG_PRINTLN("STREAM BLOCK ALLOC FAIL");
       return false;
@@ -221,101 +270,106 @@ bool I2SCamera::init(
 }
 
 bool I2SCamera::i2sInit(
-  const int VSYNC, const int HREF, const int PCLK,
-  const int D0, const int D1, const int D2, const int D3,
-  const int D4, const int D5, const int D6, const int D7)
+  const int VSYNC,const int HREF,const int PCLK,
+  const int D0,const int D1,const int D2,const int D3,
+  const int D4,const int D5,const int D6,const int D7)
 {
-  int pins[] = {VSYNC, HREF, PCLK, D0, D1, D2, D3, D4, D5, D6, D7};
+  int pins[]={VSYNC,HREF,PCLK,D0,D1,D2,D3,D4,D5,D6,D7};
 
-  gpio_config_t conf = {
-    .pin_bit_mask = 0,
-    .mode = GPIO_MODE_INPUT,
-    .pull_up_en = GPIO_PULLUP_DISABLE,
-    .pull_down_en = GPIO_PULLDOWN_DISABLE,
-    .intr_type = GPIO_INTR_DISABLE
+  gpio_config_t conf={
+    .pin_bit_mask=0,
+    .mode=GPIO_MODE_INPUT,
+    .pull_up_en=GPIO_PULLUP_DISABLE,
+    .pull_down_en=GPIO_PULLDOWN_DISABLE,
+    .intr_type=GPIO_INTR_DISABLE
   };
 
-  for (int i = 0; i < sizeof(pins) / sizeof(pins[0]); ++i) {
-    conf.pin_bit_mask = 1ULL << pins[i];
+  for(int i=0;i<sizeof(pins)/sizeof(pins[0]);++i){
+    conf.pin_bit_mask=1ULL<<pins[i];
     gpio_config(&conf);
   }
 
-  gpio_matrix_in(D0, I2S0I_DATA_IN0_IDX, false);
-  gpio_matrix_in(D1, I2S0I_DATA_IN1_IDX, false);
-  gpio_matrix_in(D2, I2S0I_DATA_IN2_IDX, false);
-  gpio_matrix_in(D3, I2S0I_DATA_IN3_IDX, false);
-  gpio_matrix_in(D4, I2S0I_DATA_IN4_IDX, false);
-  gpio_matrix_in(D5, I2S0I_DATA_IN5_IDX, false);
-  gpio_matrix_in(D6, I2S0I_DATA_IN6_IDX, false);
-  gpio_matrix_in(D7, I2S0I_DATA_IN7_IDX, false);
+  gpio_matrix_in(D0,I2S0I_DATA_IN0_IDX,false);
+  gpio_matrix_in(D1,I2S0I_DATA_IN1_IDX,false);
+  gpio_matrix_in(D2,I2S0I_DATA_IN2_IDX,false);
+  gpio_matrix_in(D3,I2S0I_DATA_IN3_IDX,false);
+  gpio_matrix_in(D4,I2S0I_DATA_IN4_IDX,false);
+  gpio_matrix_in(D5,I2S0I_DATA_IN5_IDX,false);
+  gpio_matrix_in(D6,I2S0I_DATA_IN6_IDX,false);
+  gpio_matrix_in(D7,I2S0I_DATA_IN7_IDX,false);
 
-  gpio_matrix_in(0x30, I2S0I_DATA_IN8_IDX, false);
-  gpio_matrix_in(0x30, I2S0I_DATA_IN9_IDX, false);
-  gpio_matrix_in(0x30, I2S0I_DATA_IN10_IDX, false);
-  gpio_matrix_in(0x30, I2S0I_DATA_IN11_IDX, false);
-  gpio_matrix_in(0x30, I2S0I_DATA_IN12_IDX, false);
-  gpio_matrix_in(0x30, I2S0I_DATA_IN13_IDX, false);
-  gpio_matrix_in(0x30, I2S0I_DATA_IN14_IDX, false);
-  gpio_matrix_in(0x30, I2S0I_DATA_IN15_IDX, false);
+  gpio_matrix_in(0x30,I2S0I_DATA_IN8_IDX,false);
+  gpio_matrix_in(0x30,I2S0I_DATA_IN9_IDX,false);
+  gpio_matrix_in(0x30,I2S0I_DATA_IN10_IDX,false);
+  gpio_matrix_in(0x30,I2S0I_DATA_IN11_IDX,false);
+  gpio_matrix_in(0x30,I2S0I_DATA_IN12_IDX,false);
+  gpio_matrix_in(0x30,I2S0I_DATA_IN13_IDX,false);
+  gpio_matrix_in(0x30,I2S0I_DATA_IN14_IDX,false);
+  gpio_matrix_in(0x30,I2S0I_DATA_IN15_IDX,false);
 
-  gpio_matrix_in(VSYNC, I2S0I_V_SYNC_IDX, true);
-  gpio_matrix_in(0x38, I2S0I_H_SYNC_IDX, false);
-  gpio_matrix_in(HREF, I2S0I_H_ENABLE_IDX, false);
-  gpio_matrix_in(PCLK, I2S0I_WS_IN_IDX, false);
+  gpio_matrix_in(VSYNC,I2S0I_V_SYNC_IDX,true);
+  gpio_matrix_in(0x38,I2S0I_H_SYNC_IDX,false);
+  gpio_matrix_in(HREF,I2S0I_H_ENABLE_IDX,false);
+  gpio_matrix_in(PCLK,I2S0I_WS_IN_IDX,false);
 
   periph_module_enable(PERIPH_I2S0_MODULE);
 
   i2sConfReset();
 
-  I2S0.conf.rx_slave_mod = 1;
-  I2S0.conf2.lcd_en = 1;
-  I2S0.conf2.camera_en = 1;
+  I2S0.conf.rx_slave_mod=1;
+  I2S0.conf2.lcd_en=1;
+  I2S0.conf2.camera_en=1;
 
-  I2S0.clkm_conf.clkm_div_a = 1;
-  I2S0.clkm_conf.clkm_div_b = 0;
-  I2S0.clkm_conf.clkm_div_num = 2;
+  I2S0.clkm_conf.clkm_div_a=1;
+  I2S0.clkm_conf.clkm_div_b=0;
+  I2S0.clkm_conf.clkm_div_num=2;
 
-  I2S0.fifo_conf.dscr_en = 1;
-  I2S0.fifo_conf.rx_fifo_mod =1;
-  I2S0.fifo_conf.rx_fifo_mod_force_en = 1;
-  I2S0.conf_chan.rx_chan_mod = 1;
+  I2S0.fifo_conf.dscr_en=1;
+  I2S0.fifo_conf.rx_fifo_mod=1;
+  I2S0.fifo_conf.rx_fifo_mod_force_en=1;
+  I2S0.conf_chan.rx_chan_mod=1;
 
-  I2S0.sample_rate_conf.rx_bits_mod = 16;
-  I2S0.conf.rx_right_first = 0;
-  I2S0.conf.rx_msb_right = 0;
-  I2S0.conf.rx_msb_shift = 0;
-  I2S0.conf.rx_mono = 0;
-  I2S0.conf.rx_short_sync = 0;
-  I2S0.timing.val = 0;
+  I2S0.sample_rate_conf.rx_bits_mod=16;
+  I2S0.conf.rx_right_first=0;
+  I2S0.conf.rx_msb_right=0;
+  I2S0.conf.rx_msb_shift=0;
+  I2S0.conf.rx_mono=0;
+  I2S0.conf.rx_short_sync=0;
+  I2S0.timing.val=0;
 
-  esp_err_t _res = esp_intr_alloc(
+  esp_err_t _res=esp_intr_alloc(
     ETS_I2S0_INTR_SOURCE,
-    ESP_INTR_FLAG_INTRDISABLED | ESP_INTR_FLAG_LEVEL1 | ESP_INTR_FLAG_IRAM,
+    ESP_INTR_FLAG_INTRDISABLED|ESP_INTR_FLAG_LEVEL1|ESP_INTR_FLAG_IRAM,
     &I2SCamera::i2sInterrupt,
     NULL,
     &i2sInterruptHandle
   );
 
-  if (_res != ESP_OK) {
+  if(_res!=ESP_OK){
     DEBUG_PRINTLN("Failed to allocate I2S interrupt");
     return false;
   }
 
   return true;
 }
+
 void I2SCamera::dmaBufferInit(int bytes)
 {
-  dmaBufferCount = 2;
-  dmaBuffer = (DMABuffer**) malloc(sizeof(DMABuffer*) * dmaBufferCount);
-  for(int i = 0; i < dmaBufferCount; i++)
-  {
-    dmaBuffer[i] = new DMABuffer(bytes);
+  dmaBufferCount=2;
+  dmaBuffer=(DMABuffer**)malloc(sizeof(DMABuffer*)*dmaBufferCount);
+
+  for(int i=0;i<dmaBufferCount;i++){
+    dmaBuffer[i]=new DMABuffer(bytes);
+
     if(i)
       dmaBuffer[i-1]->next(dmaBuffer[i]);
   }
-  dmaBuffer[dmaBufferCount - 1]->next(dmaBuffer[0]);
+
+  dmaBuffer[dmaBufferCount-1]->next(dmaBuffer[0]);
 }
-bool I2SCamera::encodeFrameToJPEG(uint8_t* outBuffer,size_t* outLen,int quality)
+
+bool I2SCamera::encodeFrameToJPEG(
+  uint8_t* outBuffer,size_t* outLen,int quality)
 {
   if(!outBuffer||!outLen)return false;
 
@@ -327,12 +381,17 @@ bool I2SCamera::encodeFrameToJPEG(uint8_t* outBuffer,size_t* outLen,int quality)
   streamFrameDone=false;
   streamError=false;
 
-  for(int i=0;i<STREAM_BLOCKS;i++)streamState[i]=0;
+  for(int i=0;i<STREAM_BLOCKS;i++)
+    streamState[i]=0;
 
-  if(!JPEGEncoderWrapper::begin(outBuffer,OV7670_MAX_JPEG_SIZE,xres,yres,quality))
+  if(!JPEGEncoderWrapper::begin(
+       outBuffer,OV7670_MAX_JPEG_SIZE,xres,yres,quality))
     return false;
 
-  i2sRun();
+  if(!i2sRunChecked()){
+    JPEGEncoderWrapper::finish(outLen);
+    return false;
+  }
 
   const int blocksNeeded=(yres+STREAM_LINES-1)/STREAM_LINES;
   int blocksDone=0;
@@ -373,65 +432,98 @@ bool I2SCamera::encodeFrameToJPEG(uint8_t* outBuffer,size_t* outLen,int quality)
 bool I2SCamera::capturePreview(uint8_t* out)
 {
   if(!out)return false;
+
   memset(out,0,128*64);
-  streamFill=0;streamLine=0;streamReady=0;
-  readyHead=0;readyTail=0;streamFrameDone=false;streamError=false;
-  for(int i=0;i<STREAM_BLOCKS;i++)streamState[i]=0;
-  i2sRun();
+
+  streamFill=0;
+  streamLine=0;
+  streamReady=0;
+  readyHead=0;
+  readyTail=0;
+  streamFrameDone=false;
+  streamError=false;
+
+  for(int i=0;i<STREAM_BLOCKS;i++)
+    streamState[i]=0;
+
+  if(!i2sRunChecked())return false;
+
   const int blocksNeeded=(yres+STREAM_LINES-1)/STREAM_LINES;
   int blocksDone=0;
   uint32_t start=millis();
+
   while(blocksDone<blocksNeeded){
     if(millis()-start>CAMERA_CAPTURE_TIMEOUT){
       i2sStop();
       return false;
     }
-    if(streamReady<=0){delay(1);continue;}
+
+    if(streamReady<=0){
+      delay(1);
+      continue;
+    }
+
     int idx=readyQueue[readyTail];
     readyTail=(readyTail+1)%STREAM_BLOCKS;
     streamReady--;
+
     uint16_t* src=(uint16_t*)streamBlock[idx];
     int blockY=blocksDone*STREAM_LINES;
+
     for(int y=0;y<STREAM_LINES;y++){
       if((y&3)==0)vTaskDelay(1);
+
       int oy=(blockY+y)*64/yres;
       if(oy>=64)continue;
+
       for(int x=0;x<xres;x++){
         int ox=x*128/xres;
         if(ox>=128)continue;
+
         uint16_t p=src[y*xres+x];
         uint8_t r=((p>>11)&0x1F)*255/31;
         uint8_t g=((p>>5)&0x3F)*255/63;
         uint8_t b=(p&0x1F)*255/31;
         uint8_t gray=(uint8_t)((77*r+150*g+29*b)>>8);
-        if(gray<=47)out[oy*128+ox]=1;
+
+        if(gray<=47)
+          out[oy*128+ox]=1;
       }
     }
+
     streamState[idx]=0;
     blocksDone++;
     start=millis();
   }
+
   i2sStop();
 
   // MEDIAN FILTER 3x3: pertahankan detail gelap dan kurangi noise
   for(int y=0;y<64;y++){
     for(int x=0;x<128;x++){
       int count=0,total=0;
+
       for(int dy=-1;dy<=1;dy++){
         for(int dx=-1;dx<=1;dx++){
           int nx=x+dx,ny=y+dy;
+
           if(nx<0||nx>=128||ny<0||ny>=64)continue;
+
           count+=out[ny*128+nx];
           total++;
         }
       }
+
       previewFiltered[y*128+x]=(count>=total/2+1)?1:0;
     }
+
     if((y&3)==0)vTaskDelay(1);
   }
+
   memcpy(out,previewFiltered,128*64);
   return true;
 }
+
 void I2SCamera::dmaDiagnostic()
 {
   DEBUG_PRINT("TARS: DMA blocks=");
