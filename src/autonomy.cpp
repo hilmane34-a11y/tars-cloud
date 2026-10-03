@@ -32,8 +32,8 @@ void autonomyStop(){
   moveUntil=0;
 }
 
-void autonomySetEnvironment(const EnvState &environment){
-  env=environment;
+void autonomySetEnvironment(const EnvState &e){
+  env=e;
   lastEnvUpdate=millis();
   if(!env.valid)autonomyStop();
 }
@@ -43,45 +43,43 @@ bool autonomyIsMoving(){return moving;}
 void autonomyUpdate(bool enabled,bool busy){
   uint32_t now=millis();
 
-  if(!enabled || busy || !env.valid ||
+  if(!enabled||busy||!env.valid||
      now-lastEnvUpdate>ENV_TIMEOUT){
     autonomyStop();
     return;
   }
 
   if(moving){
-    if((int32_t)(now-moveUntil)>=0)autonomyStop();
-    else return;
-  }
-
-  if(personalityNeedsRest() && mode==EXPLORE){
-    mode=TIRED;
+    if((int32_t)(now-moveUntil)<0)return;
     autonomyStop();
   }
 
+  if(mode==EXPLORE&&personalityNeedsRest())
+    mode=TIRED;
+
   if(mode==TIRED){
-    mode=SEEK_REST;
+    autonomyStop();
     restSince=0;
+    mode=SEEK_REST;
   }
 
   if(mode==SEEK_REST){
-    // Hanya istirahat jika seluruh area terlihat cukup jelas.
-    if(env.leftClear && env.centerClear && env.rightClear &&
-       !env.motion){
+    // Belum ada sensor untuk memastikan lokasi aman.
+    // Berhenti di tempat; jangan bergerak mencari lokasi.
+    if(env.leftClear&&env.centerClear&&env.rightClear&&!env.motion){
       if(!restSince)restSince=now;
       if(now-restSince>=REST_CONFIRM_MS){
-        mode=RESTING;
         personalityStartRest();
+        mode=RESTING;
       }
     }else{
       restSince=0;
-      autonomyStop();
     }
     return;
   }
 
   if(mode==RESTING){
-    personalityUpdate(false,false,false);
+    if(!env.valid)return;
     if(!personalityIsResting()){
       personalityStopRest();
       mode=RECOVER;
@@ -95,18 +93,14 @@ void autonomyUpdate(bool enabled,bool busy){
     return;
   }
 
-  if(!personalityCanExplore()){
-    autonomyStop();
-    return;
-  }
-
+  if(!personalityCanExplore())return;
   if(now-lastDecision<1200)return;
   lastDecision=now;
 
   if(env.centerClear){
     wheelsForward(AUTO_SPEED);
     moveUntil=now+FORWARD_MS;
-  }else if(env.leftClear && env.rightClear){
+  }else if(env.leftClear&&env.rightClear){
     if(preferLeft)wheelsLeft(AUTO_SPEED);
     else wheelsRight(AUTO_SPEED);
     preferLeft=!preferLeft;
