@@ -1125,7 +1125,7 @@ void loop(){
     return;
   }
 }
-}else{
+ else{
   personalityUpdate(false,false,false);
   if(!oledSpecial)
     oledSetStatus(tarsMode==MODE_ONLINE?"LISTENING":"READY");
