@@ -259,7 +259,6 @@ void drawCameraOLED(){
  }else{
   autonomySetEnvironment(EnvState{});
  }
-  oled.display();
   vTaskDelay(pdMS_TO_TICKS(10));
 }
 /* VISION */
@@ -779,7 +778,7 @@ bool streamAudio(const String&url,const String&text){
   wavResample.flush();wavResample.end();wavDec.end();
  }
  audioRing.stop();pcmProbe.report();h.end();ramDiag("TTS-DONE");
- playing=false;audioStop();wheelsStop();oledSetListening();
+ playing=false;audioStop();wheelsStop();
  Serial.printf("TARS: AUDIO TOTAL=%lu ms\n",(unsigned long)(millis()-total));return started;
 }
 /* SHARED ONLINE AI CYCLE */
@@ -849,7 +848,7 @@ bool processOnlineRequest(const String &q,bool vision,bool status,bool automatic
   if(!vision) startCamera();
   wheelsStop();
   autonomyStop();
-  oledSetStatus(ok?"LISTENING":"AUDIO ERROR");
+  oledSetStatus(ok?"Siap Tuan":"AUDIO ERROR");
   if(automatic && ok) autoSpeechDone();
   ramDiag("AFTER-CAMERA-RESTART");
   return ok;
@@ -861,8 +860,6 @@ bool autoSpeechCallback(const String &prompt){
 // Auto-speech harus mengamati gambar kamera. 
    return processOnlineRequest(prompt,true,false,true);
  }
-//TTS Tars Oto//
-
 /* VISION EVENT */
 void processVisionEvent(){
   bool eventReady=false;
