@@ -988,11 +988,17 @@ bool processOffline(const String&q){
  if(cmdMatch(s,hari,sizeof(hari)/sizeof(*hari))){
   oledShowText("HARI INI","OFFLINE");playLocalMP3(hari_start,hari_end,"Kata-kata hari ini, tuan.");oledSetStatus("READY");return true;
  }
- if(cmdMatch(s,online,sizeof(online)/sizeof(*online))){
-  Serial.println("TARS: SWITCH OFFLINE -> ONLINE");oledShowText("ONLINE","OFFLINE");tarsMode=MODE_ONLINE;
-  playLocalMP3(online_start,online_end,"Mode online aktif, tuan");Serial.println("TARS: MODE ONLINE");return true;
- }
- Serial.println("TARS: OFFLINE REJECTED = "+q);oledSetStatus("READY");return true;
+if(cmdMatch(s,online,sizeof(online)/sizeof(*online))){
+  Serial.println("TARS: SWITCH OFFLINE -> ONLINE");
+  oledShowText("ONLINE","OFFLINE");
+  tarsMode=MODE_ONLINE;
+  portENTER_CRITICAL(&visionEventMux);
+  pendingVisionCheck=false;
+  portEXIT_CRITICAL(&visionEventMux);
+  autoSpeechResetTimer();
+  playLocalMP3(online_start,online_end,"Mode online aktif, tuan");
+  Serial.println("TARS: MODE ONLINE");
+  return true;
 }
 /* PROCESS */
 void processQuestion(const String&q){
