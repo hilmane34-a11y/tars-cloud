@@ -120,90 +120,108 @@ bool playLocalMP3(const uint8_t*,const uint8_t*,const String&,bool=false);
 /* CAMERA DIAGNOSTIC */
 void camDiag(const char*tag){
  Serial.printf("TARS: CAM[%s] live=%d ok=%d ptr=%p oled=%d play=%d text=%u RAM=%u/%u KB\n",
- tag,cameraLive,cameraOK,camera,oledOK,playing,(unsigned)oledText.length(),
- ESP.getFreeHeap()/1024,ESP.getMaxAllocHeap()/1024);
+  tag,cameraLive,cameraOK,camera,oledOK,playing,(unsigned)oledText.length(),
+  ESP.getFreeHeap()/1024,ESP.getMaxAllocHeap()/1024);
 }
 bool initCamera(){
-  if(camera && cameraOK && cameraLive)return true;
-  Serial.println("TARS: CAM INIT START");
-  ramDiag("CAM-BEFORE-INIT");
-  camera=new OV7670(
-    OV7670::Mode::QVGA_RGB565,
-    CAM_SIOD,CAM_SIOC,CAM_VSYNC,CAM_HREF,
-    CAM_XCLK,CAM_PCLK,
-    CAM_D0,CAM_D1,CAM_D2,CAM_D3,
-    CAM_D4,CAM_D5,CAM_D6,CAM_D7
-  );
-  if(!camera){
-    cameraOK=cameraLive=false;
-    Serial.println("TARS: CAM INIT ALLOC FAILED");
-    ramDiag("CAM-INIT-FAILED");
-    return false;
-  }
-  Serial.printf("TARS: CAM OBJECT=%p RES=%dx%d\n",
-    camera,camera->xres,camera->yres);
-  if(camera->xres!=320 || camera->yres!=240){
-    delete camera;
-    camera=nullptr;
-    cameraOK=cameraLive=false;
-    ramDiag("CAM-INVALID-RELEASED");
-    return false;
-  }
-  cameraOK=true;
-  cameraLive=true;
-  ramDiag("CAM-AFTER-INIT");
-  camDiag("LIVE");
+ if(cameraMux&&xSemaphoreTake(cameraMux,portMAX_DELAY)!=pdTRUE)
+  return false;
+ if(camera&&cameraOK&&cameraLive){
+  if(cameraMux)xSemaphoreGive(cameraMux);
   return true;
+ }
+ Serial.println("TARS: CAM INIT START");
+ ramDiag("CAM-BEFORE-INIT");
+ // Bersihkan objek lama sebelum membuat objek baru.
+ if(camera){
+  delete camera;
+  camera=nullptr;
+ }
+ cameraOK=false;
+ cameraLive=false;
+ camera=new OV7670(
+  OV7670::Mode::QVGA_RGB565,
+  CAM_SIOD,CAM_SIOC,CAM_VSYNC,CAM_HREF,
+  CAM_XCLK,CAM_PCLK,
+  CAM_D0,CAM_D1,CAM_D2,CAM_D3,
+  CAM_D4,CAM_D5,CAM_D6,CAM_D7
+ );
+ if(!camera){
+  cameraOK=cameraLive=false;
+  Serial.println("TARS: CAM INIT ALLOC FAILED");
+  ramDiag("CAM-INIT-FAILED");
+  if(cameraMux)xSemaphoreGive(cameraMux);
+  return false;
+ }
+ Serial.printf("TARS: CAM OBJECT=%p RES=%dx%d\n",
+  camera,camera->xres,camera->yres);
+ if(camera->xres!=320||camera->yres!=240){
+  delete camera;
+  camera=nullptr;
+  cameraOK=cameraLive=false;
+  ramDiag("CAM-INVALID-RELEASED");
+  if(cameraMux)xSemaphoreGive(cameraMux);
+  return false;
+ }
+ cameraOK=true;
+ cameraLive=true;
+ ramDiag("CAM-AFTER-INIT");
+ camDiag("LIVE");
+ if(cameraMux)xSemaphoreGive(cameraMux);
+ return true;
 }
 void stopCamera(){
-  Serial.println("TARS: CAM STOP START");
-  camDiag("BEFORE-OFF");
-  cameraLive=false;
-  if(cameraMux){
-    if(xSemaphoreTake(cameraMux,portMAX_DELAY)!=pdTRUE){
-      Serial.println("TARS: CAM MUTEX FAILED");
-      return;
-    }
+ Serial.println("TARS: CAM STOP START");
+ camDiag("BEFORE-OFF");
+ // Hentikan permintaan preview sebelum menghapus objek.
+ cameraLive=false;
+ if(cameraMux){
+  if(xSemaphoreTake(cameraMux,portMAX_DELAY)!=pdTRUE){
+   Serial.println("TARS: CAM MUTEX FAILED");
+   return;
   }
-  if(camera){
-    delete camera;
-    camera=nullptr;
-  }
-  cameraOK=false;
-  if(cameraMux)xSemaphoreGive(cameraMux);
-  delay(50);
-  ramDiag("CAM-AFTER-DELETE");
-  camDiag("OFF");
-  Serial.println("TARS: CAM STOP DONE");
+ }
+ if(camera){
+  delete camera;
+  camera=nullptr;
+ }
+ cameraOK=false;
+ if(cameraMux)xSemaphoreGive(cameraMux);
+ delay(50);
+ ramDiag("CAM-AFTER-DELETE");
+ camDiag("OFF");
+ Serial.println("TARS: CAM STOP DONE");
 }
 bool startCamera(){
-  Serial.println("TARS: CAM START REQUEST");
-  camDiag("START-BEFORE");
-  if(camera && cameraOK && cameraLive){
-    Serial.println("TARS: CAM ALREADY LIVE");
-    return true;
-  }
-  cameraLive=false;
-  cameraOK=false;
-  delay(50);
-  bool ok=initCamera();
-  if(ok)envResetMotion();
-  if(!ok){
-    Serial.println("TARS: CAM RESTART FAILED");
-    ramDiag("CAM-RESTART-FAILED");
-    return false;
-  }
-  Serial.println("TARS: CAM RESTART SUCCESS");
-  ramDiag("CAM-RESTART-DONE");
-  camDiag("START-DONE");
+ Serial.println("TARS: CAM START REQUEST");
+ camDiag("START-BEFORE");
+ if(camera&&cameraOK&&cameraLive){
+  Serial.println("TARS: CAM ALREADY LIVE");
   return true;
+ }
+ cameraLive=false;
+ cameraOK=false;
+ delay(50);
+ bool ok=initCamera();
+ if(ok)envResetMotion();
+ if(!ok){
+  Serial.println("TARS: CAM RESTART FAILED");
+  ramDiag("CAM-RESTART-FAILED");
+  return false;
+ }
+ Serial.println("TARS: CAM RESTART SUCCESS");
+ ramDiag("CAM-RESTART-DONE");
+ camDiag("START-DONE");
+ return true;
 }
 void drawCameraOLED(){
- if(!cameraLive||!camera||!cameraOK||!oledOK)return;
+ if(!oledOK)return;
  static uint8_t preview[128*64];
  memset(preview,0,sizeof(preview));
  vTaskDelay(1);
- if(cameraMux&&xSemaphoreTake(cameraMux,pdMS_TO_TICKS(100))!=pdTRUE)return;
+ // Semua akses objek kamera harus melalui mutex.
+ if(cameraMux&&xSemaphoreTake(cameraMux,pdMS_TO_TICKS(100))!=pdTRUE)
+  return;
  bool ok=false;
  if(cameraLive&&camera&&cameraOK)
   ok=I2SCamera::capturePreview(preview);
@@ -239,6 +257,7 @@ void drawCameraOLED(){
  oled.display();
  vTaskDelay(1);
 }
+
 /* VISION */
 bool needsVision(String q){
  q.toLowerCase();
