@@ -911,9 +911,11 @@ bool isDoorCmd(const String&s){
 
 /* ALARM */
 bool alarmDue(){
- if(!ntpOK||alarmRunning)return false;
- time_t now=time(nullptr);if(now<1704067200)return false;
- struct tm t;localtime_r(&now,&t);
+ if(!ntpOK||alarmRunning||deepSleepAlarmDone())return false;
+ time_t now=time(nullptr);
+ if(now<1704067200)return false;
+ struct tm t;
+ localtime_r(&now,&t);
  return t.tm_hour==6&&t.tm_min==0&&alarmLastDay!=t.tm_yday;
 }
 bool playLocalAlarm(){
@@ -934,13 +936,19 @@ bool playLocalAlarm(){
 }
 void runAlarm(){
  if(!alarmDue())return;
- time_t now=time(nullptr);struct tm t;localtime_r(&now,&t);alarmLastDay=t.tm_yday;
- alarmRunning=true;wheelsStop();uint32_t st=millis();
- while(millis()-st<ALARM_DURATION_MS){if(!playLocalAlarm())break;delay(500);}
- playing=false;alarmRunning=false;wheelsStop();oledSetStatus(tarsMode==MODE_ONLINE?"LISTENING":"READY");
+ time_t now=time(nullptr);
+ struct tm t;
+ localtime_r(&now,&t);
+ alarmLastDay=t.tm_yday;
+ alarmRunning=true; wheelsStop();
+ uint32_t st=millis(); bool played=false;
+ while(millis()-st<ALARM_DURATION_MS){
+ if(!playLocalAlarm())break; played=true; 
+ delay(500); }
+ if(played)deepSleepMarkAlarmDone(); playing=false;
+ alarmRunning=false; wheelsStop();
+ oledSetStatus(tarsMode==MODE_ONLINE?"LISTENING":"READY");
 }
-bool specialActive(){return oledSpecial!=0;}
-
 /* OFFLINE */
 bool processOffline(const String&q){
  String s=normCmd(q);
@@ -955,8 +963,6 @@ bool processOffline(const String&q){
  }
  Serial.println("TARS: OFFLINE REJECTED = "+q);oledSetStatus("READY");return true;
 }
-
-/* PROCESS */
 /* PROCESS */
 void processQuestion(const String&q){
   String nq=normCmd(q);
@@ -986,7 +992,7 @@ void processQuestion(const String&q){
 }
 /* SETUP */
 void setup(){
- Serial.begin(SERIAL_BAUD);Wire.begin(OLED_SDA,OLED_SCL);Wire.setClock(400000);
+ Serial.begin(SERIAL_BAUD);deepSleepBegin();Wire.begin(OLED_SDA,OLED_SCL);Wire.setClock(400000);
  oledOK=oled.begin(SSD1306_SWITCHCAPVCC,OLED_ADDR);
  if(oledOK){
   oled.clearDisplay();oled.setTextColor(SSD1306_WHITE);oled.setTextSize(2);
@@ -1033,8 +1039,36 @@ Serial.println("TARS: PERSONALITY READY");
 Serial.println("TARS: AUTONOMY READY");
 Serial.println("TARS: AUTO SPEECH READY");
 }
+void enterTarsDeepSleep(){
+ Serial.println("TARS: PREPARING DEEP SLEEP");
+ wheelsStop();
+ autonomyStop();
+ closeSTT();
+ audioRing.stop();
+ audioStop();
+ playing=false;
+ visionLivePause();
+ stopCamera();
+ if(micOK){
+  i2s_driver_uninstall(MIC_PORT);
+  micOK=false;
+ }
+ if(oledOK){
+  oled.clearDisplay();
+  oled.setTextSize(1);
+  oled.setCursor(15,25);
+  oled.print("TARS SLEEP");
+  oled.display();
+ }
+ ramDiag("BEFORE-DEEP-SLEEP");
+ deepSleepEnter();
+}
 /* LOOP */
 void loop(){
+  if(deepSleepDue()){
+    enterTarsDeepSleep();
+    return;
+  }
   ramMonitor();
   if(playing){
     wheelsStop();
