@@ -1124,6 +1124,7 @@ void loop(){
     autonomyStop();
     return;
   }
+}
 }else{
   personalityUpdate(false,false,false);
   if(!oledSpecial)
