@@ -203,44 +203,41 @@ void drawCameraOLED(){
  static uint8_t preview[128*64];
  memset(preview,0,sizeof(preview));
  vTaskDelay(1);
- if(cameraMux&&xSemaphoreTake(cameraMux,pdMS_TO_TICKS(2500))!=pdTRUE)return;
+ if(cameraMux&&xSemaphoreTake(cameraMux,pdMS_TO_TICKS(100))!=pdTRUE)return;
  bool ok=false;
  if(cameraLive&&camera&&cameraOK)
-   ok=I2SCamera::capturePreview(preview);
+  ok=I2SCamera::capturePreview(preview);
  if(cameraMux)xSemaphoreGive(cameraMux);
  vTaskDelay(1);
- if(ok){
-  EnvState environment={};
-  bool analyzed=envAnalyze(preview,environment);
-  vTaskDelay(1);
-  if(analyzed){
-   autonomySetEnvironment(environment);
-   if(environment.event!=ENV_NONE){
-    portENTER_CRITICAL(&visionEventMux);
-    pendingVisionCheck=true;
-    portEXIT_CRITICAL(&visionEventMux);
-   }
-   Serial.printf("TARS: ENV L=%d C=%d R=%d OBS=%d CONF=%u%% EVENT=%d\n",
-    environment.leftClear,environment.centerClear,
-    environment.rightClear,environment.obstacle,
-    environment.confidence,(int)environment.event);
-  }else{
-   autonomySetEnvironment(EnvState{});
-  }
-  oled.clearDisplay();
-  for(int y=0;y<64;y++){
-   for(int x=0;x<128;x++){
-    if(preview[y*128+x])
-     oled.drawPixel(x,y,SSD1306_WHITE);
-   }
-   if((y&3)==3)vTaskDelay(1);
-  }
-  vTaskDelay(1);
-  oled.display();
-  vTaskDelay(1);
+ if(!ok){
+  autonomySetEnvironment(EnvState{});
+  return;
+ }
+ EnvState environment={};
+ bool analyzed=envAnalyze(preview,environment);
+ vTaskDelay(1);
+ if(analyzed){
+  autonomySetEnvironment(environment);
+  if(environment.event!=ENV_NONE)
+   autoSpeechNotifyVisionEvent(environment.event);
+  Serial.printf("TARS: ENV L=%d C=%d R=%d OBS=%d CONF=%u%% EVENT=%d\n",
+   environment.leftClear,environment.centerClear,
+   environment.rightClear,environment.obstacle,
+   environment.confidence,(int)environment.event);
  }else{
   autonomySetEnvironment(EnvState{});
  }
+ oled.clearDisplay();
+ for(int y=0;y<64;y++){
+  for(int x=0;x<128;x++){
+   if(preview[y*128+x])
+    oled.drawPixel(x,y,SSD1306_WHITE);
+  }
+  vTaskDelay(1);
+ }
+ vTaskDelay(1);
+ oled.display();
+ vTaskDelay(1);
 }
 /* VISION */
 bool needsVision(String q){
@@ -394,7 +391,7 @@ void oledTask(void*){
   }
   if(cameraLive&&!playing&&!oledText.length()){
    drawCameraOLED();
-   vTaskDelay(pdMS_TO_TICKS(1000));
+   vTaskDelay(pdMS_TO_TICKS(100));
    continue;
   }
   if(oledText.length()&&oledTypePos<oledText.length()&&now-oledLastType>=OLED_TYPE_MS)
@@ -1046,7 +1043,7 @@ void setup(){
  Serial.printf("TARS: AUDIO RING=%u PREBUFFER=%u\n",(unsigned)AUDIO_RING_SIZE,(unsigned)AUDIO_PREBUFFER);
 
  ramDiag("BOOT");
- if(oledOK)xTaskCreatePinnedToCore(oledTask,"TARS_OLED",4096,nullptr,1,nullptr,0);
+ if(oledOK)xTaskCreatePinnedToCore(oledTask,"TARS_OLED",4096,nullptr,0,nullptr,0);
  wifiManagerBegin();
  if(wifiManagerConnect(true))if(syncTime())checkTimeGreeting();
 
