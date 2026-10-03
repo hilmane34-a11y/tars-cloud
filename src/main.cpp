@@ -849,13 +849,15 @@ if(automatic&&checkAnswer.equalsIgnoreCase("[DIAM]")){
   autonomyStop();
   ramDiag("AFTER-TTS-AUDIO-OFF");
   // Lepaskan kunci dan pulihkan kamera
-  visionLiveResume();
-  // Vision resume sudah menghidupkan kamera sendiri.
-  // Permintaan biasa perlu menghidupkannya di sini.
-  if(!vision) startCamera();
-  wheelsStop();
-  autonomyStop();
-  oledSetStatus(ok?"LISTENING":"AUDIO ERROR");
+visionLiveResume();
+if(!vision) startCamera();
+wheelsStop();
+autonomyStop();
+if(ok && cameraLive && cameraOK){
+  oledSetStatus("CAMERA");
+}else{
+  oledSetStatus(ok?"CAMERA ERROR":"AUDIO ERROR");
+}
   if(automatic && ok) autoSpeechDone();
   ramDiag("AFTER-CAMERA-RESTART");
   return ok;
