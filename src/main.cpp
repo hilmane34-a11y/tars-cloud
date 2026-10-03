@@ -836,7 +836,6 @@ if(camera && cameraOK && cameraLive){
         ESP.getFreeHeap(),
         ESP.getMaxAllocHeap());
  }
-}
 /* AUTO SPEECH */
 bool autoSpeechCallback(const String &prompt){
   if(tarsMode!=MODE_ONLINE||playing||sttConnected)return false;
@@ -1038,7 +1037,7 @@ void setup(){
  Serial.printf("TARS: AUDIO RING=%u PREBUFFER=%u\n",(unsigned)AUDIO_RING_SIZE,(unsigned)AUDIO_PREBUFFER);
 
  ramDiag("BOOT");
- if(oledOK)xTaskCreatePinnedToCore(oledTask,"TARS_OLED",4096,nullptr,1,nullptr,1);
+ if(oledOK)xTaskCreatePinnedToCore(oledTask,"TARS_OLED",4096,nullptr,1,nullptr,0);
  wifiManagerBegin();
  if(wifiManagerConnect(true))if(syncTime())checkTimeGreeting();
 
