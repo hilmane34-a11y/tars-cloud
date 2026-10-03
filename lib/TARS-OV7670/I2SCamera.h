@@ -23,9 +23,9 @@ public:
     FORMAT_BMP,
     FORMAT_JPEG
   };
+
   static void dmaDiagnostic();
   static bool capturePreview(uint8_t*out);
-  
   static ImageFormat imageFormat;
 
   static bool encodeFrameToJPEG(
@@ -47,44 +47,23 @@ public:
   static int dmaBufferActive;
   static DMABuffer **dmaBuffer;
 
-  /*
-   * Tidak digunakan lagi sebagai framebuffer kamera.
-   * Tetap dipertahankan agar kompatibel dengan struktur
-   * library lama.
-   */
   static unsigned char* frame;
   static int framePointer;
   static int frameBytes;
 
   static volatile bool stopSignal;
 
-  /*
-   * Mulai capture secara NON-BLOCKING.
-   *
-   * Capture akan berjalan di ISR.
-   * encodeFrameToJPEG() kemudian mengambil block
-   * hasil capture sambil frame masih berlangsung.
-   */
   static void start()
   {
     i2sRun();
   }
 
-  /*
-   * Hentikan capture.
-   */
   static void stop()
   {
     i2sStop();
     stopSignal=false;
   }
 
-  /*
-   * Mulai satu frame.
-   *
-   * Tidak menunggu sampai frame selesai.
-   * encodeFrameToJPEG() yang mengonsumsi block.
-   */
   static void oneFrame()
   {
     i2sRun();
@@ -92,6 +71,7 @@ public:
 
   static void i2sStop();
   static void i2sRun();
+  static bool i2sRunChecked();
 
   static void dmaBufferInit(int bytes);
   static void dmaBufferDeinit();
@@ -134,7 +114,7 @@ public:
     const int D7
   );
 
-  static inline void i2sConfReset()
+  static inline bool i2sConfReset()
   {
     const uint32_t lc_conf_reset_flags =
       I2S_IN_RST_M |
@@ -153,6 +133,10 @@ public:
     I2S0.conf.val |= conf_reset_flags;
     I2S0.conf.val &= ~conf_reset_flags;
 
-    while(I2S0.state.rx_fifo_reset_back);
+    for(uint32_t i=0;
+        I2S0.state.rx_fifo_reset_back && i<100000;
+        i++) {}
+
+    return !I2S0.state.rx_fifo_reset_back;
   }
 };
