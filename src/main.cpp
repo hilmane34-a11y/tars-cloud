@@ -156,22 +156,31 @@ bool initCamera(){
   camDiag("LIVE");
   return true;
 }
+
 void stopCamera(){
   Serial.println("TARS: CAM STOP START");
   camDiag("BEFORE-OFF");
-  cameraLive=false;
-  if(cameraMux){
-    if(xSemaphoreTake(cameraMux,portMAX_DELAY)!=pdTRUE){
-      Serial.println("TARS: CAM MUTEX FAILED");
-      return;
-    }
+
+  if(!cameraMux){
+    Serial.println("TARS: CAM MUTEX NULL");
+    return;
   }
+
+  if(xSemaphoreTake(cameraMux,pdMS_TO_TICKS(5000))!=pdTRUE){
+    Serial.println("TARS: CAM MUTEX TIMEOUT");
+    return;
+  }
+
+  cameraLive=false;
+
   if(camera){
     delete camera;
     camera=nullptr;
   }
+
   cameraOK=false;
-  if(cameraMux)xSemaphoreGive(cameraMux);
+  xSemaphoreGive(cameraMux);
+
   delay(50);
   ramDiag("CAM-AFTER-DELETE");
   camDiag("OFF");
@@ -180,14 +189,27 @@ void stopCamera(){
 bool startCamera(){
   Serial.println("TARS: CAM START REQUEST");
   camDiag("START-BEFORE");
+  if(!cameraMux){
+    Serial.println("TARS: CAM MUTEX NULL");
+    return false;
+  }
+  if(xSemaphoreTake(cameraMux,pdMS_TO_TICKS(5000))!=pdTRUE){
+    Serial.println("TARS: CAM START MUTEX TIMEOUT");
+    return false;
+  }
   if(camera && cameraOK && cameraLive){
+    xSemaphoreGive(cameraMux);
     Serial.println("TARS: CAM ALREADY LIVE");
     return true;
   }
   cameraLive=false;
   cameraOK=false;
-  delay(50);
+  if(camera){
+    delete camera;
+    camera=nullptr;
+  }
   bool ok=initCamera();
+  xSemaphoreGive(cameraMux);
   if(!ok){
     Serial.println("TARS: CAM RESTART FAILED");
     ramDiag("CAM-RESTART-FAILED");
