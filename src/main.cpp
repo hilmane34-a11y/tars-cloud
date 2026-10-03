@@ -263,16 +263,27 @@ void drawCameraOLED(){
 }
 /* VISION */
 bool needsVision(String q){
- q.toLowerCase();
- return q.indexOf("ambil")>=0||q.indexOf("lihat")>=0||
- q.indexOf("lihatkan")>=0||q.indexOf("apa ini")>=0||
- q.indexOf("apa itu")>=0||q.indexOf("benda")>=0||
- q.indexOf("objek")>=0||q.indexOf("warna")>=0||
- q.indexOf("yang ada di depan")>=0||q.indexOf("di depan saya")>=0||
- q.indexOf("di depanmu")>=0||q.indexOf("yang terlihat")>=0||
- q.indexOf("terlihat apa")>=0||q.indexOf("lihat apa")>=0;
+ q=normCmd(q);
+ static const char*words[]={
+  "lihat","lihatkan","melihat","tunjukkan","perlihatkan",
+  "objek","benda","warna","foto","gambar","capture",
+  "potret","jepret","kamera","amati","mengamati",
+  "perhatikan","visual","vision",
+  "apa ini","ini apa","apa itu","itu apa",
+  "benda apa","objek apa","warna apa",
+  "lihat apa","terlihat apa","sedang melihat apa",
+  "kamu melihat","yang terlihat",
+  "di depan","ke depan","di sana","di situ",
+  "yang ada di","apa yang ada",
+  "lihat sekitar","amati sekitar",
+  "ambil gambar","ambil foto","ambil potret",
+  "foto sekarang","capture sekarang"
+ };
+ for(const char* w:words){
+  if(q.indexOf(w)>=0)return true;
+ }
+ return false;
 }
-
 /* MEMORY MP3 */
 class MemMP3Stream:public Stream{
  const uint8_t*a=nullptr,*z=nullptr;size_t p=0;
