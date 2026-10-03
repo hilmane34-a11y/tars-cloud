@@ -28,7 +28,6 @@
 #include "auto_speech.h"
 #include "wheels.h"
 #include "env.h"
-#include "deep_sleep.h"
 
 #define MIC_PORT I2S_NUM_1
 #define MIC_SCK 18
@@ -50,7 +49,7 @@
 #define CAM_HREF 14
 #define CAM_PCLK 12
 
-const uint32_t MIC_RATE=16000,RECORD_MIN_MS=500,SILENCE_MS=1000,PREROLL_MS=250,OLED_TYPE_MS=39,OLED_WAVE_MS=70,AUDIO_IDLE_MS=2500,OLED_PAGE_MS=2200,STREAM_EOF_IDLE_MS=5000,OFFLINE_MAX_MS=4000,ALARM_DURATION_MS=180000;
+const uint32_t MIC_RATE=16000,RECORD_MIN_MS=500,SILENCE_MS=1000,PREROLL_MS=250,OLED_TYPE_MS=39,OLED_WAVE_MS=70,AUDIO_IDLE_MS=2500,OLED_PAGE_MS=2200,STREAM_EOF_IDLE_MS=5000,OFFLINE_MAX_MS=4000,ALARM_DURATION_MS=120000;
 const int32_t MIC_THRESHOLD=12000,MIC_SILENCE=8000;
 const size_t BUF=256,PREROLL_SAMPLES=MIC_RATE*PREROLL_MS/1000;
 const int MP3_COPY_BUFFER=512;
@@ -71,17 +70,16 @@ uint8_t lastGreetingPeriod=255;
 String sttFinal,sttPartial,oledText,oledStatus="READY";
 uint32_t oledTypePos=0,oledLastType=0,oledLastWave=0;
 uint32_t oledPage=0,oledLastPage=0,ramDiagAt=0;
-// AUTO VISION EVENT
-portMUX_TYPE visionEventMux = portMUX_INITIALIZER_UNLOCKED;
-volatile bool pendingVisionCheck = false;
-volatile uint32_t lastVisionEventAt = 0;
-const uint32_t VISION_EVENT_COOLDOWN_MS = 10000;
+volatile bool pendingVisionCheck=false;
+uint32_t lastVisionEventAt=0;
+
 /* STT LIFECYCLE */
 const uint32_t STT_NORMAL_COOLDOWN=1000;
 const uint32_t STT_ERROR_COOLDOWN=6000;
 const uint32_t STT_QUOTA_COOLDOWN=15000;
 const uint32_t STT_RECONNECT_GUARD=60000;
 const uint32_t STT_IDLE_TIMEOUT_MS=8000;
+const uint32_t VISION_EVENT_COOLDOWN_MS=45000;
 
 static int32_t rawBuf[BUF/4];
 static int16_t pcmBuf[BUF/4],preBuf[PREROLL_SAMPLES],sendBuf[256];
@@ -93,6 +91,7 @@ WAVDecoder wav;
 WebSocketsClient sttWS;
 OV7670*camera=nullptr;
 SemaphoreHandle_t cameraMux=nullptr;
+portMUX_TYPE visionEventMux=portMUX_INITIALIZER_UNLOCKED;
 
 void ramDiag(const char*tag){
  uint32_t f=ESP.getFreeHeap(),m=ESP.getMinFreeHeap(),a=ESP.getMaxAllocHeap();
@@ -108,8 +107,9 @@ void ramMonitor(){
 extern const uint8_t alarm_start[] asm("_binary_src_alarm_mp3_start");
 extern const uint8_t alarm_end[] asm("_binary_src_alarm_mp3_end");
 #define MP3SYM(n) extern const uint8_t n##_start[] asm("_binary_src_"#n"_mp3_start");extern const uint8_t n##_end[] asm("_binary_src_"#n"_mp3_end");
-MP3SYM(follow) MP3SYM(online) MP3SYM(offline)
-MP3SYM(hari) MP3SYM(pagi) MP3SYM(siang) MP3SYM(sore) MP3SYM(malam)
+MP3SYM(follow) MP3SYM(mundur) MP3SYM(maju) MP3SYM(online)
+MP3SYM(offline) MP3SYM(angkat) MP3SYM(hari) MP3SYM(pagi)
+MP3SYM(siang) MP3SYM(sore) MP3SYM(malam)
 
 bool wifiOK();
 bool visionLiveEnabled(){return tarsMode==MODE_ONLINE;}
@@ -198,45 +198,45 @@ bool startCamera(){
   return true;
 }
 void drawCameraOLED(){
- if(!oledOK || !camera || !cameraOK || !cameraLive || playing)
- return;
+ if(!cameraLive||!camera||!cameraOK||!oledOK)return;
  static uint8_t preview[128*64];
  memset(preview,0,sizeof(preview));
- vTaskDelay(1);
- if(cameraMux&&xSemaphoreTake(cameraMux,pdMS_TO_TICKS(100))!=pdTRUE)
-  return;
+ if(cameraMux&&xSemaphoreTake(cameraMux,pdMS_TO_TICKS(2500))!=pdTRUE)return;
  bool ok=false;
  if(cameraLive&&camera&&cameraOK)
-  ok=I2SCamera::capturePreview(preview);
+   ok=I2SCamera::capturePreview(preview);
  if(cameraMux)xSemaphoreGive(cameraMux);
  vTaskDelay(1);
- if(!ok){
-  autonomySetEnvironment(EnvState{});
-  return;
- }
- EnvState environment={};
- bool analyzed=envAnalyze(preview,environment);
- vTaskDelay(1);
- if(analyzed){
-  autonomySetEnvironment(environment);
-  if(environment.event!=ENV_NONE)
-   autoSpeechNotifyVisionEvent(environment.event);
-  Serial.printf("TARS: ENV L=%d C=%d R=%d OBS=%d CONF=%u%% EVENT=%d\n",
-   environment.leftClear,environment.centerClear,
-   environment.rightClear,environment.obstacle,
-   environment.confidence,(int)environment.event);
+ if(ok){
+  EnvState environment={};
+  bool analyzed=envAnalyze(preview,environment);
+  vTaskDelay(1);
+  if(analyzed){
+   autonomySetEnvironment(environment);
+   if(environment.event!=ENV_NONE){
+    portENTER_CRITICAL(&visionEventMux);
+    pendingVisionCheck=true;
+    portEXIT_CRITICAL(&visionEventMux);
+   }
+   Serial.printf("TARS: ENV L=%d C=%d R=%d OBS=%d CONF=%u%% EVENT=%d\n",
+    environment.leftClear,environment.centerClear,
+    environment.rightClear,environment.obstacle,
+    environment.confidence,(int)environment.event);
+  }else{
+   autonomySetEnvironment(EnvState{});
+  }
+  oled.clearDisplay();
+  for(int y=0;y<64;y++){
+   for(int x=0;x<128;x++){
+    if(preview[y*128+x])
+     oled.drawPixel(x,y,SSD1306_WHITE);
+   }
+   if((y&3)==3)vTaskDelay(1);
+  }
+  oled.display();
  }else{
   autonomySetEnvironment(EnvState{});
  }
- oled.clearDisplay();
- for(int y=0;y<64;y++){
-  for(int x=0;x<128;x++){
-   if(preview[y*128+x])
-    oled.drawPixel(x,y,SSD1306_WHITE);
-  }
-  if((y&3)==3)vTaskDelay(1);
- }
- oled.display();
 }
 /* VISION */
 bool needsVision(String q){
@@ -390,7 +390,7 @@ void oledTask(void*){
   }
   if(cameraLive&&!playing&&!oledText.length()){
    drawCameraOLED();
-   vTaskDelay(pdMS_TO_TICKS(250));
+   vTaskDelay(pdMS_TO_TICKS(1000));
    continue;
   }
   if(oledText.length()&&oledTypePos<oledText.length()&&now-oledLastType>=OLED_TYPE_MS)
@@ -753,15 +753,9 @@ bool streamAudio(const String&url,const String&text){
   }
   wavResample.flush();wavResample.end();wavDec.end();
  }
-audioRing.stop();pcmProbe.report();h.end();ramDiag("TTS-DONE");
-playing=false;audioStop();wheelsStop();
-if(cameraLive){
-  oledText="";
-  oledStatus="CAMERA";
-}else{
-  oledSetListening();
-}
-Serial.printf("TARS: AUDIO TOTAL=%lu ms\n",(unsigned long)(millis()-total));return started;
+ audioRing.stop();pcmProbe.report();h.end();ramDiag("TTS-DONE");
+ playing=false;audioStop();wheelsStop();oledSetListening();
+ Serial.printf("TARS: AUDIO TOTAL=%lu ms\n",(unsigned long)(millis()-total));return started;
 }
 /* SHARED ONLINE AI CYCLE */
 bool processOnlineRequest(const String &q,bool vision,bool status,bool automatic=false){
@@ -817,30 +811,30 @@ bool processOnlineRequest(const String &q,bool vision,bool status,bool automatic
   ramDiag("BEFORE-TTS");
   bool ok=streamAudio(String(TARS_CLOUD_URL)+"/tts",answer);
   // Pastikan seluruh audio sudah berhenti
-  // AUDIO SELESAI
-audioRing.stop();
-audioStop();
-playing = false;
-// PULIHKAN KAMERA SATU KALI
-visionLiveResume();
-// PASTIKAN STATUS OLED KEMBALI KE PREVIEW
-if(camera && cameraOK && cameraLive){
-    oledText = "";
-    oledStatus = "CAMERA";
-}else{
-    Serial.printf(
-        "TARS: CAMERA NOT READY CAM=%d OK=%d LIVE=%d HEAP=%u LARGEST=%u\n",
-        camera != nullptr,
-        cameraOK,
-        cameraLive,
-        ESP.getFreeHeap(),
-        ESP.getMaxAllocHeap());
- }
+  audioRing.stop();
+  audioStop();
+  playing=false;
+  wheelsStop();
+  autonomyStop();
+  ramDiag("AFTER-TTS-AUDIO-OFF");
+  // Lepaskan kunci dan pulihkan kamera
+  visionLiveResume();
+  // Vision resume sudah menghidupkan kamera sendiri.
+  // Permintaan biasa perlu menghidupkannya di sini.
+  if(!vision) startCamera();
+  wheelsStop();
+  autonomyStop();
+  oledSetStatus(ok?"LISTENING":"AUDIO ERROR");
+  if(automatic && ok) autoSpeechDone();
+  ramDiag("AFTER-CAMERA-RESTART");
+  return ok;
+}
 /* AUTO SPEECH */
 bool autoSpeechCallback(const String &prompt){
-  if(tarsMode!=MODE_ONLINE||playing||sttConnected)return false;
+  if(tarsMode!=MODE_ONLINE || playing || sttConnected)return false;
   if(!wifiOK())return false;
-  return processOnlineRequest(prompt,true,false,true);
+
+  return processOnlineRequest(prompt,false,false,true);
 }
 //TTS Tars Oto//
 bool processVisionEvent(){
@@ -916,12 +910,10 @@ bool isDoorCmd(const String&s){
 
 /* ALARM */
 bool alarmDue(){
-  if(!ntpOK||alarmRunning||deepSleepAlarmDone())return false;
-  time_t now=time(nullptr);
-  if(now<1704067200)return false;
-  struct tm t;
-  localtime_r(&now,&t);
-  return t.tm_hour==6&&t.tm_min<=2;
+ if(!ntpOK||alarmRunning)return false;
+ time_t now=time(nullptr);if(now<1704067200)return false;
+ struct tm t;localtime_r(&now,&t);
+ return t.tm_hour==6&&t.tm_min==0&&alarmLastDay!=t.tm_yday;
 }
 bool playLocalAlarm(){
  if(!audioStart())return false;
@@ -941,32 +933,13 @@ bool playLocalAlarm(){
 }
 void runAlarm(){
  if(!alarmDue())return;
- alarmRunning=true; deepSleepMarkAlarmDone();
- wheelsStop(); uint32_t st=millis();
- while(millis()-st<ALARM_DURATION_MS){
-  if(!playLocalAlarm())break;  delay(500);
- }
- playing=false; alarmRunning=false; wheelsStop();
- oledSetStatus(tarsMode==MODE_ONLINE?"LISTENING":"READY");
+ time_t now=time(nullptr);struct tm t;localtime_r(&now,&t);alarmLastDay=t.tm_yday;
+ alarmRunning=true;wheelsStop();uint32_t st=millis();
+ while(millis()-st<ALARM_DURATION_MS){if(!playLocalAlarm())break;delay(500);}
+ playing=false;alarmRunning=false;wheelsStop();oledSetStatus(tarsMode==MODE_ONLINE?"LISTENING":"READY");
 }
 bool specialActive(){return oledSpecial!=0;}
-// DEEP SLEEP
-void enterTarsDeepSleep(){
-  Serial.println("TARS: PREPARING DEEP SLEEP");
-  wheelsStop();
-  autonomyStop();
-  oledSetStatus("SLEEPING");
-  stopCamera();
-  if(micOK){
-    i2s_driver_uninstall(MIC_PORT);
-    micOK=false;
-  }
-  audioStop();
-  sttWS.disconnect();
-  oledOK=false;
-  delay(200);
-  deepSleepEnter();
-}
+
 /* OFFLINE */
 bool processOffline(const String&q){
  String s=normCmd(q);
@@ -981,6 +954,8 @@ bool processOffline(const String&q){
  }
  Serial.println("TARS: OFFLINE REJECTED = "+q);oledSetStatus("READY");return true;
 }
+
+/* PROCESS */
 /* PROCESS */
 void processQuestion(const String&q){
   String nq=normCmd(q);
@@ -1051,7 +1026,6 @@ autoSpeechBegin(autoSpeechCallback);
 startCamera();
 ramDiag("READY");
 wheelsStop();
-deepSleepBegin();
 
 Serial.println("TARS: LIFE READY");
 Serial.println("TARS: PERSONALITY READY");
@@ -1088,10 +1062,6 @@ void loop(){
     autonomyStop();
     return;
   }
- if(ntpOK&&deepSleepDue()&&!alarmRunning&&!greetingPlaying&&!sttConnected){
-  enterTarsDeepSleep();
-  return;
-}
   if(sttCooling()){
     personalityUpdate(true,false,false);
     autonomyStop();
@@ -1103,7 +1073,9 @@ void loop(){
   // STT sedang menunggu dan merekam suara pengguna.
     wheelsStop();
   autonomyStop();
+
   String q=tarsMode==MODE_ONLINE?recordRealtime():recordOffline();
+
   if(q.length()){
     wheelsStop();
     autonomyStop();
@@ -1111,13 +1083,21 @@ void loop(){
     processQuestion(q);
   }else{
     personalityUpdate(false,false,false);
+
     if(!specialActive())
       oledSetStatus(tarsMode==MODE_ONLINE?"LISTENING":"READY");
   }
+
   wheelsStop();
   autonomyStop();
+
   if(!playing&&tarsMode==MODE_ONLINE&&!sttConnected){
-  autoSpeechUpdate(true,false,false);
+    if(pendingVisionCheck){
+      processVisionEvent();
+    }else{
+      autoSpeechUpdate(true,false,false);
+    }
   }
+
   delay(1);
 }
