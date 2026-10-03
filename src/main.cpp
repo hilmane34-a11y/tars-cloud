@@ -816,23 +816,24 @@ bool processOnlineRequest(const String &q,bool vision,bool status,bool automatic
   ramDiag("BEFORE-TTS");
   bool ok=streamAudio(String(TARS_CLOUD_URL)+"/tts",answer);
   // Pastikan seluruh audio sudah berhenti
-  audioRing.stop();
-  audioStop();
-  playing=false;
-  wheelsStop();
-  autonomyStop();
-  ramDiag("AFTER-TTS-AUDIO-OFF");
-  // Lepaskan kunci dan pulihkan kamera
-  visionLiveResume();
-  // Vision resume sudah menghidupkan kamera sendiri.
-  // Permintaan biasa perlu menghidupkannya di sini.
-  if(!vision) startCamera();
-  wheelsStop();
-  autonomyStop();
-  oledSetStatus(ok?"LISTENING":"AUDIO ERROR");
-  if(automatic && ok) autoSpeechDone();
-  ramDiag("AFTER-CAMERA-RESTART");
-  return ok;
+  // AUDIO SELESAI
+audioRing.stop();
+audioStop();
+playing = false;
+// PULIHKAN KAMERA SATU KALI
+visionLiveResume();
+// PASTIKAN STATUS OLED KEMBALI KE PREVIEW
+if(camera && cameraOK && cameraLive){
+    oledText = "";
+    oledStatus = "CAMERA";
+}else{
+    Serial.printf(
+        "TARS: CAMERA NOT READY CAM=%d OK=%d LIVE=%d HEAP=%u LARGEST=%u\n",
+        camera != nullptr,
+        cameraOK,
+        cameraLive,
+        ESP.getFreeHeap(),
+        ESP.getMaxAllocHeap());
 }
 /* AUTO SPEECH */
 bool autoSpeechCallback(const String &prompt){
