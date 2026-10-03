@@ -71,7 +71,11 @@ uint8_t lastGreetingPeriod=255;
 String sttFinal,sttPartial,oledText,oledStatus="READY";
 uint32_t oledTypePos=0,oledLastType=0,oledLastWave=0;
 uint32_t oledPage=0,oledLastPage=0,ramDiagAt=0;
-
+// AUTO VISION EVENT
+portMUX_TYPE visionEventMux = portMUX_INITIALIZER_UNLOCKED;
+volatile bool pendingVisionCheck = false;
+volatile uint32_t lastVisionEventAt = 0;
+const uint32_t VISION_EVENT_COOLDOWN_MS = 3000;
 /* STT LIFECYCLE */
 const uint32_t STT_NORMAL_COOLDOWN=1000;
 const uint32_t STT_ERROR_COOLDOWN=6000;
@@ -950,7 +954,7 @@ void runAlarm(){
  oledSetStatus(tarsMode==MODE_ONLINE?"LISTENING":"READY");
 }
 bool specialActive(){return oledSpecial!=0;}
-//deepsleep\\
+// DEEP SLEEP
 void enterTarsDeepSleep(){
   Serial.println("TARS: PREPARING DEEP SLEEP");
   wheelsStop();
