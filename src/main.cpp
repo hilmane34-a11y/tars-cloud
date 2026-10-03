@@ -183,6 +183,7 @@ bool startCamera(){
   cameraOK=false;
   delay(50);
   bool ok=initCamera();
+  if(ok)envResetMotion();
   if(!ok){
     Serial.println("TARS: CAM RESTART FAILED");
     ramDiag("CAM-RESTART-FAILED");
@@ -915,10 +916,13 @@ bool isDoorCmd(const String&s){
 
 /* ALARM */
 bool alarmDue(){
- if(!ntpOK||alarmRunning)return false;
- time_t now=time(nullptr);if(now<1704067200)return false;
- struct tm t;localtime_r(&now,&t);
- return t.tm_hour==6&&t.tm_min==0&&alarmLastDay!=t.tm_yday;
+  if(!ntpOK||alarmRunning)return false;
+  time_t now=time(nullptr);
+  if(now<1704067200)return false;
+  struct tm t;
+  localtime_r(&now,&t);
+  return t.tm_hour==6&&t.tm_min<=2&&
+         alarmLastDay!=t.tm_yday;
 }
 bool playLocalAlarm(){
  if(!audioStart())return false;
