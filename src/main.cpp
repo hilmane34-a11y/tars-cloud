@@ -254,7 +254,6 @@ for(int y=0;y<64;y++){
   if((y&3)==3)vTaskDelay(1);
 }
 oled.display();
- vTaskDelay(1);
 }
 /* VISION */
 bool needsVision(String q){
@@ -408,7 +407,7 @@ void oledTask(void*){
   }
   if(cameraLive&&!playing&&!oledText.length()){
    drawCameraOLED();
-   vTaskDelay(pdMS_TO_TICKS(1000));
+   vTaskDelay(pdMS_TO_TICKS(250));
    continue;
   }
   if(oledText.length()&&oledTypePos<oledText.length()&&now-oledLastType>=OLED_TYPE_MS)
