@@ -208,7 +208,6 @@ void drawCameraOLED(){
  if(cameraLive&&camera&&cameraOK)
   ok=I2SCamera::capturePreview(preview);
  if(cameraMux)xSemaphoreGive(cameraMux);
- // Beri kesempatan task lain setelah capture kamera.
  vTaskDelay(1);
  if(!ok){
   autonomySetEnvironment(EnvState{});
@@ -216,7 +215,6 @@ void drawCameraOLED(){
  }
  EnvState environment={};
  bool analyzed=envAnalyze(preview,environment);
- // Beri kesempatan task lain setelah analisis lingkungan.
  vTaskDelay(1);
  if(analyzed){
   autonomySetEnvironment(environment);
@@ -235,7 +233,6 @@ void drawCameraOLED(){
    if(preview[y*128+x])
     oled.drawPixel(x,y,SSD1306_WHITE);
   }
-  // Yield setiap 4 baris gambar.
   if((y&3)==3)vTaskDelay(1);
  }
  oled.display();
