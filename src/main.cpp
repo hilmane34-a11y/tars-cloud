@@ -235,10 +235,10 @@ void drawCameraOLED(){
   vTaskDelay(1);
   if(analyzed){
    autonomySetEnvironment(environment);
-   if(environment.event!=ENV_NONE){
-    portENTER_CRITICAL(&visionEventMux);
-    pendingVisionCheck=true;
-    portEXIT_CRITICAL(&visionEventMux);
+  if(tarsMode==MODE_ONLINE && environment.event!=ENV_NONE){
+   portENTER_CRITICAL(&visionEventMux);
+   pendingVisionCheck=true;
+   portEXIT_CRITICAL(&visionEventMux);
    }
    Serial.printf("TARS: ENV L=%d C=%d R=%d OBS=%d CONF=%u%% EVENT=%d\n",
     environment.leftClear,environment.centerClear,
@@ -1008,6 +1008,10 @@ void processQuestion(const String&q){
     Serial.println("TARS: SWITCH ONLINE -> OFFLINE");
     closeSTT();
     tarsMode=MODE_OFFLINE;
+    portENTER_CRITICAL(&visionEventMux);
+    pendingVisionCheck=false;
+    portEXIT_CRITICAL(&visionEventMux);
+    autoSpeechResetTimer();
     sttReady=sttDone=sttError=false;
     oledShowText("OFFLINE","ONLINE");
     playLocalMP3(offline_start,offline_end,"Mode offline aktif, tuan");
