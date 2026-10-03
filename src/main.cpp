@@ -219,13 +219,13 @@ void drawCameraOLED(){
  static uint8_t preview[128*64];
  memset(preview,0,sizeof(preview));
  vTaskDelay(1);
- // Semua akses objek kamera harus melalui mutex.
  if(cameraMux&&xSemaphoreTake(cameraMux,pdMS_TO_TICKS(100))!=pdTRUE)
   return;
  bool ok=false;
  if(cameraLive&&camera&&cameraOK)
   ok=I2SCamera::capturePreview(preview);
  if(cameraMux)xSemaphoreGive(cameraMux);
+ // Beri kesempatan task lain setelah capture kamera.
  vTaskDelay(1);
  if(!ok){
   autonomySetEnvironment(EnvState{});
@@ -233,6 +233,7 @@ void drawCameraOLED(){
  }
  EnvState environment={};
  bool analyzed=envAnalyze(preview,environment);
+ // Beri kesempatan task lain setelah analisis lingkungan.
  vTaskDelay(1);
  if(analyzed){
   autonomySetEnvironment(environment);
@@ -246,14 +247,15 @@ void drawCameraOLED(){
   autonomySetEnvironment(EnvState{});
  }
  oled.clearDisplay();
-for(int y=0;y<64;y++){
+ for(int y=0;y<64;y++){
   for(int x=0;x<128;x++){
-    if(preview[y*128+x])
-      oled.drawPixel(x,y,SSD1306_WHITE);
+   if(preview[y*128+x])
+    oled.drawPixel(x,y,SSD1306_WHITE);
   }
+  // Yield setiap 4 baris gambar.
   if((y&3)==3)vTaskDelay(1);
-}
-oled.display();
+ }
+ oled.display();
 }
 /* VISION */
 bool needsVision(String q){
