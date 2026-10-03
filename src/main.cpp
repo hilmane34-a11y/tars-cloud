@@ -942,13 +942,14 @@ bool playLocalAlarm(){
 }
 void runAlarm(){
  if(!alarmDue())return;
- deepSleepMarkAlarmDone();
- wheelsStop(); uint32_t st=millis(); while(millis()-st<ALARM_DURATION_MS) { 
- if(!playLocalAlarm())break;  delay(500); }
- playing=false;
- alarmRunning=false;
- wheelsStop();
- oledSetStatus(tarsMode==MODE_ONLINE?"LISTENING":"READY"); }
+ alarmRunning=true; deepSleepMarkAlarmDone();
+ wheelsStop(); uint32_t st=millis();
+ while(millis()-st<ALARM_DURATION_MS){
+  if(!playLocalAlarm())break;  delay(500);
+ }
+ playing=false; alarmRunning=false; wheelsStop();
+ oledSetStatus(tarsMode==MODE_ONLINE?"LISTENING":"READY");
+}
 bool specialActive(){return oledSpecial!=0;}
 //deepsleep\\
 void enterTarsDeepSleep(){
