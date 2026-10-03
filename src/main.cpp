@@ -202,29 +202,35 @@ bool startCamera(){
 }
 void drawCameraOLED(){
  if(!oledOK)return;
+
  static uint8_t preview[128*64];
  memset(preview,0,sizeof(preview));
  vTaskDelay(1);
+
  if(cameraMux&&xSemaphoreTake(cameraMux,pdMS_TO_TICKS(100))!=pdTRUE)
   return;
+
  bool ok=false;
  if(cameraLive&&camera&&cameraOK)
   ok=I2SCamera::capturePreview(preview);
+
  if(cameraMux)xSemaphoreGive(cameraMux);
  vTaskDelay(1);
-  oled.display();
-  previewFrameReady=true;
- }else{
+
+ if(!ok){
   autonomySetEnvironment(EnvState{});
   return;
  }
+
  EnvState environment={};
  bool analyzed=envAnalyze(preview,environment);
  vTaskDelay(1);
+
  if(analyzed){
   autonomySetEnvironment(environment);
   if(environment.event!=ENV_NONE)
    autoSpeechNotifyVisionEvent(environment.event);
+
   Serial.printf("TARS: ENV L=%d C=%d R=%d OBS=%d CONF=%u%% EVENT=%d\n",
    environment.leftClear,environment.centerClear,
    environment.rightClear,environment.obstacle,
@@ -232,6 +238,7 @@ void drawCameraOLED(){
  }else{
   autonomySetEnvironment(EnvState{});
  }
+
  oled.clearDisplay();
  for(int y=0;y<64;y++){
   for(int x=0;x<128;x++){
@@ -240,7 +247,9 @@ void drawCameraOLED(){
   }
   if((y&3)==3)vTaskDelay(1);
  }
+
  oled.display();
+ previewFrameReady=true;
 }
 /* VISION */
 bool needsVision(String q){
