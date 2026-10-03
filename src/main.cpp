@@ -1092,7 +1092,7 @@ void enterTarsDeepSleep(){
  ramDiag("BEFORE-DEEP-SLEEP");
  deepSleepEnter();
  }
-}
+
 //Loop\\
 void loop(){
   if(deepSleepDue()){
