@@ -853,8 +853,8 @@ bool processOnlineRequest(const String &q,bool vision,bool status,bool automatic
     sttPreviewGate=false;
     oledSetStatus(ok?"LISTENING":"AUDIO ERROR");
   }
-
   if(automatic && ok) autoSpeechDone();
+}
 //TTS Tars Oto//
 bool processVisionEvent(){
  if(tarsMode!=MODE_ONLINE||playing||sttConnected)return false;
