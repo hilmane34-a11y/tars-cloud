@@ -1095,10 +1095,10 @@ void enterTarsDeepSleep(){
 
 // LOOP
 void loop(){
-  if(deepSleepDue()){
-    enterTarsDeepSleep();
-    return;
-  }
+  //if(deepSleepDue()){
+   // enterTarsDeepSleep();
+  //  return;
+ // }
 
   ramMonitor();
 
