@@ -108,8 +108,7 @@ void ramMonitor(){
 extern const uint8_t alarm_start[] asm("_binary_src_alarm_mp3_start");
 extern const uint8_t alarm_end[] asm("_binary_src_alarm_mp3_end");
 #define MP3SYM(n) extern const uint8_t n##_start[] asm("_binary_src_"#n"_mp3_start");extern const uint8_t n##_end[] asm("_binary_src_"#n"_mp3_end");
-MP3SYM(follow) MP3SYM(mundur) MP3SYM(maju) MP3SYM(online)
-MP3SYM(offline) MP3SYM(angkat) MP3SYM(hari) MP3SYM(pagi)
+MP3SYM(follow) MP3SYM(online)MP3SYM(offline) MP3SYM(hari) MP3SYM(pagi)
 MP3SYM(siang) MP3SYM(sore) MP3SYM(malam)
 
 bool wifiOK();
@@ -1139,6 +1138,7 @@ void loop(){
     autonomyStop();
     personalityUpdate(true,false,false);
     processQuestion(q);
+}
   }else{
     personalityUpdate(false,false,false);
 
