@@ -1093,45 +1093,51 @@ void enterTarsDeepSleep(){
  deepSleepEnter();
  }
 
-//Loop\\
+// LOOP
 void loop(){
   if(deepSleepDue()){
     enterTarsDeepSleep();
     return;
   }
+
   ramMonitor();
+
   if(playing){
     wheelsStop();
     autonomyStop();
     delay(1);
     return;
   }
+
   if(tarsMode==MODE_ONLINE&&!wifiOK()){
     oledSetStatus("WIFI ERROR");
     delay(500);
     return;
   }
+
   if(alarmDue()){
     autonomyStop();
     runAlarm();
     return;
   }
+
   checkTimeGreeting();
+
   if(playing){
     wheelsStop();
     autonomyStop();
     return;
   }
-  // Jangan hentikan otonomi selama STT mendengarkan.
+
   String q=tarsMode==MODE_ONLINE?
     recordRealtime():recordOffline();
+
   if(q.length()){
     wheelsStop();
     autonomyStop();
     processQuestion(q);
-  }else{
-    if(!oledSpecial)
-      oledSetStatus(tarsMode==MODE_ONLINE?"LISTENING":"READY");
+  }else if(!oledSpecial){
+    oledSetStatus(tarsMode==MODE_ONLINE?"LISTENING":"READY");
   }
 
   if(!playing&&tarsMode==MODE_ONLINE&&!sttConnected){
