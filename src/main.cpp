@@ -842,25 +842,29 @@ if(automatic&&checkAnswer.equalsIgnoreCase("[DIAM]")){
   ramDiag("BEFORE-TTS");
   bool ok=streamAudio(String(TARS_CLOUD_URL)+"/tts",answer);
   // Pastikan seluruh audio sudah berhenti
-  audioRing.stop();
-  audioStop();
-  playing=false;
-  wheelsStop();
-  autonomyStop();
-  ramDiag("AFTER-TTS-AUDIO-OFF");
-  // Lepaskan kunci dan pulihkan kamera
-visionLiveResume();
-if(!vision) startCamera();
+audioRing.stop();
+audioStop();
+playing=false;
+
 wheelsStop();
 autonomyStop();
-if(ok && cameraLive && cameraOK){
+ramDiag("AFTER-TTS-AUDIO-OFF");
+
+visionLiveResume();
+if(!vision) startCamera();
+
+wheelsStop();
+autonomyStop();
+
+if(cameraOK && cameraLive){
   oledSetStatus("CAMERA");
 }else{
-  oledSetStatus(ok?"CAMERA ERROR":"AUDIO ERROR");
+  oledSetStatus("CAMERA ERROR");
 }
-  if(automatic && ok) autoSpeechDone();
-  ramDiag("AFTER-CAMERA-RESTART");
-  return ok;
+
+if(automatic && ok) autoSpeechDone();
+ramDiag("AFTER-CAMERA-RESTART");
+return ok;
 }
 /* AUTO SPEECH */
 bool autoSpeechCallback(const String &prompt){
