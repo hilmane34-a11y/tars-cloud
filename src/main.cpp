@@ -222,8 +222,12 @@ bool startCamera(){
   return true;
 }
 void drawCameraOLED(){
- if(!oledOK||!previewMux||!previewReady)return;
+ if(!oledOK||!previewMux)return;
  if(xSemaphoreTake(previewMux,pdMS_TO_TICKS(100))!=pdTRUE)return;
+ if(!previewReady){
+  xSemaphoreGive(previewMux);
+  return;
+ }
  oled.clearDisplay();
  for(int y=0;y<64;y++){
   for(int x=0;x<128;x++){
@@ -242,42 +246,40 @@ void cameraTask(void*){
    vTaskDelay(pdMS_TO_TICKS(20));
    continue;
   }
-  bool ok=false;
-  if(cameraMux&&
-     xSemaphoreTake(cameraMux,pdMS_TO_TICKS(100))==pdTRUE){
-   if(cameraLive&&camera&&cameraOK)
-    ok=I2SCamera::capturePreview(cameraPreview);
-   xSemaphoreGive(cameraMux);
-  }
+bool ok=false,analyzed=false;
+EnvState environment={};
+if(cameraMux&&
+   xSemaphoreTake(cameraMux,pdMS_TO_TICKS(100))==pdTRUE){
+ if(previewMux&&
+    xSemaphoreTake(previewMux,pdMS_TO_TICKS(100))==pdTRUE){
+  if(cameraLive&&camera&&cameraOK&&!playing)
+   ok=I2SCamera::capturePreview(cameraPreview);
   if(ok){
-   EnvState environment={};
-   bool analyzed=envAnalyze(cameraPreview,environment);
-   if(analyzed){
-    autonomySetEnvironment(environment);
-    personalityUpdate(false,autonomyIsMoving(),false);
-    if(tarsMode==MODE_ONLINE&&
-       environment.event!=ENV_NONE&&
-       millis()-lastVisionEventAt>=VISION_EVENT_COOLDOWN_MS){
-     portENTER_CRITICAL(&visionEventMux);
-     pendingVisionCheck=true;
-     portEXIT_CRITICAL(&visionEventMux);
-     lastVisionEventAt=millis();
-    }
-    if(previewMux&&
-       xSemaphoreTake(previewMux,pdMS_TO_TICKS(100))==pdTRUE){
-     previewReady=true;
-     xSemaphoreGive(previewMux);
-    }
-    frameErrors=0;
-   }else{
-    autonomySetEnvironment(EnvState{});
-    frameErrors++;
-   }
-  }else{
-   frameErrors++;
-   if(frameErrors>=3&&cameraLive)
-    autonomySetEnvironment(EnvState{});
+   analyzed=envAnalyze(cameraPreview,environment);
+   if(analyzed)previewReady=true;
   }
+  xSemaphoreGive(previewMux);
+ }
+ xSemaphoreGive(cameraMux);
+}
+if(ok&&analyzed){
+ autonomySetEnvironment(environment);
+ personalityUpdate(false,autonomyIsMoving(),false);
+ if(tarsMode==MODE_ONLINE&&
+    environment.event!=ENV_NONE&&
+    millis()-lastVisionEventAt>=VISION_EVENT_COOLDOWN_MS){
+  portENTER_CRITICAL(&visionEventMux);
+  pendingVisionCheck=true;
+  portEXIT_CRITICAL(&visionEventMux);
+  lastVisionEventAt=millis();
+ }
+ frameErrors=0;
+}else{
+ autonomySetEnvironment(EnvState{});
+ frameErrors++;
+ if(frameErrors>=3&&cameraLive)
+  autonomySetEnvironment(EnvState{});
+}
   if(cameraLive&&!playing)
    autonomyUpdate(true,false);
   taskYIELD();
@@ -1120,10 +1122,9 @@ personalityBegin();
 autonomyBegin();
 autoSpeechBegin(autoSpeechCallback);
 startCamera();
-if(cameraLive){
- xTaskCreatePinnedToCore(
-  cameraTask,"TARS_EYE",4096,nullptr,2,nullptr,1
- );
+xTaskCreatePinnedToCore(
+ cameraTask,"TARS_EYE",4096,nullptr,2,nullptr,1
+);
 }
 ramDiag("READY");
 wheelsStop();
