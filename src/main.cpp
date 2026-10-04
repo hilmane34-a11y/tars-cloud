@@ -254,17 +254,17 @@ void cameraTask(void*){
       if(previewMux&&
          xSemaphoreTake(previewMux,pdMS_TO_TICKS(100))==pdTRUE){
         if(cameraLive&&camera&&cameraOK&&!playing)
-          ok=I2SCamera::capturePreview(cameraPreview);
-        if(ok){
-          analyzed=envAnalyze(
-            cameraPreview,
+         ok=I2SCamera::capturePreview(cameraPreview);
+
+         if(ok){
+           previewReady=true;
+
+            analyzed=envAnalyze(
+             cameraPreview,
             I2SCamera::dominantColor(),
-            I2SCamera::dominantColorConfidence(),
-            environment
-          );
-          if(analyzed)
-            previewReady=true;
-        }
+           I2SCamera::dominantColorConfidence(),
+         environment);
+    }
         xSemaphoreGive(previewMux);
       }
       xSemaphoreGive(cameraMux);
