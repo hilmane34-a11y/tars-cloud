@@ -432,11 +432,50 @@ bool I2SCamera::encodeFrameToJPEG(
   return JPEGEncoderWrapper::finish(outLen);
 }
 
-bool I2SCamera::capturePreview(uint8_t* out)
+static uint8_t classifyRGB565(uint16_t p){
+  uint8_t r=((p>>11)&0x1F)*255/31;
+  uint8_t g=((p>>5)&0x3F)*255/63;
+  uint8_t b=(p&0x1F)*255/31;
+
+  uint8_t mx=max(r,max(g,b));
+  uint8_t mn=min(r,min(g,b));
+  uint8_t delta=mx-mn;
+
+  if(mx<35)return ENV_COLOR_BLACK;
+  if(mn>220&&delta<35)return ENV_COLOR_WHITE;
+  if(delta<25)return ENV_COLOR_GRAY;
+
+  float h=0;
+
+  if(mx==r)
+    h=60.0f*fmodf((float)g-b, (float)delta);
+  else if(mx==g)
+    h=60.0f*((float)b-r)/delta+120.0f;
+  else
+    h=60.0f*((float)r-g)/delta+240.0f;
+
+  if(h<0)h+=360.0f;
+
+  if(h<15||h>=345)return ENV_COLOR_RED;
+  if(h<40)return ENV_COLOR_ORANGE;
+  if(h<70)return ENV_COLOR_YELLOW;
+  if(h<165)return ENV_COLOR_GREEN;
+  if(h<200)return ENV_COLOR_CYAN;
+  if(h<255)return ENV_COLOR_BLUE;
+  return ENV_COLOR_PURPLE;
+}
+
+bool I2SCamera::capturePreview(uint8_t*out)
 {
   if(!out)return false;
 
+  lastDominantColor=ENV_COLOR_UNKNOWN;
+  lastColorConfidence=0;
+
   memset(out,0,128*64);
+
+  uint16_t colorCount[11]={};
+  uint16_t colorSamples=0;
 
   streamFill=0;
   streamLine=0;
@@ -476,18 +515,35 @@ bool I2SCamera::capturePreview(uint8_t* out)
     for(int y=0;y<STREAM_LINES;y++){
       if((y&3)==0)vTaskDelay(1);
 
-      int oy=(blockY+y)*64/yres;
+      int sourceY=blockY+y;
+      int oy=sourceY*64/yres;
+
       if(oy>=64)continue;
 
       for(int x=0;x<xres;x++){
+        uint16_t p=src[y*xres+x];
+
+        // Sampel warna merata di seluruh frame
+        if((sourceY&3)==0&&(x&3)==0){
+          uint8_t color=classifyRGB565(p);
+
+          if(color<11){
+            colorCount[color]++;
+            colorSamples++;
+          }
+        }
+
+        // Preview OLED tetap grayscale seperti sebelumnya
         int ox=x*128/xres;
         if(ox>=128)continue;
 
-        uint16_t p=src[y*xres+x];
         uint8_t r=((p>>11)&0x1F)*255/31;
         uint8_t g=((p>>5)&0x3F)*255/63;
         uint8_t b=(p&0x1F)*255/31;
-        uint8_t gray=(uint8_t)((77*r+150*g+29*b)>>8);
+
+        uint8_t gray=(uint8_t)(
+          (77*r+150*g+29*b)>>8
+        );
 
         if(gray<=47)
           out[oy*128+ox]=1;
@@ -501,7 +557,25 @@ bool I2SCamera::capturePreview(uint8_t* out)
 
   i2sStop();
 
-  // MEDIAN FILTER 3x3: pertahankan detail gelap dan kurangi noise
+  // Cari warna dengan jumlah sampel terbanyak
+  if(colorSamples){
+    uint8_t bestColor=ENV_COLOR_UNKNOWN;
+    uint16_t bestCount=0;
+
+    for(uint8_t i=1;i<11;i++){
+      if(colorCount[i]>bestCount){
+        bestCount=colorCount[i];
+        bestColor=i;
+      }
+    }
+
+    lastDominantColor=bestColor;
+    lastColorConfidence=
+      (uint32_t)bestCount*100/colorSamples;
+  }
+
+  // MEDIAN FILTER 3x3: pertahankan detail gelap
+  // dan kurangi noise preview OLED
   for(int y=0;y<64;y++){
     for(int x=0;x<128;x++){
       int count=0,total=0;
@@ -510,19 +584,18 @@ bool I2SCamera::capturePreview(uint8_t* out)
         for(int dx=-1;dx<=1;dx++){
           int nx=x+dx,ny=y+dy;
 
-          if(nx<0||nx>=128||ny<0||ny>=64)continue;
+          if(nx<0||nx>=128||ny<0||ny>=64)
+            continue;
 
           count+=out[ny*128+nx];
           total++;
         }
       }
-
-      previewFiltered[y*128+x]=(count>=total/2+1)?1:0;
+      previewFiltered[y*128+x]=
+        (count>=total/2+1)?1:0;
     }
-
     if((y&3)==0)vTaskDelay(1);
   }
-
   memcpy(out,previewFiltered,128*64);
   return true;
 }
