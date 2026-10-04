@@ -1,3 +1,5 @@
+#include "env.h"
+#include <math.h>
 #include "I2SCamera.h"
 #include "Config.h"
 #include "Log.h"
