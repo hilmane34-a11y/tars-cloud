@@ -5,7 +5,7 @@
 #endif
 
 #ifndef OV7670_MAX_JPEG_SIZE
-#define OV7670_MAX_JPEG_SIZE (320 * 240)
+#define OV7670_MAX_JPEG_SIZE (30 * 1024)
 #endif
 
 #ifndef OV7670_JPEG_QUALITY
