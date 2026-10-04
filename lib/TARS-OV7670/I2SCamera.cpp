@@ -31,6 +31,9 @@ static volatile int readyQueue[STREAM_BLOCKS]={0};
 static volatile int readyHead=0,readyTail=0;
 static volatile bool streamFrameDone=false,streamError=false;
 
+static volatile uint8_t lastDominantColor=ENV_COLOR_UNKNOWN;
+static volatile uint8_t lastColorConfidence=0;
+
 // Penantian VSYNC dibatasi agar task tidak terkunci.
 static bool waitVSync(int level,uint32_t timeout)
 {
