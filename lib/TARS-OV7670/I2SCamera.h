@@ -23,6 +23,9 @@ public:
     FORMAT_BMP,
     FORMAT_JPEG
   };
+  static bool capturePreview(uint8_t*out);
+  static uint8_t dominantColor();
+  static uint8_t dominantColorConfidence();
 
   static void dmaDiagnostic();
   static bool capturePreview(uint8_t*out);
