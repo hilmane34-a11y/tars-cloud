@@ -28,7 +28,6 @@ public:
   static uint8_t dominantColorConfidence();
 
   static void dmaDiagnostic();
-  static bool capturePreview(uint8_t*out);
   static ImageFormat imageFormat;
 
   static bool encodeFrameToJPEG(
