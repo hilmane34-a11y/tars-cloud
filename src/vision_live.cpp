@@ -15,7 +15,7 @@
 #endif
 
 #define VISION_JPEG_MAX 30000
-#define VISION_JSON_MAX 14500
+#define VISION_JSON_MAX 40300
 #define VISION_LOCK_WAIT 15000
 
 extern OV7670 *camera;
