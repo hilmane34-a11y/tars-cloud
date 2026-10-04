@@ -92,6 +92,7 @@ WAVDecoder wav;
 WebSocketsClient sttWS;
 OV7670*camera=nullptr;
 SemaphoreHandle_t previewMux=nullptr;
+SemaphoreHandle_t cameraMux=nullptr;
 static uint8_t cameraPreview[128*64];
 bool previewReady=false;
 portMUX_TYPE visionEventMux=portMUX_INITIALIZER_UNLOCKED;
@@ -240,54 +241,73 @@ void drawCameraOLED(){
 }
 //Tars-EYE\\
 void cameraTask(void*){
- uint8_t frameErrors=0;
- for(;;){
-  if(!cameraLive||!camera||!cameraOK||playing){
-   vTaskDelay(pdMS_TO_TICKS(20));
-   continue;
+  uint8_t frameErrors=0;
+
+  for(;;){
+    if(!cameraLive||!camera||!cameraOK||playing){
+      vTaskDelay(pdMS_TO_TICKS(20));
+      continue;
+    }
+
+    bool ok=false,analyzed=false;
+    EnvState environment={};
+
+    if(cameraMux&&
+       xSemaphoreTake(cameraMux,pdMS_TO_TICKS(100))==pdTRUE){
+
+      if(previewMux&&
+         xSemaphoreTake(previewMux,pdMS_TO_TICKS(100))==pdTRUE){
+
+        if(cameraLive&&camera&&cameraOK&&!playing)
+          ok=I2SCamera::capturePreview(cameraPreview);
+
+        if(ok){
+          analyzed=envAnalyze(
+            cameraPreview,
+            I2SCamera::dominantColor(),
+            I2SCamera::dominantColorConfidence(),
+            environment
+          );
+
+          if(analyzed)
+            previewReady=true;
+        }
+
+        xSemaphoreGive(previewMux);
+      }
+
+      xSemaphoreGive(cameraMux);
+    }
+
+    if(ok&&analyzed){
+      autonomySetEnvironment(environment);
+      personalityUpdate(false,autonomyIsMoving(),false);
+
+      if(tarsMode==MODE_ONLINE&&
+         environment.event!=ENV_NONE&&
+         millis()-lastVisionEventAt>=VISION_EVENT_COOLDOWN_MS){
+
+        portENTER_CRITICAL(&visionEventMux);
+        pendingVisionCheck=true;
+        portEXIT_CRITICAL(&visionEventMux);
+
+        lastVisionEventAt=millis();
+      }
+
+      frameErrors=0;
+    }else{
+      autonomySetEnvironment(EnvState{});
+      frameErrors++;
+
+      if(frameErrors>=3&&cameraLive)
+        autonomySetEnvironment(EnvState{});
+    }
+
+    if(cameraLive&&!playing)
+      autonomyUpdate(true,false);
+
+    vTaskDelay(1);
   }
-bool ok=false,analyzed=false;
-EnvState environment={};
-if(cameraMux&&
-   xSemaphoreTake(cameraMux,pdMS_TO_TICKS(100))==pdTRUE){
- if(previewMux&&
-    xSemaphoreTake(previewMux,pdMS_TO_TICKS(100))==pdTRUE){
-  if(cameraLive&&camera&&cameraOK&&!playing)
-   ok=I2SCamera::capturePreview(cameraPreview);
-  if(ok){
-   analyzed=envAnalyze(  
-   cameraPreview,
-   I2SCamera::dominantColor(),
-   I2SCamera::dominantColorConfidence(),
-   environment);
-   if(analyzed)previewReady=true;
-  }
-  xSemaphoreGive(previewMux);
- }
- xSemaphoreGive(cameraMux);
-}
-if(ok&&analyzed){
- autonomySetEnvironment(environment);
- personalityUpdate(false,autonomyIsMoving(),false);
- if(tarsMode==MODE_ONLINE&&
-    environment.event!=ENV_NONE&&
-    millis()-lastVisionEventAt>=VISION_EVENT_COOLDOWN_MS){
-  portENTER_CRITICAL(&visionEventMux);
-  pendingVisionCheck=true;
-  portEXIT_CRITICAL(&visionEventMux);
-  lastVisionEventAt=millis();
- }
- frameErrors=0;
-}else{
- autonomySetEnvironment(EnvState{});
- frameErrors++;
- if(frameErrors>=3&&cameraLive)
-  autonomySetEnvironment(EnvState{});
-}
-  if(cameraLive&&!playing)
-   autonomyUpdate(true,false);
-  vTaskDelay(1);
- }
 }
 /* VISION */
 bool needsVision(String q){
