@@ -433,7 +433,13 @@ bool I2SCamera::encodeFrameToJPEG(
   i2sStop();
   return JPEGEncoderWrapper::finish(outLen);
 }
+uint8_t I2SCamera::dominantColor(){
+  return lastDominantColor;
+}
 
+uint8_t I2SCamera::dominantColorConfidence(){
+  return lastColorConfidence;
+}
 static uint8_t classifyRGB565(uint16_t p){
   uint8_t r=((p>>11)&0x1F)*255/31;
   uint8_t g=((p>>5)&0x3F)*255/63;
@@ -450,7 +456,7 @@ static uint8_t classifyRGB565(uint16_t p){
   float h=0;
 
   if(mx==r)
-    h=60.0f*fmodf((float)g-b, (float)delta);
+    h=60.0f*((float)g-b)/delta;
   else if(mx==g)
     h=60.0f*((float)b-r)/delta+120.0f;
   else
@@ -476,8 +482,8 @@ bool I2SCamera::capturePreview(uint8_t*out)
 
   memset(out,0,128*64);
 
-  uint16_t colorCount[11]={};
-  uint16_t colorSamples=0;
+  uint32_t colorCount[11]={};
+  uint32_t colorSamples=0;
 
   streamFill=0;
   streamLine=0;
