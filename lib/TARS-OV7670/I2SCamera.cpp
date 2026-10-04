@@ -568,7 +568,7 @@ bool I2SCamera::capturePreview(uint8_t*out)
   // Cari warna dengan jumlah sampel terbanyak
   if(colorSamples){
     uint8_t bestColor=ENV_COLOR_UNKNOWN;
-    uint16_t bestCount=0;
+    uint32_t bestCount=0;
 
     for(uint8_t i=1;i<11;i++){
       if(colorCount[i]>bestCount){
