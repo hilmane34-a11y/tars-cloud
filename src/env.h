@@ -8,6 +8,7 @@ enum EnvEvent:uint8_t{
   ENV_MOTION_RIGHT,
   ENV_SCENE_CHANGED
 };
+
 enum EnvColor:uint8_t{
   ENV_COLOR_UNKNOWN,
   ENV_COLOR_BLACK,
@@ -21,6 +22,7 @@ enum EnvColor:uint8_t{
   ENV_COLOR_BLUE,
   ENV_COLOR_PURPLE
 };
+
 struct EnvState{
   bool valid;
   bool obstacle;
@@ -34,9 +36,24 @@ struct EnvState{
   bool motion;
   EnvEvent event;
   uint8_t motionLevel;
+
+  EnvColor dominantColor;
+  uint8_t colorConfidence;
 };
 
 void envBegin();
 void envResetMotion();
-bool envAnalyze(const uint8_t*image,EnvState&result);
+
+bool envAnalyze(
+  const uint8_t*image,
+  EnvState&result
+);
+
+bool envAnalyze(
+  const uint8_t*image,
+  uint8_t dominantColor,
+  uint8_t colorConfidence,
+  EnvState&result
+);
+
 EnvState envGet();
