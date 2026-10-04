@@ -505,14 +505,15 @@ static uint8_t classifyRGB565(uint16_t p){
   return ENV_COLOR_PURPLE;
 }
 
-bool I2SCamera::capturePreview(uint8_t*out)
+bool I2SCamera::captureFrameData(uint8_t *environmentOut,uint8_t *previewOut)
 {
-  if(!out)return false;
+  if(!environmentOut&&!previewOut)return false;
 
   lastDominantColor=ENV_COLOR_UNKNOWN;
   lastColorConfidence=0;
 
-  memset(out,0,128*64);
+  if(environmentOut)memset(environmentOut,0,128*64);
+  if(previewOut)memset(previewOut,0,128*64);
 
   uint32_t colorCount[11]={};
   uint32_t colorSamples=0;
@@ -549,21 +550,21 @@ bool I2SCamera::capturePreview(uint8_t*out)
     readyTail=(readyTail+1)%STREAM_BLOCKS;
     streamReady--;
 
-    uint16_t* src=(uint16_t*)streamBlock[idx];
+    uint16_t *src=(uint16_t*)streamBlock[idx];
     int blockY=blocksDone*STREAM_LINES;
 
     for(int y=0;y<STREAM_LINES;y++){
       if((y&3)==0)vTaskDelay(1);
 
       int sourceY=blockY+y;
-      int oy=sourceY*64/yres;
+      if(sourceY>=yres)continue;
 
+      int oy=sourceY*64/yres;
       if(oy>=64)continue;
 
       for(int x=0;x<xres;x++){
         uint16_t p=src[y*xres+x];
 
-        // Sampel warna merata di seluruh frame
         if((sourceY&3)==0&&(x&3)==0){
           uint8_t color=classifyRGB565(p);
 
@@ -573,7 +574,6 @@ bool I2SCamera::capturePreview(uint8_t*out)
           }
         }
 
-        // Preview OLED tetap grayscale seperti sebelumnya
         int ox=x*128/xres;
         if(ox>=128)continue;
 
@@ -581,12 +581,16 @@ bool I2SCamera::capturePreview(uint8_t*out)
         uint8_t g=((p>>5)&0x3F)*255/63;
         uint8_t b=(p&0x1F)*255/31;
 
-        uint8_t gray=(uint8_t)(
-          (77*r+150*g+29*b)>>8
-        );
+        uint8_t gray=(77*r+150*g+29*b)>>8;
+        uint8_t dark=(gray<=47)?1:0;
 
-        if(gray<=47)
-          out[oy*128+ox]=1;
+        // Data perilaku ENV: jalur mandiri, tanpa filter OLED
+        if(environmentOut)
+          environmentOut[oy*128+ox]=dark;
+
+        // Preview OLED: salinan terpisah
+        if(previewOut)
+          previewOut[oy*128+ox]=dark;
       }
     }
 
@@ -597,7 +601,6 @@ bool I2SCamera::capturePreview(uint8_t*out)
 
   i2sStop();
 
-  // Cari warna dengan jumlah sampel terbanyak
   if(colorSamples){
     uint8_t bestColor=ENV_COLOR_UNKNOWN;
     uint32_t bestCount=0;
@@ -610,34 +613,44 @@ bool I2SCamera::capturePreview(uint8_t*out)
     }
 
     lastDominantColor=bestColor;
-    lastColorConfidence=
-      (uint32_t)bestCount*100/colorSamples;
+    lastColorConfidence=(uint32_t)bestCount*100/colorSamples;
   }
 
-  // MEDIAN FILTER 3x3: pertahankan detail gelap
-  // dan kurangi noise preview OLED
-  for(int y=0;y<64;y++){
-    for(int x=0;x<128;x++){
-      int count=0,total=0;
+  // Filter hanya untuk gambar monitor OLED
+  if(previewOut){
+    for(int y=0;y<64;y++){
+      for(int x=0;x<128;x++){
+        int count=0,total=0;
 
-      for(int dy=-1;dy<=1;dy++){
-        for(int dx=-1;dx<=1;dx++){
-          int nx=x+dx,ny=y+dy;
+        for(int dy=-1;dy<=1;dy++){
+          for(int dx=-1;dx<=1;dx++){
+            int nx=x+dx,ny=y+dy;
 
-          if(nx<0||nx>=128||ny<0||ny>=64)
-            continue;
+            if(nx<0||nx>=128||ny<0||ny>=64)
+              continue;
 
-          count+=out[ny*128+nx];
-          total++;
+            count+=previewOut[ny*128+nx];
+            total++;
+          }
         }
+
+        previewFiltered[y*128+x]=
+          (count>=total/2+1)?1:0;
       }
-      previewFiltered[y*128+x]=
-        (count>=total/2+1)?1:0;
+
+      if((y&3)==0)vTaskDelay(1);
     }
-    if((y&3)==0)vTaskDelay(1);
+
+    memcpy(previewOut,previewFiltered,128*64);
   }
-  memcpy(out,previewFiltered,128*64);
+
   return true;
+}
+
+// Kompatibilitas dengan pemanggil lama
+bool I2SCamera::capturePreview(uint8_t *out)
+{
+  return captureFrameData(nullptr,out);
 }
 
 void I2SCamera::dmaDiagnostic()
