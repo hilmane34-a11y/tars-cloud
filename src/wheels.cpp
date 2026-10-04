@@ -4,7 +4,7 @@
 #define WHEEL_L2 5
 #define WHEEL_R1 2
 #define WHEEL_R2 15
-#define MAX_SPEED 170
+#define MAX_SPEED 200
 
 static void motorWrite(uint8_t a, uint8_t b, int16_t speed) {
   speed = constrain(speed, -MAX_SPEED, MAX_SPEED);
