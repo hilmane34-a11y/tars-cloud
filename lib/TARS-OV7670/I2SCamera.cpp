@@ -1,7 +1,7 @@
 #include "I2SCamera.h"
 #include "Config.h"
 #include "Log.h"
-#include "env.h"
+#include "../../src/env.h"
 #include <math.h>
 
 int I2SCamera::blocksReceived = 0;
