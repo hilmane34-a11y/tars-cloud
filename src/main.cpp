@@ -80,7 +80,7 @@ const uint32_t STT_ERROR_COOLDOWN=6000;
 const uint32_t STT_QUOTA_COOLDOWN=15000;
 const uint32_t STT_RECONNECT_GUARD=60000;
 const uint32_t STT_IDLE_TIMEOUT_MS=10000;
-const uint32_t VISION_EVENT_COOLDOWN_MS=45000;
+const uint32_t VISION_EVENT_COOLDOWN_MS=65000;
 
 static int32_t rawBuf[BUF/4];
 static int16_t pcmBuf[BUF/4],preBuf[PREROLL_SAMPLES],sendBuf[256];
@@ -869,11 +869,23 @@ bool processOnlineRequest(const String &q,bool vision,bool status,bool automatic
 }
 /* AUTO SPEECH */
 bool autoSpeechCallback(const String &prompt){
-  if(tarsMode!=MODE_ONLINE || playing || sttConnected)return false;
-  if(!wifiOK())return false;
-// Auto-speech harus mengamati gambar kamera. 
-   return processOnlineRequest(prompt,true,false,true);
- }
+  if(tarsMode!=MODE_ONLINE ||
+     playing ||
+     sttConnected ||
+     WiFi.status()!=WL_CONNECTED)
+    return false;
+  if(prompt.startsWith("[AUTO_CHAT]")){
+    String q=prompt.substring(11);
+    q.trim();
+    return processOnlineRequest(q,false,false,true);
+  }
+  if(prompt.startsWith("[AUTO_VISION]")){
+    String q=prompt.substring(13);
+    q.trim();
+    return processOnlineRequest(q,true,false,true);
+  }
+  return false;
+}
 /* VISION EVENT */
 void processVisionEvent(){
   bool eventReady=false;
