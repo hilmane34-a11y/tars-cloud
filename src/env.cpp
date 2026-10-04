@@ -1,9 +1,10 @@
+
 #include "env.h"
 #include <string.h>
 #include <stdlib.h>
 
-#define ENV_WIDTH 128
-#define ENV_HEIGHT 64
+#define ENV_WIDTH 64
+#define ENV_HEIGHT 32
 #define GRID_W 16
 #define GRID_H 8
 
@@ -127,9 +128,9 @@ bool envAnalyze(
   uint8_t changedCells=0;
 
   // Warna dan kecerahan
-  for(int y=4;y<ENV_HEIGHT;y+=2){
+  for(int y=2;y<ENV_HEIGHT;y+=2){
     for(int x=0;x<ENV_WIDTH;x+=2){
-      uint8_t r=x<42?0:(x<86?1:2);
+      uint8_t r=x<21?0:(x<43?1:2);
       uint16_t p=image[y*ENV_WIDTH+x];
       addPixel(sector[r],p);
       addPixel(global,p);
@@ -152,10 +153,10 @@ bool envAnalyze(
   result.centerColor=bestColor(sector[1],result.centerColorConfidence);
   result.rightColor=bestColor(sector[2],result.rightColorConfidence);
 
-  // Tepi, kontras, tekstur dan perubahan warna lokal
-  for(int y=5;y<ENV_HEIGHT-2;y+=2){
-    for(int x=2;x<ENV_WIDTH-2;x+=2){
-      uint8_t r=x<42?0:(x<86?1:2);
+  // Tepi, kontras, tekstur dan perubahan warna
+  for(int y=1;y<ENV_HEIGHT-2;y+=2){
+    for(int x=1;x<ENV_WIDTH-2;x+=2){
+      uint8_t r=x<21?0:(x<43?1:2);
       uint16_t p=image[y*ENV_WIDTH+x];
 
       int c=getBrightness(p);
@@ -200,12 +201,14 @@ bool envAnalyze(
     for(int gy=0;gy<GRID_H;gy++){
       for(int gx=0;gx<GRID_W;gx++){
         int index=gy*GRID_W+gx;
-        int diff=abs((int)currentGrid[index]-(int)previousGrid[index]);
+        int diff=abs(
+          (int)currentGrid[index]-(int)previousGrid[index]
+        );
 
         if(diff>=MOTION_THRESHOLD){
           changedCells++;
           int cx=gx*ENV_WIDTH/GRID_W+ENV_WIDTH/GRID_W/2;
-          uint8_t r=cx<42?0:(cx<86?1:2);
+          uint8_t r=cx<21?0:(cx<43?1:2);
           changedRegion[r]++;
         }
       }
@@ -215,7 +218,7 @@ bool envAnalyze(
   memcpy(previousGrid,currentGrid,sizeof(previousGrid));
   previousValid=true;
 
-  // Penilaian keterbukaan jalur
+  // Penilaian keterbukaan visual
   bool *clear[3]={
     &result.leftClear,
     &result.centerClear,
@@ -231,7 +234,6 @@ bool envAnalyze(
     uint16_t colorRate=(uint32_t)d.colorChanges*100/d.samples;
     uint16_t avgContrast=d.contrast/d.samples;
 
-    // Skor keramaian visual, bukan jarak objek.
     uint16_t clutter=
       edgeRate*2+
       textureRate+
@@ -241,7 +243,6 @@ bool envAnalyze(
     uint8_t bright=i==0?result.leftBright:
                    i==1?result.centerBright:result.rightBright;
 
-    // Area sangat gelap tidak otomatis dianggap rintangan.
     *clear[i]=(bright>20 && clutter<95);
   }
 
