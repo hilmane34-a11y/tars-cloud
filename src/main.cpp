@@ -465,7 +465,12 @@ void oledTask(void*){
     continue;
    }
   }
-if(cameraLive&&!playing&&!oledText.length()){
+  if(sleepPreparing){
+  sleepOLEDUpdate(oled);
+  vTaskDelay(pdMS_TO_TICKS(20));
+  continue;
+  }
+  if(cameraLive&&!playing&&!oledText.length()){
   drawCameraOLED();
   vTaskDelay(pdMS_TO_TICKS(200));
   continue;
