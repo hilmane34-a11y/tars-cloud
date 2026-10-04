@@ -2,6 +2,7 @@
 #include <Arduino.h>
 #include "../include/config.h"
 #include "../lib/TARS-OV7670/I2SCamera.h"
+#include "../lib/TARS-OV7670/Config.h"
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
