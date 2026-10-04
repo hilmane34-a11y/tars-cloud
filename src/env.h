@@ -29,31 +29,41 @@ struct EnvState{
   bool leftClear;
   bool centerClear;
   bool rightClear;
+
   uint8_t confidence;
   uint8_t leftBright;
   uint8_t centerBright;
   uint8_t rightBright;
+
   bool motion;
   EnvEvent event;
   uint8_t motionLevel;
 
   EnvColor dominantColor;
   uint8_t colorConfidence;
+
+  EnvColor leftColor;
+  EnvColor centerColor;
+  EnvColor rightColor;
+
+  uint8_t leftColorConfidence;
+  uint8_t centerColorConfidence;
+  uint8_t rightColorConfidence;
 };
 
 void envBegin();
 void envResetMotion();
 
 bool envAnalyze(
-  const uint8_t*image,
-  EnvState&result
+  const uint16_t *image,
+  EnvState &result
 );
 
 bool envAnalyze(
-  const uint8_t*image,
+  const uint16_t *image,
   uint8_t dominantColor,
   uint8_t colorConfidence,
-  EnvState&result
+  EnvState &result
 );
 
 EnvState envGet();
