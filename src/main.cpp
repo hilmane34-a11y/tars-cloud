@@ -244,7 +244,8 @@ void drawCameraOLED(){
 
   oled.display();
   xSemaphoreGive(previewMux);
-}
+ }
+
 //Tars-EYE\\
 void cameraTask(void*){
   uint8_t frameErrors=0;
