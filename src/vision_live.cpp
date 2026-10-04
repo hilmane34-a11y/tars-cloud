@@ -14,8 +14,8 @@
 #error "Tambahkan TARS_LIVE_TOKEN di config.h"
 #endif
 
-#define VISION_JPEG_MAX 10000
-#define VISION_JSON_MAX 14500
+#define VISION_JPEG_MAX 20000
+#define VISION_JSON_MAX 28000
 #define VISION_LOCK_WAIT 15000
 
 extern OV7670 *camera;
