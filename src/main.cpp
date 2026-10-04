@@ -235,11 +235,12 @@ void drawCameraOLED(){
   vTaskDelay(1);
   if(analyzed){
    autonomySetEnvironment(environment);
-  if(tarsMode==MODE_ONLINE && environment.event!=ENV_NONE){
-   portENTER_CRITICAL(&visionEventMux);
-   pendingVisionCheck=true;
-   portEXIT_CRITICAL(&visionEventMux);
-   }
+  if(tarsMode==MODE_ONLINE &&
+   environment.event!=ENV_NONE &&
+    millis()-lastVisionEventAt>=VISION_EVENT_COOLDOWN_MS){
+    pendingVisionCheck=true;
+    lastVisionEventAt=millis();
+}
    Serial.printf("TARS: ENV L=%d C=%d R=%d OBS=%d CONF=%u%% EVENT=%d\n",
     environment.leftClear,environment.centerClear,
     environment.rightClear,environment.obstacle,
