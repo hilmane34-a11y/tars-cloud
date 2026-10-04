@@ -1,6 +1,6 @@
 #include "vision_live.h"
 #include <Arduino.h>
-#include "../lib/TARS-OV7670/Config.h"
+#include "../include/TARS-OV7670/Config.h"
 #include "../lib/TARS-OV7670/I2SCamera.h"
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
