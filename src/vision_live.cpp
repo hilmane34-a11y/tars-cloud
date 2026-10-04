@@ -1,6 +1,7 @@
-
 #include "vision_live.h"
 #include <Arduino.h>
+#include "../lib/TARS-OV7670/Config.h"
+#include "../lib/TARS-OV7670/I2SCamera.h"
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
@@ -9,7 +10,6 @@
 #include <mbedtls/base64.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
-#include <config.h>
 
 #ifndef TARS_LIVE_TOKEN
 #error "Tambahkan TARS_LIVE_TOKEN di config.h"
