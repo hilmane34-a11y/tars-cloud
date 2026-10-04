@@ -303,7 +303,6 @@ if(xSemaphoreTake(cameraMux,portMAX_DELAY)==pdTRUE){
 }
     if(ok&&analyzed){
       autonomySetEnvironment(environment);
-      personalityUpdate(false,autonomyIsMoving(),false);
       if(tarsMode==MODE_ONLINE&&
          environment.event!=ENV_NONE&&
          millis()-lastVisionEventAt>=VISION_EVENT_COOLDOWN_MS){
@@ -1171,6 +1170,22 @@ envBegin();
 visionLiveBegin();
 personalityBegin();
 autonomyBegin();
+if(!personalityTaskHandle){
+  BaseType_t result=xTaskCreate(
+    personalityTask,
+    "TARS_Personality",
+    2048,
+    nullptr,
+    1,
+    &personalityTaskHandle
+  );
+  if(result!=pdPASS){
+    personalityTaskHandle=nullptr;
+    Serial.println("TARS: PERSONALITY TASK FAILED");
+  }else{
+    Serial.println("TARS: PERSONALITY TASK READY");
+  }
+}
 autoSpeechBegin(autoSpeechCallback);
 startCamera();
 xTaskCreatePinnedToCore(
