@@ -224,50 +224,38 @@ bool startCamera(){
 }
 void drawCameraOLED(){
   if(!oledOK||!previewMux)return;
-
   if(xSemaphoreTake(previewMux,pdMS_TO_TICKS(100))!=pdTRUE)
     return;
-
   if(!previewReady){
     xSemaphoreGive(previewMux);
     return;
   }
-
   oled.clearDisplay();
-
   for(int y=0;y<64;y++){
     for(int x=0;x<128;x++){
       if(cameraPreview[y*128+x])
         oled.drawPixel(x,y,SSD1306_WHITE);
     }
   }
-
   oled.display();
-  xSemaphoreGive(previewMux);
- }
+  xSemaphoreGive(previewMux)
+}
 
 //Tars-EYE\\
 void cameraTask(void*){
-  uint8_t frameErrors=0;
-
-  for(;;){
+  uint8_t frameErrors=0;for(;;){
     if(!cameraLive||!camera||!cameraOK||playing){
       vTaskDelay(pdMS_TO_TICKS(20));
       continue;
     }
-
     bool ok=false,analyzed=false;
     EnvState environment={};
-
     if(cameraMux&&
        xSemaphoreTake(cameraMux,pdMS_TO_TICKS(100))==pdTRUE){
-
       if(previewMux&&
          xSemaphoreTake(previewMux,pdMS_TO_TICKS(100))==pdTRUE){
-
         if(cameraLive&&camera&&cameraOK&&!playing)
           ok=I2SCamera::capturePreview(cameraPreview);
-
         if(ok){
           analyzed=envAnalyze(
             cameraPreview,
@@ -275,44 +263,33 @@ void cameraTask(void*){
             I2SCamera::dominantColorConfidence(),
             environment
           );
-
           if(analyzed)
             previewReady=true;
         }
-
         xSemaphoreGive(previewMux);
       }
-
       xSemaphoreGive(cameraMux);
     }
-
     if(ok&&analyzed){
       autonomySetEnvironment(environment);
       personalityUpdate(false,autonomyIsMoving(),false);
-
       if(tarsMode==MODE_ONLINE&&
          environment.event!=ENV_NONE&&
          millis()-lastVisionEventAt>=VISION_EVENT_COOLDOWN_MS){
-
         portENTER_CRITICAL(&visionEventMux);
         pendingVisionCheck=true;
         portEXIT_CRITICAL(&visionEventMux);
-
         lastVisionEventAt=millis();
       }
-
       frameErrors=0;
     }else{
       autonomySetEnvironment(EnvState{});
       frameErrors++;
-
       if(frameErrors>=3&&cameraLive)
         autonomySetEnvironment(EnvState{});
     }
-
     if(cameraLive&&!playing)
       autonomyUpdate(true,false);
-
     vTaskDelay(1);
   }
 }
