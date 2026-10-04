@@ -265,15 +265,15 @@ void cameraTask(void*){
         if(cameraLive&&camera&&cameraOK&&!playing)
          ok=I2SCamera::capturePreview(cameraPreview);
 
-         if(ok){
-           analyzed=envAnalyze(
-             cameraPreview,
-              I2SCamera::dominantColor(),
-            I2SCamera::dominantColorConfidence(),         
-            environment);
-             if(analyzed)
-           previewReady=true;
-         }
+if(ok){
+  previewReady=true;
+
+  analyzed=envAnalyze(
+    cameraPreview,
+    I2SCamera::dominantColor(),
+    I2SCamera::dominantColorConfidence(),
+    environment);
+}
         xSemaphoreGive(previewMux);
       }
       xSemaphoreGive(cameraMux);
