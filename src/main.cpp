@@ -282,7 +282,7 @@ if(ok&&analyzed){
 }
   if(cameraLive&&!playing)
    autonomyUpdate(true,false);
-  taskYIELD();
+  vTaskDelay(1);
  }
 }
 /* VISION */
@@ -1123,9 +1123,7 @@ autonomyBegin();
 autoSpeechBegin(autoSpeechCallback);
 startCamera();
 xTaskCreatePinnedToCore(
- cameraTask,"TARS_EYE",4096,nullptr,2,nullptr,1
-);
-}
+ cameraTask,"TARS_EYE",4096,nullptr,2,nullptr,1);
 ramDiag("READY");
 wheelsStop();
 
