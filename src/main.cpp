@@ -238,7 +238,7 @@ void drawCameraOLED(){
     }
   }
   oled.display();
-  xSemaphoreGive(previewMux)
+  xSemaphoreGive(previewMux);
 }
 
 //Tars-EYE\\
