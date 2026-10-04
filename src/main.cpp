@@ -223,21 +223,27 @@ bool startCamera(){
   return true;
 }
 void drawCameraOLED(){
- if(!oledOK||!previewMux)return;
- if(xSemaphoreTake(previewMux,pdMS_TO_TICKS(100))!=pdTRUE)return;
- if(!previewReady){
-  xSemaphoreGive(previewMux);
-  return;
- }
- oled.clearDisplay();
- for(int y=0;y<64;y++){
-  for(int x=0;x<128;x++){
-   if(cameraPreview[y*128+x])
-    oled.drawPixel(x,y,SSD1306_WHITE);
+  if(!oledOK||!previewMux)return;
+
+  if(xSemaphoreTake(previewMux,pdMS_TO_TICKS(100))!=pdTRUE)
+    return;
+
+  if(!previewReady){
+    xSemaphoreGive(previewMux);
+    return;
   }
- }
- oled.display();
- xSemaphoreGive(previewMux);
+
+  oled.clearDisplay();
+
+  for(int y=0;y<64;y++){
+    for(int x=0;x<128;x++){
+      if(cameraPreview[y*128+x])
+        oled.drawPixel(x,y,SSD1306_WHITE);
+    }
+  }
+
+  oled.display();
+  xSemaphoreGive(previewMux);
 }
 //Tars-EYE\\
 void cameraTask(void*){
