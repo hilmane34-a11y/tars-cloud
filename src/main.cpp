@@ -1109,7 +1109,9 @@ processOnlineRequest(request,vision,status,false);
 }
 /* SETUP */
 void setup(){
- Serial.begin(SERIAL_BAUD);deepSleepBegin();Wire.begin(OLED_SDA,OLED_SCL);Wire.setClock(400000);
+ Serial.begin(SERIAL_BAUD);
+ //deepSleepBegin();
+ Wire.begin(OLED_SDA,OLED_SCL);Wire.setClock(400000);
  oledOK=oled.begin(SSD1306_SWITCHCAPVCC,OLED_ADDR);
  if(oledOK){
   oled.clearDisplay();oled.setTextColor(SSD1306_WHITE);oled.setTextSize(2);
@@ -1124,7 +1126,8 @@ void setup(){
 
  Serial.println("TARS: DAC GPIO26 ULP DAC2");
  Serial.println("TARS: AUDIO MP3/WAV -> 22050Hz/16bit");
- Serial.println("TARS: INMP441 RIGHT GPIO16");
+ Serial.println("TARS: INMP441 SCK=18 WS=2 SD=15");
+ Serial.println("TARS: L9110S A=23/16 B=17/19");
  Serial.printf("TARS: MIC THRESHOLD=%ld SILENCE=%ld\n",(long)MIC_THRESHOLD,(long)MIC_SILENCE);
  Serial.println("TARS: MIC PEAK=12000/8000 RMS=3000/1800 PREROLL=250 ms BUF=256");
  Serial.println("TARS: STT ONLINE REALTIME PCM");
@@ -1132,7 +1135,6 @@ void setup(){
  Serial.println("TARS: VISION ONLINE ONLY");
  Serial.printf("TARS: OV7670 D0..D7=%d,%d,%d,%d,%d,%d,%d,%d XCLK=%d PCLK=%d VSYNC=%d HREF=%d SCCB=%d/%d\n",
  CAM_D0,CAM_D1,CAM_D2,CAM_D3,CAM_D4,CAM_D5,CAM_D6,CAM_D7,CAM_XCLK,CAM_PCLK,CAM_VSYNC,CAM_HREF,CAM_SIOD,CAM_SIOC);
- Serial.println("TARS: L9110S WHEELS GPIO23/5 LEFT GPIO2/15 RIGHT");
  Serial.println("TARS: GPIO4 RESERVED FOR OV7670 XCLK");
  Serial.println("TARS: BLUETOOTH DISABLED");
  Serial.println("TARS: MODE OFFLINE");
