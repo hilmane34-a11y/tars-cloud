@@ -1,9 +1,9 @@
 #include "wheels.h"
 
 #define WHEEL_L1 23  // L9110S A-1A
-#define WHEEL_L2 1   // L9110S A-2B (TX0)
+#define WHEEL_L2 16   // L9110S A-2B (TX0)
 #define WHEEL_R1 17  // L9110S B-1A
-#define WHEEL_R2 3   // L9110S B-2A (RX0)
+#define WHEEL_R2 19  // L9110S B-2A (RX0)
 
 #define MAX_SPEED 250
 
