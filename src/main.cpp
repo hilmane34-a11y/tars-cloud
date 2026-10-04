@@ -56,7 +56,7 @@ const uint32_t MIC_RATE=16000,RECORD_MIN_MS=500,SILENCE_MS=800,PREROLL_MS=250,OL
 const int32_t MIC_THRESHOLD=14000,MIC_SILENCE=8000;
 const size_t BUF=256,PREROLL_SAMPLES=MIC_RATE*PREROLL_MS/1000;
 const int MP3_COPY_BUFFER=512;
-const size_t AUDIO_RING_SIZE=8192,AUDIO_PREBUFFER=2048;
+const size_t AUDIO_RING_SIZE=8192,AUDIO_PREBUFFER=1028;
 const char*STT_HOST="tars-cloud-v1.hilmane34.workers.dev";
 enum TarsMode:uint8_t{MODE_OFFLINE,MODE_ONLINE};
 TarsMode tarsMode=MODE_OFFLINE;
@@ -97,7 +97,7 @@ WebSocketsClient sttWS;
 OV7670*camera=nullptr;
 SemaphoreHandle_t previewMux=nullptr;
 SemaphoreHandle_t cameraMux=nullptr;
-static uint16_t cameraEnvironment[128*64];
+static uint16_t cameraEnvironment[96*32];
 static uint8_t cameraPreview[128*64];
 bool previewReady=false;
 portMUX_TYPE visionEventMux=portMUX_INITIALIZER_UNLOCKED;
