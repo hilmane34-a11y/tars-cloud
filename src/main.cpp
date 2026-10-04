@@ -97,7 +97,7 @@ WebSocketsClient sttWS;
 OV7670*camera=nullptr;
 SemaphoreHandle_t previewMux=nullptr;
 SemaphoreHandle_t cameraMux=nullptr;
-static uint8_t cameraEnvironment[128*64];
+static uint16_t cameraEnvironment[128*64];
 static uint8_t cameraPreview[128*64];
 bool previewReady=false;
 portMUX_TYPE visionEventMux=portMUX_INITIALIZER_UNLOCKED;
@@ -276,18 +276,14 @@ void cameraTask(void*){
     }
 bool ok=false;
 bool analyzed=false;
-
 if(xSemaphoreTake(cameraMux,portMAX_DELAY)==pdTRUE){
   if(xSemaphoreTake(previewMux,portMAX_DELAY)==pdTRUE){
-
     ok=I2SCamera::captureFrameData(
       cameraEnvironment,
       cameraPreview
     );
-
     if(ok){
       previewReady=true;
-
       analyzed=envAnalyze(
         cameraEnvironment,
         I2SCamera::dominantColor(),
@@ -295,10 +291,8 @@ if(xSemaphoreTake(cameraMux,portMAX_DELAY)==pdTRUE){
         environment
       );
     }
-
     xSemaphoreGive(previewMux);
   }
-
   xSemaphoreGive(cameraMux);
 }
     if(ok&&analyzed){
