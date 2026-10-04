@@ -9,7 +9,7 @@
 #include <mbedtls/base64.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
-#include "config.h"
+#include <config.h>
 
 #ifndef TARS_LIVE_TOKEN
 #error "Tambahkan TARS_LIVE_TOKEN di config.h"
