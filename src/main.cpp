@@ -91,7 +91,9 @@ MP3DecoderHelix codec;
 WAVDecoder wav;
 WebSocketsClient sttWS;
 OV7670*camera=nullptr;
-SemaphoreHandle_t cameraMux=nullptr;
+SemaphoreHandle_t previewMux=nullptr;
+static uint8_t cameraPreview[128*64];
+bool previewReady=false;
 portMUX_TYPE visionEventMux=portMUX_INITIALIZER_UNLOCKED;
 
 void ramDiag(const char*tag){
@@ -220,47 +222,66 @@ bool startCamera(){
   return true;
 }
 void drawCameraOLED(){
- if(!cameraLive||!camera||!cameraOK||!oledOK)return;
- static uint8_t preview[128*64];
- memset(preview,0,sizeof(preview));
- if(cameraMux&&xSemaphoreTake(cameraMux,pdMS_TO_TICKS(2500))!=pdTRUE)return;
- bool ok=false;
- if(cameraLive&&camera&&cameraOK)
-   ok=I2SCamera::capturePreview(preview);
- if(cameraMux)xSemaphoreGive(cameraMux);
- vTaskDelay(1);
- if(ok){
-  EnvState environment={};
-  bool analyzed=envAnalyze(preview,environment);
-  vTaskDelay(1);
-  if(analyzed){
-   autonomySetEnvironment(environment);
-  if(tarsMode==MODE_ONLINE &&
-   environment.event!=ENV_NONE &&
-    millis()-lastVisionEventAt>=VISION_EVENT_COOLDOWN_MS){
-    pendingVisionCheck=true;
-    lastVisionEventAt=millis();
-}
-   Serial.printf("TARS: ENV L=%d C=%d R=%d OBS=%d CONF=%u%% EVENT=%d\n",
-    environment.leftClear,environment.centerClear,
-    environment.rightClear,environment.obstacle,
-    environment.confidence,(int)environment.event);
-  }else{
-   autonomySetEnvironment(EnvState{});
+ if(!oledOK||!previewMux||!previewReady)return;
+ if(xSemaphoreTake(previewMux,pdMS_TO_TICKS(100))!=pdTRUE)return;
+ oled.clearDisplay();
+ for(int y=0;y<64;y++){
+  for(int x=0;x<128;x++){
+   if(cameraPreview[y*128+x])
+    oled.drawPixel(x,y,SSD1306_WHITE);
   }
-  oled.clearDisplay();
-  for(int y=0;y<64;y++){
-   for(int x=0;x<128;x++){
-    if(preview[y*128+x])
-     oled.drawPixel(x,y,SSD1306_WHITE);
-   }
-   if((y&3)==3)vTaskDelay(1);
-  }
-  oled.display();
- }else{
-  autonomySetEnvironment(EnvState{});
  }
-  vTaskDelay(pdMS_TO_TICKS(10));
+ oled.display();
+ xSemaphoreGive(previewMux);
+}
+//Tars-EYE\\
+void cameraTask(void*){
+ uint8_t frameErrors=0;
+ for(;;){
+  if(!cameraLive||!camera||!cameraOK||playing){
+   vTaskDelay(pdMS_TO_TICKS(20));
+   continue;
+  }
+  bool ok=false;
+  if(cameraMux&&
+     xSemaphoreTake(cameraMux,pdMS_TO_TICKS(100))==pdTRUE){
+   if(cameraLive&&camera&&cameraOK)
+    ok=I2SCamera::capturePreview(cameraPreview);
+   xSemaphoreGive(cameraMux);
+  }
+  if(ok){
+   EnvState environment={};
+   bool analyzed=envAnalyze(cameraPreview,environment);
+   if(analyzed){
+    autonomySetEnvironment(environment);
+    personalityUpdate(false,autonomyIsMoving(),false);
+    if(tarsMode==MODE_ONLINE&&
+       environment.event!=ENV_NONE&&
+       millis()-lastVisionEventAt>=VISION_EVENT_COOLDOWN_MS){
+     portENTER_CRITICAL(&visionEventMux);
+     pendingVisionCheck=true;
+     portEXIT_CRITICAL(&visionEventMux);
+     lastVisionEventAt=millis();
+    }
+    if(previewMux&&
+       xSemaphoreTake(previewMux,pdMS_TO_TICKS(100))==pdTRUE){
+     previewReady=true;
+     xSemaphoreGive(previewMux);
+    }
+    frameErrors=0;
+   }else{
+    autonomySetEnvironment(EnvState{});
+    frameErrors++;
+   }
+  }else{
+   frameErrors++;
+   if(frameErrors>=3&&cameraLive)
+    autonomySetEnvironment(EnvState{});
+  }
+  if(cameraLive&&!playing)
+   autonomyUpdate(true,false);
+  taskYIELD();
+ }
 }
 /* VISION */
 bool needsVision(String q){
@@ -424,11 +445,8 @@ void oledTask(void*){
    }
   }
 if(cameraLive&&!playing&&!oledText.length()){
-  personalityUpdate(false,autonomyIsMoving(),false);
   drawCameraOLED();
-  autonomyUpdate(true,false);
   vTaskDelay(pdMS_TO_TICKS(200));
-  taskYIELD();
   continue;
 }
   if(oledText.length()&&oledTypePos<oledText.length()&&now-oledLastType>=OLED_TYPE_MS)
@@ -1066,7 +1084,10 @@ void setup(){
   oled.clearDisplay();oled.setTextColor(SSD1306_WHITE);oled.setTextSize(2);
   oled.setCursor(36,0);oled.print("TARS");oled.setTextSize(1);oled.setCursor(3,27);oled.print("BOOT");oled.display();
  }
- wheelsBegin();cameraMux=xSemaphoreCreateMutex();micOK=initMic();
+ wheelsBegin();
+ cameraMux=xSemaphoreCreateMutex();
+ previewMux=xSemaphoreCreateMutex();
+ micOK=initMic();
  if(!LittleFS.begin(true))Serial.println("TARS: LITTLEFS ERROR");
  else Serial.printf("TARS: LITTLEFS READY %u/%u KB\n",(unsigned)(LittleFS.usedBytes()/1024),(unsigned)(LittleFS.totalBytes()/1024));
 
@@ -1099,6 +1120,11 @@ personalityBegin();
 autonomyBegin();
 autoSpeechBegin(autoSpeechCallback);
 startCamera();
+if(cameraLive){
+ xTaskCreatePinnedToCore(
+  cameraTask,"TARS_EYE",4096,nullptr,2,nullptr,1
+ );
+}
 ramDiag("READY");
 wheelsStop();
 
