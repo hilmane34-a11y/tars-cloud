@@ -1,13 +1,15 @@
 #include "wheels.h"
 
-#define WHEEL_L1 23
-#define WHEEL_L2 5
-#define WHEEL_R1 2
-#define WHEEL_R2 15
-#define MAX_SPEED 180
+#define WHEEL_L1 23  // L9110S A-1A
+#define WHEEL_L2 1   // L9110S A-2B (TX0)
+#define WHEEL_R1 17  // L9110S B-1A
+#define WHEEL_R2 3   // L9110S B-2A (RX0)
+
+#define MAX_SPEED 250
 
 static void motorWrite(uint8_t a, uint8_t b, int16_t speed) {
   speed = constrain(speed, -MAX_SPEED, MAX_SPEED);
+
   analogWrite(a, speed > 0 ? speed : 0);
   analogWrite(b, speed < 0 ? -speed : 0);
 }
@@ -17,6 +19,7 @@ void wheelsBegin() {
   pinMode(WHEEL_L2, OUTPUT);
   pinMode(WHEEL_R1, OUTPUT);
   pinMode(WHEEL_R2, OUTPUT);
+
   wheelsStop();
 }
 
