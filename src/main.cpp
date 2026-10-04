@@ -159,31 +159,30 @@ bool initCamera(){
   camDiag("LIVE");
   return true;
 }
-
 void stopCamera(){
   Serial.println("TARS: CAM STOP START");
   camDiag("BEFORE-OFF");
-
   if(!cameraMux){
     Serial.println("TARS: CAM MUTEX NULL");
     return;
   }
-
   if(xSemaphoreTake(cameraMux,pdMS_TO_TICKS(5000))!=pdTRUE){
     Serial.println("TARS: CAM MUTEX TIMEOUT");
     return;
   }
-
   cameraLive=false;
-
   if(camera){
     delete camera;
     camera=nullptr;
   }
-
   cameraOK=false;
+  if(previewMux &&
+     xSemaphoreTake(previewMux,pdMS_TO_TICKS(500))==pdTRUE){
+    previewReady=false;
+    memset(cameraPreview,0,sizeof(cameraPreview));
+    xSemaphoreGive(previewMux);
+  }
   xSemaphoreGive(cameraMux);
-
   delay(50);
   ramDiag("CAM-AFTER-DELETE");
   camDiag("OFF");
@@ -205,13 +204,23 @@ bool startCamera(){
     Serial.println("TARS: CAM ALREADY LIVE");
     return true;
   }
-  cameraLive=false;
-  cameraOK=false;
+
+    cameraLive=false;
+    cameraOK=false;
+
   if(camera){
     delete camera;
     camera=nullptr;
-  }
-  bool ok=initCamera();
+}
+
+  if(previewMux &&
+    xSemaphoreTake(previewMux,pdMS_TO_TICKS(500))==pdTRUE){
+    previewReady=false;
+    memset(cameraPreview,0,sizeof(cameraPreview));
+    xSemaphoreGive(previewMux);
+}
+
+ bool ok=initCamera();
   xSemaphoreGive(cameraMux);
   if(!ok){
     Serial.println("TARS: CAM RESTART FAILED");
@@ -257,14 +266,14 @@ void cameraTask(void*){
          ok=I2SCamera::capturePreview(cameraPreview);
 
          if(ok){
-           previewReady=true;
-
-            analyzed=envAnalyze(
+           analyzed=envAnalyze(
              cameraPreview,
-            I2SCamera::dominantColor(),
-           I2SCamera::dominantColorConfidence(),
-         environment);
-    }
+              I2SCamera::dominantColor(),
+            I2SCamera::dominantColorConfidence(),         
+            environment);
+             if(analyzed)
+           previewReady=true;
+         }
         xSemaphoreGive(previewMux);
       }
       xSemaphoreGive(cameraMux);
