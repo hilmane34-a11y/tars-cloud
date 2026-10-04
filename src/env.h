@@ -8,7 +8,19 @@ enum EnvEvent:uint8_t{
   ENV_MOTION_RIGHT,
   ENV_SCENE_CHANGED
 };
-
+enum EnvColor:uint8_t{
+  ENV_COLOR_UNKNOWN,
+  ENV_COLOR_BLACK,
+  ENV_COLOR_WHITE,
+  ENV_COLOR_GRAY,
+  ENV_COLOR_RED,
+  ENV_COLOR_ORANGE,
+  ENV_COLOR_YELLOW,
+  ENV_COLOR_GREEN,
+  ENV_COLOR_CYAN,
+  ENV_COLOR_BLUE,
+  ENV_COLOR_PURPLE
+};
 struct EnvState{
   bool valid;
   bool obstacle;
