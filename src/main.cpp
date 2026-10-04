@@ -34,8 +34,8 @@
 
 #define MIC_PORT I2S_NUM_1
 #define MIC_SCK 18
-#define MIC_WS 19
-#define MIC_SD 16
+#define MIC_WS 2
+#define MIC_SD 15
 #define AUDIO_DAC_PIN 26
 #define CAM_XCLK 4
 #define CAM_SIOD 21
