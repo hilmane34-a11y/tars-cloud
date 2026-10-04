@@ -505,19 +505,17 @@ static uint8_t classifyRGB565(uint16_t p){
   return ENV_COLOR_PURPLE;
 }
 
-bool I2SCamera::captureFrameData(uint8_t *environmentOut,uint8_t *previewOut)
-{
+bool I2SCamera::captureFrameData(
+  uint16_t *environmentOut,
+  uint8_t *previewOut
+){
   if(!environmentOut&&!previewOut)return false;
-
   lastDominantColor=ENV_COLOR_UNKNOWN;
   lastColorConfidence=0;
-
-  if(environmentOut)memset(environmentOut,0,128*64);
+  if(environmentOut)memset(environmentOut,0,128*64*sizeof(uint16_t));
   if(previewOut)memset(previewOut,0,128*64);
-
   uint32_t colorCount[11]={};
   uint32_t colorSamples=0;
-
   streamFill=0;
   streamLine=0;
   streamReady=0;
@@ -525,131 +523,98 @@ bool I2SCamera::captureFrameData(uint8_t *environmentOut,uint8_t *previewOut)
   readyTail=0;
   streamFrameDone=false;
   streamError=false;
-
   for(int i=0;i<STREAM_BLOCKS;i++)
     streamState[i]=0;
-
   if(!i2sRunChecked())return false;
-
   const int blocksNeeded=(yres+STREAM_LINES-1)/STREAM_LINES;
   int blocksDone=0;
   uint32_t start=millis();
-
   while(blocksDone<blocksNeeded){
     if(millis()-start>CAMERA_CAPTURE_TIMEOUT){
       i2sStop();
       return false;
     }
-
     if(streamReady<=0){
       delay(1);
       continue;
     }
-
     int idx=readyQueue[readyTail];
     readyTail=(readyTail+1)%STREAM_BLOCKS;
     streamReady--;
-
     uint16_t *src=(uint16_t*)streamBlock[idx];
     int blockY=blocksDone*STREAM_LINES;
-
     for(int y=0;y<STREAM_LINES;y++){
       if((y&3)==0)vTaskDelay(1);
-
       int sourceY=blockY+y;
       if(sourceY>=yres)continue;
-
       int oy=sourceY*64/yres;
       if(oy>=64)continue;
-
       for(int x=0;x<xres;x++){
         uint16_t p=src[y*xres+x];
-
         if((sourceY&3)==0&&(x&3)==0){
-          uint8_t color=classifyRGB565(p);
-
-          if(color<11){
-            colorCount[color]++;
+          uint8_t c=classifyRGB565(p);
+          if(c<11){
+            colorCount[c]++;
             colorSamples++;
           }
         }
-
         int ox=x*128/xres;
         if(ox>=128)continue;
-
-        uint8_t r=((p>>11)&0x1F)*255/31;
-        uint8_t g=((p>>5)&0x3F)*255/63;
-        uint8_t b=(p&0x1F)*255/31;
-
-        uint8_t gray=(77*r+150*g+29*b)>>8;
-        uint8_t dark=(gray<=47)?1:0;
-
-        // Data perilaku ENV: jalur mandiri, tanpa filter OLED
+        int pos=oy*128+ox;
+        // ENV menerima warna RGB565 asli
         if(environmentOut)
-          environmentOut[oy*128+ox]=dark;
-
-        // Preview OLED: salinan terpisah
-        if(previewOut)
-          previewOut[oy*128+ox]=dark;
+          environmentOut[pos]=p;
+        // OLED hanya menerima grayscale monitor
+        if(previewOut){
+          uint8_t r=((p>>11)&31)*255/31;
+          uint8_t g=((p>>5)&63)*255/63;
+          uint8_t b=(p&31)*255/31;
+          uint8_t gray=(77*r+150*g+29*b)>>8;
+          previewOut[pos]=(gray<=47)?1:0;
+        }
       }
     }
-
     streamState[idx]=0;
     blocksDone++;
     start=millis();
   }
-
   i2sStop();
-
   if(colorSamples){
-    uint8_t bestColor=ENV_COLOR_UNKNOWN;
-    uint32_t bestCount=0;
-
+    uint8_t best=ENV_COLOR_UNKNOWN;
+    uint32_t count=0;
     for(uint8_t i=1;i<11;i++){
-      if(colorCount[i]>bestCount){
-        bestCount=colorCount[i];
-        bestColor=i;
+      if(colorCount[i]>count){
+        count=colorCount[i];
+        best=i;
       }
     }
-
-    lastDominantColor=bestColor;
-    lastColorConfidence=(uint32_t)bestCount*100/colorSamples;
+    lastDominantColor=best;
+    lastColorConfidence=(uint32_t)count*100/colorSamples;
   }
-
-  // Filter hanya untuk gambar monitor OLED
+  // Filter 3x3 hanya untuk OLED
   if(previewOut){
     for(int y=0;y<64;y++){
       for(int x=0;x<128;x++){
         int count=0,total=0;
-
         for(int dy=-1;dy<=1;dy++){
           for(int dx=-1;dx<=1;dx++){
             int nx=x+dx,ny=y+dy;
-
             if(nx<0||nx>=128||ny<0||ny>=64)
               continue;
-
             count+=previewOut[ny*128+nx];
             total++;
           }
         }
-
         previewFiltered[y*128+x]=
-          (count>=total/2+1)?1:0;
+          count>=total/2+1?1:0;
       }
-
       if((y&3)==0)vTaskDelay(1);
     }
-
     memcpy(previewOut,previewFiltered,128*64);
   }
-
   return true;
 }
-
-// Kompatibilitas dengan pemanggil lama
-bool I2SCamera::capturePreview(uint8_t *out)
-{
+bool I2SCamera::capturePreview(uint8_t *out){
   return captureFrameData(nullptr,out);
 }
 
