@@ -73,6 +73,8 @@ uint8_t lastGreetingPeriod=255;
 String sttFinal,sttPartial,oledText,oledStatus="READY";
 uint32_t oledTypePos=0,oledLastType=0,oledLastWave=0;
 uint32_t oledPage=0,oledLastPage=0,ramDiagAt=0;
+bool sleepPreparing=false;
+uint32_t sleepPrepareAt=0;
 volatile bool pendingVisionCheck=false;
 uint32_t lastVisionEventAt=0;
 
@@ -1156,34 +1158,63 @@ Serial.println("TARS: AUTO SPEECH READY");
 }
 void enterTarsDeepSleep(){
  Serial.println("TARS: PREPARING DEEP SLEEP");
+
+ sleepOLEDStop();
  wheelsStop();
  autonomyStop();
  closeSTT();
  audioRing.stop();
  audioStop();
  playing=false;
+
  visionLivePause();
  stopCamera();
+
  if(micOK){
   i2s_driver_uninstall(MIC_PORT);
   micOK=false;
  }
+
  if(oledOK){
   oled.clearDisplay();
-  oled.setTextSize(1);
-  oled.setCursor(15,25);
+  oled.setTextColor(SSD1306_WHITE);
+  oled.setTextSize(2);
+  oled.setCursor(25,25);
   oled.print("TARS SLEEP");
   oled.display();
  }
+
  ramDiag("BEFORE-DEEP-SLEEP");
  deepSleepEnter();
- }
+}
 
 // LOOP
 void loop(){
-  if(deepSleepDue()){
-    enterTarsDeepSleep();
-    return;
+
+  time_t now=time(nullptr);
+  struct tm t={};
+
+  if(now>=1704067200){
+    localtime_r(&now,&t);
+
+    bool prepare=
+      (t.tm_hour==21&&t.tm_min>=58)||
+      (t.tm_hour==22&&t.tm_min==0);
+
+    if(prepare&&!sleepPreparing){
+      sleepPreparing=true;
+      sleepPrepareAt=millis();
+      sleepOLEDStart();
+      Serial.println("TARS: SLEEP ANIMATION START");
+    }
+
+    if(sleepPreparing){
+      if(t.tm_hour>=22){
+        sleepOLEDStop();
+        enterTarsDeepSleep();
+        return;
+      }
+    }
   }
 
   ramMonitor();
