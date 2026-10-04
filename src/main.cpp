@@ -276,7 +276,8 @@ void cameraTask(void*){
     }
 bool ok=false;
 bool analyzed=false;
-if(xSemaphoreTake(cameraMux,portMAX_DELAY)==pdTRUE){
+EnvState environment={};
+    if(xSemaphoreTake(cameraMux,portMAX_DELAY)==pdTRUE){
   if(xSemaphoreTake(previewMux,portMAX_DELAY)==pdTRUE){
     ok=I2SCamera::captureFrameData(
       cameraEnvironment,
