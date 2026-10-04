@@ -45,13 +45,56 @@ jobs:
           mkdir -p data
           touch data/.gitkeep
 
-      - name: Build TARS firmware
+      - name: Diagnose TARS source
+        shell: bash
         run: |
-          pio run -e tars
+          echo "========================================"
+          echo "TARS SOURCE DIAGNOSTIC"
+          echo "========================================"
+
+          echo "COMMIT:"
+          git rev-parse HEAD
+
+          echo ""
+          echo "FILE CHECK:"
+          test -f src/main.cpp || {
+            echo "ERROR: src/main.cpp tidak ditemukan"
+            exit 1
+          }
+
+          echo "Source size:"
+          wc -l src/main.cpp
+
+          echo ""
+          echo "===== MAIN.CPP LINES 220-310 ====="
+          nl -ba src/main.cpp | sed -n '220,310p'
+
+          echo ""
+          echo "===== CAMERA FUNCTION DECLARATIONS ====="
+          grep -n -A65 -B8 -E 'drawCameraOLED|cameraTask' src/main.cpp || true
+
+          echo ""
+          echo "===== CAMERA FUNCTION BRACE MARKERS ====="
+          grep -n -E 'drawCameraOLED|cameraTask|VISION' src/main.cpp || true
+
+          echo ""
+          echo "===== PREPROCESSOR DIRECTIVES ====="
+          grep -n -E '^[[:space:]]*#[[:space:]]*(if|ifdef|ifndef|else|elif|endif)' src/main.cpp || true
+
+          echo ""
+          echo "SOURCE DIAGNOSTIC COMPLETE"
+
+      - name: Build TARS firmware
+        shell: bash
+        run: |
+          set -o pipefail
+          pio run -e tars 2>&1 | tee build.log
 
       - name: Build LittleFS
+        shell: bash
         run: |
-          pio run -e tars -t buildfs
+          set -o pipefail
+          pio run -e tars -t buildfs 2>&1 | tee buildfs.log
 
       - name: Locate ESP32 tools
         shell: bash
