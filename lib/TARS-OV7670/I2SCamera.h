@@ -23,6 +23,8 @@ public:
     FORMAT_BMP,
     FORMAT_JPEG
   };
+  static bool captureFrameData(uint8_t *environmentOut, uint8_t *previewOut); 
+
   static bool capturePreview(uint8_t*out);
   static uint8_t dominantColor();
   static uint8_t dominantColorConfidence();
