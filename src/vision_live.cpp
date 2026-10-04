@@ -1,5 +1,6 @@
 #include "vision_live.h"
 #include <Arduino.h>
+#include <I2SCamera.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
@@ -87,7 +88,7 @@ static bool captureFrame(size_t &length) {
 
     if (ready)
         ok = I2SCamera::encodeFrameToJPEG(
-            visionJpeg, &length, 25
+            visionJpeg, &length, 10
         );
 
     xSemaphoreGive(cameraMux);
