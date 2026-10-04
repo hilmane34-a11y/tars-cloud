@@ -2,7 +2,7 @@
 #include "wheels.h"
 #include "personality.h"
 
-#define AUTO_SPEED 255
+#define AUTO_SPEED 220
 #define FORWARD_MS 3000
 #define TURN_MS 480
 #define ENV_TIMEOUT 1800
