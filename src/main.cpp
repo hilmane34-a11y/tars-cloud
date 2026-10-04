@@ -101,6 +101,20 @@ static uint8_t cameraEnvironment[128*64];
 static uint8_t cameraPreview[128*64];
 bool previewReady=false;
 portMUX_TYPE visionEventMux=portMUX_INITIALIZER_UNLOCKED;
+static TaskHandle_t personalityTaskHandle=nullptr;
+
+static void personalityTask(void *parameter)
+{
+  for(;;){
+    personalityUpdate(
+      false,
+      autonomyIsMoving(),
+      false
+    );
+
+    vTaskDelay(pdMS_TO_TICKS(250));
+  }
+}
 
 void ramDiag(const char*tag){
  uint32_t f=ESP.getFreeHeap(),m=ESP.getMinFreeHeap(),a=ESP.getMaxAllocHeap();
@@ -260,28 +274,33 @@ void cameraTask(void*){
       vTaskDelay(pdMS_TO_TICKS(20));
       continue;
     }
-    bool ok=false,analyzed=false;
-    EnvState environment={};
-    if(cameraMux&&
-       xSemaphoreTake(cameraMux,pdMS_TO_TICKS(100))==pdTRUE){
-      if(previewMux&&
-         xSemaphoreTake(previewMux,pdMS_TO_TICKS(100))==pdTRUE){
-        if(cameraLive&&camera&&cameraOK&&!playing)
-         ok=I2SCamera::capturePreview(cameraPreview);
+bool ok=false;
+bool analyzed=false;
 
-if(ok){
-  previewReady=true;
+if(xSemaphoreTake(cameraMux,portMAX_DELAY)==pdTRUE){
+  if(xSemaphoreTake(previewMux,portMAX_DELAY)==pdTRUE){
 
-  analyzed=envAnalyze(
-    cameraPreview,
-    I2SCamera::dominantColor(),
-    I2SCamera::dominantColorConfidence(),
-    environment);
-}
-        xSemaphoreGive(previewMux);
-      }
-      xSemaphoreGive(cameraMux);
+    ok=I2SCamera::captureFrameData(
+      cameraEnvironment,
+      cameraPreview
+    );
+
+    if(ok){
+      previewReady=true;
+
+      analyzed=envAnalyze(
+        cameraEnvironment,
+        I2SCamera::dominantColor(),
+        I2SCamera::dominantColorConfidence(),
+        environment
+      );
     }
+
+    xSemaphoreGive(previewMux);
+  }
+
+  xSemaphoreGive(cameraMux);
+}
     if(ok&&analyzed){
       autonomySetEnvironment(environment);
       personalityUpdate(false,autonomyIsMoving(),false);
