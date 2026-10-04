@@ -511,10 +511,11 @@ bool I2SCamera::capturePreview(uint8_t*out)
 
   lastDominantColor=ENV_COLOR_UNKNOWN;
   lastColorConfidence=0;
-  
+
+  memset(out,0,128*64);
+
   uint32_t colorCount[11]={};
   uint32_t colorSamples=0;
-  uint32_t previewWhite=0;
 
   streamFill=0;
   streamLine=0;
@@ -584,28 +585,20 @@ bool I2SCamera::capturePreview(uint8_t*out)
           (77*r+150*g+29*b)>>8
         );
 
-        if(gray<=47){
-          previewFiltered[oy*128+ox]=1;
-          previewWhite++;
-          }else{
-         previewFiltered[oy*128+ox]=0;
-          }
+        if(gray<=47)
+          out[oy*128+ox]=1;
       }
     }
+
     streamState[idx]=0;
     blocksDone++;
     start=millis();
   }
-i2sStop();
 
-// Tolak frame yang hampir seluruhnya putih.
-if(previewWhite>128UL*64UL*95UL/100UL){
-  Serial.printf("TARS: PREVIEW INVALID WHITE=%lu\n",
-                (unsigned long)previewWhite);
-  return false;
-}
-// Cari warna dengan jumlah sampel terbanyak
-if(colorSamples){
+  i2sStop();
+
+  // Cari warna dengan jumlah sampel terbanyak
+  if(colorSamples){
     uint8_t bestColor=ENV_COLOR_UNKNOWN;
     uint32_t bestCount=0;
 
@@ -623,21 +616,27 @@ if(colorSamples){
 
   // MEDIAN FILTER 3x3: pertahankan detail gelap
   // dan kurangi noise preview OLED
-for(int y=0;y<64;y++){
-  for(int x=0;x<128;x++){
-    int count=0,total=0;
-    for(int dy=-1;dy<=1;dy++){
-      for(int dx=-1;dx<=1;dx++){
-        int nx=x+dx,ny=y+dy;
-        if(nx<0||nx>=128||ny<0||ny>=64)continue;
-        count+=previewFiltered[ny*128+nx];
-        total++;
+  for(int y=0;y<64;y++){
+    for(int x=0;x<128;x++){
+      int count=0,total=0;
+
+      for(int dy=-1;dy<=1;dy++){
+        for(int dx=-1;dx<=1;dx++){
+          int nx=x+dx,ny=y+dy;
+
+          if(nx<0||nx>=128||ny<0||ny>=64)
+            continue;
+
+          count+=out[ny*128+nx];
+          total++;
+        }
       }
+      previewFiltered[y*128+x]=
+        (count>=total/2+1)?1:0;
     }
-    out[y*128+x]=(count>=total/2+1)?1:0;
+    if((y&3)==0)vTaskDelay(1);
   }
-  if((y&3)==0)vTaskDelay(1);
-}
+  memcpy(out,previewFiltered,128*64);
   return true;
 }
 
