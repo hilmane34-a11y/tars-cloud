@@ -1,9 +1,8 @@
-
 #include "env.h"
 #include <string.h>
 #include <stdlib.h>
 
-#define ENV_WIDTH 64
+#define ENV_WIDTH 96
 #define ENV_HEIGHT 32
 #define GRID_W 16
 #define GRID_H 8
@@ -130,7 +129,7 @@ bool envAnalyze(
   // Warna dan kecerahan
   for(int y=2;y<ENV_HEIGHT;y+=2){
     for(int x=0;x<ENV_WIDTH;x+=2){
-      uint8_t r=x<21?0:(x<43?1:2);
+      uint8_t r=x<32?0:(x<64?1:2);
       uint16_t p=image[y*ENV_WIDTH+x];
       addPixel(sector[r],p);
       addPixel(global,p);
@@ -156,7 +155,7 @@ bool envAnalyze(
   // Tepi, kontras, tekstur dan perubahan warna
   for(int y=1;y<ENV_HEIGHT-2;y+=2){
     for(int x=1;x<ENV_WIDTH-2;x+=2){
-      uint8_t r=x<21?0:(x<43?1:2);
+      uint8_t r=x<32?0:(x<64?1:2);
       uint16_t p=image[y*ENV_WIDTH+x];
 
       int c=getBrightness(p);
@@ -208,7 +207,7 @@ bool envAnalyze(
         if(diff>=MOTION_THRESHOLD){
           changedCells++;
           int cx=gx*ENV_WIDTH/GRID_W+ENV_WIDTH/GRID_W/2;
-          uint8_t r=cx<21?0:(cx<43?1:2);
+          uint8_t r=cx<32?0:(cx<64?1:2);
           changedRegion[r]++;
         }
       }
