@@ -423,7 +423,7 @@ void oledTask(void*){
    }
   }
 if(cameraLive&&!playing&&!oledText.length()){
-  personalityUpdate(false,false,false);
+  personalityUpdate(false,autonomyIsMoving(),false);
   drawCameraOLED();
   autonomyUpdate(true,false);
   vTaskDelay(pdMS_TO_TICKS(200));
