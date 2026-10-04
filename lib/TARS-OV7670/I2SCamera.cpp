@@ -505,6 +505,7 @@ static uint8_t classifyRGB565(uint16_t p){
   return ENV_COLOR_PURPLE;
 }
 
+
 bool I2SCamera::captureFrameData(
   uint16_t *environmentOut,
   uint8_t *previewOut
@@ -512,8 +513,12 @@ bool I2SCamera::captureFrameData(
   if(!environmentOut&&!previewOut)return false;
   lastDominantColor=ENV_COLOR_UNKNOWN;
   lastColorConfidence=0;
-  if(environmentOut)memset(environmentOut,0,128*64*sizeof(uint16_t));
-  if(previewOut)memset(previewOut,0,128*64);
+  // ENV RGB565: 96x32 = 6144 byte
+  if(environmentOut)
+    memset(environmentOut,0,96*32*sizeof(uint16_t));
+  // OLED preview tetap 128x64
+  if(previewOut)
+    memset(previewOut,0,128*64);
   uint32_t colorCount[11]={};
   uint32_t colorSamples=0;
   streamFill=0;
@@ -547,8 +552,8 @@ bool I2SCamera::captureFrameData(
       if((y&3)==0)vTaskDelay(1);
       int sourceY=blockY+y;
       if(sourceY>=yres)continue;
-      int oy=sourceY*64/yres;
-      if(oy>=64)continue;
+      // Pemetaan ENV 96x32
+      int envY=sourceY*32/yres;
       for(int x=0;x<xres;x++){
         uint16_t p=src[y*xres+x];
         if((sourceY&3)==0&&(x&3)==0){
@@ -558,19 +563,26 @@ bool I2SCamera::captureFrameData(
             colorSamples++;
           }
         }
-        int ox=x*128/xres;
-        if(ox>=128)continue;
-        int pos=oy*128+ox;
-        // ENV menerima warna RGB565 asli
-        if(environmentOut)
-          environmentOut[pos]=p;
-        // OLED hanya menerima grayscale monitor
+        // ENV RGB565 96x32
+        if(environmentOut){
+          int envX=x*96/xres;
+          if(envX<96&&envY<32){
+            int envPos=envY*96+envX;
+            environmentOut[envPos]=p;
+          }
+        }
+        // OLED grayscale tetap 128x64
         if(previewOut){
-          uint8_t r=((p>>11)&31)*255/31;
-          uint8_t g=((p>>5)&63)*255/63;
-          uint8_t b=(p&31)*255/31;
-          uint8_t gray=(77*r+150*g+29*b)>>8;
-          previewOut[pos]=(gray<=47)?1:0;
+          int oy=sourceY*64/yres;
+          int ox=x*128/xres;
+          if(ox<128&&oy<64){
+            int pos=oy*128+ox;
+            uint8_t r=((p>>11)&31)*255/31;
+            uint8_t g=((p>>5)&63)*255/63;
+            uint8_t b=(p&31)*255/31;
+            uint8_t gray=(77*r+150*g+29*b)>>8;
+            previewOut[pos]=(gray<=47)?1:0;
+          }
         }
       }
     }
