@@ -5,6 +5,7 @@ static uint32_t lastTick=0,lastSpeech=0;
 static bool resting=false;
 
 void personalityBegin(){
+  p={85,0,60,0,0};
   lastTick=lastSpeech=millis();
   resting=false;
 }
@@ -12,23 +13,28 @@ void personalityBegin(){
 void personalityUpdate(bool busy,bool explored,bool spoke){
   uint32_t now=millis();
   if(now-lastTick<1000)return;
+
+  float dt=min(1.0f,(now-lastTick)/1000.0f);
   lastTick=now;
   if(busy)return;
 
   if(resting){
-    p.energy=min(100.0f,p.energy+0.8f);
-    p.fatigue=max(0.0f,p.fatigue-1.2f);
-    p.boredom=min(100.0f,p.boredom+0.1f);
-    if(p.energy>=85 && p.fatigue<=15)resting=false;
-  }else{
-    p.boredom=min(100.0f,p.boredom+0.30f);
-    p.curiosity=min(100.0f,p.curiosity+0.08f);
+    p.energy=min(100.0f,p.energy+0.8f*dt);
+    p.fatigue=max(0.0f,p.fatigue-1.2f*dt);
+    p.boredom=min(100.0f,p.boredom+0.1f*dt);
 
+    if(p.energy>=85 && p.fatigue<=15)
+      resting=false;
+  }else{
     if(explored){
-      p.curiosity=max(0.0f,p.curiosity-8.0f);
-      p.energy=max(0.0f,p.energy-1.0f);
-      p.fatigue=min(100.0f,p.fatigue+1.5f);
-      p.boredom=max(0.0f,p.boredom-10.0f);
+      // Aktivitas eksplorasi berlangsung bertahap
+      p.energy=max(0.0f,p.energy-0.04f*dt);
+      p.fatigue=min(100.0f,p.fatigue+0.08f*dt);
+      p.curiosity=min(100.0f,p.curiosity+0.03f*dt);
+      p.boredom=max(0.0f,p.boredom-0.12f*dt);
+    }else{
+      p.boredom=min(100.0f,p.boredom+0.30f*dt);
+      p.curiosity=min(100.0f,p.curiosity+0.08f*dt);
     }
 
     if(spoke){
@@ -43,7 +49,9 @@ void personalityUpdate(bool busy,bool explored,bool spoke){
   else p.mood=0;
 }
 
-PersonalityState personalityGet(){return p;}
+PersonalityState personalityGet(){
+  return p;
+}
 
 bool personalityCanExplore(){
   return !resting && p.energy>30 &&
@@ -54,11 +62,17 @@ bool personalityNeedsRest(){
   return p.energy<=30 || p.fatigue>=70;
 }
 
-bool personalityIsResting(){return resting;}
+bool personalityIsResting(){
+  return resting;
+}
 
-void personalityStartRest(){resting=true;}
+void personalityStartRest(){
+  resting=true;
+}
 
-void personalityStopRest(){resting=false;}
+void personalityStopRest(){
+  resting=false;
+}
 
 bool personalityWantsSpeak(){
   return !resting && p.boredom>70 && p.energy>20 &&
