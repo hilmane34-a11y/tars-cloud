@@ -892,16 +892,21 @@ bool processOnlineRequest(const String &q,bool vision,bool status,bool automatic
   autonomyStop();
   ramDiag("AFTER-TTS-AUDIO-OFF");
   // Lepaskan kunci dan pulihkan kamera
-  visionLiveResume();
-  // Vision resume sudah menghidupkan kamera sendiri.
-  // Permintaan biasa perlu menghidupkannya di sini.
-  if(!vision) startCamera();
-  wheelsStop();
-  autonomyStop();
-  oledSetStatus(ok?"Siap Tuan":"AUDIO ERROR");
-  if(automatic && ok) autoSpeechDone();
-  ramDiag("AFTER-CAMERA-RESTART");
-  return ok;
+     wheelsStop();
+     autonomyStop();
+
+      oledSetStatus(ok?"Siap Tuan":"AUDIO ERROR");
+
+     visionLiveResume();
+    if(!vision) startCamera();
+
+    wheelsStop();
+    autonomyStop();
+
+    if(automatic && ok) autoSpeechDone();
+
+    ramDiag("AFTER-CAMERA-RESTART");
+    return ok;
 }
 /* AUTO SPEECH */
 bool autoSpeechCallback(const String &prompt){
