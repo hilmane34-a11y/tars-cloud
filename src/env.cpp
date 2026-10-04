@@ -7,14 +7,86 @@
 #define GRID_W 16
 #define GRID_H 8
 
-#define DARK_PIXEL 1
-#define MOTION_THRESHOLD 25
+#define MOTION_THRESHOLD 18
 #define MIN_MOTION_CELLS 3
 #define GLOBAL_CHANGE_CELLS 30
 
 static EnvState state={};
 static uint8_t previousGrid[GRID_W*GRID_H]={};
 static bool previousValid=false;
+
+struct ColorInfo{
+  uint32_t count[11];
+  uint32_t samples;
+  uint32_t brightness;
+};
+
+static uint8_t getBrightness(uint16_t p){
+  uint8_t r=((p>>11)&31)*255/31;
+  uint8_t g=((p>>5)&63)*255/63;
+  uint8_t b=(p&31)*255/31;
+  return (77*r+150*g+29*b)>>8;
+}
+
+static EnvColor getColor(uint16_t p){
+  uint8_t r=((p>>11)&31)*255/31;
+  uint8_t g=((p>>5)&63)*255/63;
+  uint8_t b=(p&31)*255/31;
+
+  uint8_t mx=max(r,max(g,b));
+  uint8_t mn=min(r,min(g,b));
+  uint8_t d=mx-mn;
+
+  if(mx<35)return ENV_COLOR_BLACK;
+  if(mn>220&&d<35)return ENV_COLOR_WHITE;
+  if(d<25)return ENV_COLOR_GRAY;
+
+  float h;
+
+  if(mx==r)h=60.0f*((float)g-b)/d;
+  else if(mx==g)h=60.0f*((float)b-r)/d+120;
+  else h=60.0f*((float)r-g)/d+240;
+
+  if(h<0)h+=360;
+
+  if(h<15||h>=345)return ENV_COLOR_RED;
+  if(h<40)return ENV_COLOR_ORANGE;
+  if(h<70)return ENV_COLOR_YELLOW;
+  if(h<165)return ENV_COLOR_GREEN;
+  if(h<200)return ENV_COLOR_CYAN;
+  if(h<255)return ENV_COLOR_BLUE;
+  return ENV_COLOR_PURPLE;
+}
+
+static void addPixel(ColorInfo &info,uint16_t p){
+  EnvColor c=getColor(p);
+  if(c<=ENV_COLOR_PURPLE){
+    info.count[c]++;
+    info.samples++;
+  }
+  info.brightness+=getBrightness(p);
+}
+
+static EnvColor bestColor(
+  const ColorInfo &info,
+  uint8_t &confidence
+){
+  confidence=0;
+  if(!info.samples)return ENV_COLOR_UNKNOWN;
+
+  uint8_t best=ENV_COLOR_UNKNOWN;
+  uint32_t count=0;
+
+  for(uint8_t i=1;i<=ENV_COLOR_PURPLE;i++){
+    if(info.count[i]>count){
+      count=info.count[i];
+      best=i;
+    }
+  }
+
+  confidence=(uint32_t)count*100/info.samples;
+  return (EnvColor)best;
+}
 
 void envBegin(){
   state={};
@@ -28,22 +100,17 @@ void envResetMotion(){
 }
 
 bool envAnalyze(
-  const uint8_t*image,
-  EnvState&result
+  const uint16_t *image,
+  EnvState &result
 ){
-  return envAnalyze(
-    image,
-    ENV_COLOR_UNKNOWN,
-    0,
-    result
-  );
+  return envAnalyze(image,ENV_COLOR_UNKNOWN,0,result);
 }
 
 bool envAnalyze(
-  const uint8_t*image,
+  const uint16_t *image,
   uint8_t dominantColor,
   uint8_t colorConfidence,
-  EnvState&result
+  EnvState &result
 ){
   result={};
 
@@ -53,37 +120,47 @@ bool envAnalyze(
     return false;
   }
 
-  uint16_t dark[3]={},total[3]={};
-  uint8_t currentGrid[GRID_W*GRID_H]={};
-  uint8_t changedCells=0;
-  uint8_t changedRegion[3]={};
+  ColorInfo sector[3]={};
+  ColorInfo global={};
 
-  for(int y=8;y<60;y+=2){
+  uint8_t currentGrid[GRID_W*GRID_H]={};
+  uint8_t changedRegion[3]={};
+  uint8_t changedCells=0;
+
+  // Analisis warna dan brightness per sektor
+  for(int y=4;y<ENV_HEIGHT;y+=2){
     for(int x=0;x<ENV_WIDTH;x+=2){
       uint8_t region=x<42?0:(x<86?1:2);
+      uint16_t p=image[y*ENV_WIDTH+x];
 
-      total[region]++;
-
-      if(image[y*ENV_WIDTH+x]==DARK_PIXEL)
-        dark[region]++;
+      addPixel(sector[region],p);
+      addPixel(global,p);
     }
   }
 
-  uint8_t darkRate[3]={};
-  uint8_t clear[3]={};
-
   for(int i=0;i<3;i++){
-    if(!total[i]){
+    if(!sector[i].samples){
       state=result;
       previousValid=false;
       return false;
     }
-
-    darkRate[i]=(uint32_t)dark[i]*100/total[i];
-    clear[i]=darkRate[i]<45;
   }
 
-  // Grid 16x8 untuk mendeteksi perubahan gambar
+  result.leftBright=
+    sector[0].brightness/sector[0].samples;
+  result.centerBright=
+    sector[1].brightness/sector[1].samples;
+  result.rightBright=
+    sector[2].brightness/sector[2].samples;
+
+  result.leftColor=bestColor(
+    sector[0],result.leftColorConfidence);
+  result.centerColor=bestColor(
+    sector[1],result.centerColorConfidence);
+  result.rightColor=bestColor(
+    sector[2],result.rightColorConfidence);
+
+  // Grid brightness untuk deteksi perubahan frame
   for(int gy=0;gy<GRID_H;gy++){
     for(int gx=0;gx<GRID_W;gx++){
       int x0=gx*ENV_WIDTH/GRID_W;
@@ -91,20 +168,18 @@ bool envAnalyze(
       int y0=gy*ENV_HEIGHT/GRID_H;
       int y1=(gy+1)*ENV_HEIGHT/GRID_H;
 
-      uint16_t darkCount=0;
-      uint16_t pixelCount=0;
+      uint32_t sum=0;
+      uint16_t samples=0;
 
       for(int y=y0;y<y1;y+=2){
         for(int x=x0;x<x1;x+=2){
-          if(image[y*ENV_WIDTH+x]==DARK_PIXEL)
-            darkCount++;
-
-          pixelCount++;
+          sum+=getBrightness(image[y*ENV_WIDTH+x]);
+          samples++;
         }
       }
 
-      currentGrid[gy*GRID_W+gx]=pixelCount
-        ?(uint32_t)darkCount*100/pixelCount:0;
+      currentGrid[gy*GRID_W+gx]=
+        samples?sum/samples:0;
     }
   }
 
@@ -114,12 +189,12 @@ bool envAnalyze(
       for(int gx=0;gx<GRID_W;gx++){
         int index=gy*GRID_W+gx;
 
-        int difference=abs(
+        int diff=abs(
           (int)currentGrid[index]-
           (int)previousGrid[index]
         );
 
-        if(difference>=MOTION_THRESHOLD){
+        if(diff>=MOTION_THRESHOLD){
           changedCells++;
 
           int centerX=gx*ENV_WIDTH/GRID_W+
@@ -139,18 +214,18 @@ bool envAnalyze(
 
   result.valid=true;
 
-  result.leftClear=clear[0];
-  result.centerClear=clear[1];
-  result.rightClear=clear[2];
-
-  result.leftBright=100-darkRate[0];
-  result.centerBright=100-darkRate[1];
-  result.rightBright=100-darkRate[2];
+  // Ambang brightness dipertahankan sebagai petunjuk,
+  // bukan pengenalan objek atau pengukuran jarak.
+  result.leftClear=result.leftBright>35;
+  result.centerClear=result.centerBright>35;
+  result.rightClear=result.rightBright>35;
 
   result.obstacle=!result.centerClear;
 
   uint8_t clearCount=
-    clear[0]+clear[1]+clear[2];
+    result.leftClear+
+    result.centerClear+
+    result.rightClear;
 
   result.confidence=clearCount*100/3;
 
@@ -173,13 +248,13 @@ bool envAnalyze(
     result.event=ENV_NONE;
   }
 
-  // Informasi warna dominan dari RGB565 kamera
-  if(dominantColor<=ENV_COLOR_PURPLE){
+  result.dominantColor=bestColor(
+    global,result.colorConfidence);
+
+  if(dominantColor>ENV_COLOR_UNKNOWN&&
+     dominantColor<=ENV_COLOR_PURPLE){
     result.dominantColor=(EnvColor)dominantColor;
     result.colorConfidence=colorConfidence;
-  }else{
-    result.dominantColor=ENV_COLOR_UNKNOWN;
-    result.colorConfidence=0;
   }
 
   state=result;
