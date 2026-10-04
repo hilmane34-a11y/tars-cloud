@@ -27,7 +27,24 @@ void envResetMotion(){
   previousValid=false;
 }
 
-bool envAnalyze(const uint8_t*image,EnvState&result){
+bool envAnalyze(
+  const uint8_t*image,
+  EnvState&result
+){
+  return envAnalyze(
+    image,
+    ENV_COLOR_UNKNOWN,
+    0,
+    result
+  );
+}
+
+bool envAnalyze(
+  const uint8_t*image,
+  uint8_t dominantColor,
+  uint8_t colorConfidence,
+  EnvState&result
+){
   result={};
 
   if(!image){
@@ -41,7 +58,6 @@ bool envAnalyze(const uint8_t*image,EnvState&result){
   uint8_t changedCells=0;
   uint8_t changedRegion[3]={};
 
-  // Analisis tiga area: kiri, tengah, kanan
   for(int y=8;y<60;y+=2){
     for(int x=0;x<ENV_WIDTH;x+=2){
       uint8_t region=x<42?0:(x<86?1:2);
@@ -155,6 +171,15 @@ bool envAnalyze(const uint8_t*image,EnvState&result){
     }
   }else{
     result.event=ENV_NONE;
+  }
+
+  // Informasi warna dominan dari RGB565 kamera
+  if(dominantColor<=ENV_COLOR_PURPLE){
+    result.dominantColor=(EnvColor)dominantColor;
+    result.colorConfidence=colorConfidence;
+  }else{
+    result.dominantColor=ENV_COLOR_UNKNOWN;
+    result.colorConfidence=0;
   }
 
   state=result;
