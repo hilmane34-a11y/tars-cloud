@@ -5,7 +5,7 @@
 #define AUTO_SPEED 255
 #define FORWARD_MS 3000
 #define TURN_MS 480
-#define ENV_TIMEOUT 700
+#define ENV_TIMEOUT 1800
 #define REST_CONFIRM_MS 1500
 
 enum AutoState {
