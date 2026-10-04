@@ -255,7 +255,11 @@ if(cameraMux&&
   if(cameraLive&&camera&&cameraOK&&!playing)
    ok=I2SCamera::capturePreview(cameraPreview);
   if(ok){
-   analyzed=envAnalyze(cameraPreview,environment);
+   analyzed=envAnalyze(  
+   cameraPreview,
+   I2SCamera::dominantColor(),
+   I2SCamera::dominantColorConfidence(),
+   environment);
    if(analyzed)previewReady=true;
   }
   xSemaphoreGive(previewMux);
