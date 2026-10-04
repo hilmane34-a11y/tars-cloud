@@ -8,6 +8,7 @@
 #include <mbedtls/base64.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
+#include <stdlib.h>
 #include "config.h"
 
 #ifndef TARS_LIVE_TOKEN
@@ -27,13 +28,20 @@ extern void stopCamera();
 extern void startCamera();
 
 static uint8_t visionJpeg[VISION_JPEG_MAX];
-static char visionJson[VISION_JSON_MAX];
+static char *visionJson = nullptr;
 static char questionJson[1024];
 
 static portMUX_TYPE visionLock = portMUX_INITIALIZER_UNLOCKED;
 static volatile bool visionBusy = false;
 static bool visionPaused = false;
 static bool cameraStoppedForVision = false;
+
+static void freeVisionJSON() {
+    if (visionJson) {
+        free(visionJson);
+        visionJson = nullptr;
+    }
+}
 
 static bool acquireVision() {
     bool ok = false;
@@ -64,10 +72,9 @@ static String cloudURL() {
     return url;
 }
 
-// CAPTURE SATU FRAME SEBELUM KAMERA DIMATIKAN
+// CAPTURE JPEG SEBELUM KAMERA DIMATIKAN
 static bool captureFrame(size_t &length) {
     length = 0;
-
     if (!cameraMux) return false;
 
     if (xSemaphoreTake(cameraMux, pdMS_TO_TICKS(3000)) != pdTRUE) {
@@ -96,22 +103,29 @@ static bool captureFrame(size_t &length) {
     return true;
 }
 
-// KAMERA OFF SETELAH JPEG BERHASIL
-static bool stopCameraForTLS(){
-    cameraStoppedForVision=true;
+// KAMERA OFF SEBELUM TLS
+static bool stopCameraForTLS() {
+    cameraStoppedForVision = true;
     stopCamera();
 
-    bool stopped=!camera && !cameraLive && !cameraOK;
+    bool stopped = !camera && !cameraLive && !cameraOK;
 
-    Serial.printf("TARS: VISION CAMERA OFF=%d HEAP=%u LARGEST=%u\n",
-        stopped,ESP.getFreeHeap(),ESP.getMaxAllocHeap());
+    Serial.printf(
+        "TARS: VISION CAMERA OFF=%d HEAP=%u LARGEST=%u\n",
+        stopped, ESP.getFreeHeap(), ESP.getMaxAllocHeap()
+    );
 
     return stopped;
 }
-// JSON + BASE64 JPEG
-static bool buildVisionJSON(const String &question, size_t jpegLength,
-                            size_t &bodyLength) {
+
+// JSON + BASE64
+static bool buildVisionJSON(
+    const String &question,
+    size_t jpegLength,
+    size_t &bodyLength
+) {
     bodyLength = 0;
+    if (!visionJson || jpegLength > VISION_JPEG_MAX) return false;
 
     JsonDocument questionDoc;
     questionDoc["question"] = question;
@@ -125,18 +139,18 @@ static bool buildVisionJSON(const String &question, size_t jpegLength,
     if (!qlen || qlen >= sizeof(questionJson)) return false;
 
     int prefix = snprintf(
-        visionJson, sizeof(visionJson),
+        visionJson, VISION_JSON_MAX,
         "{\"question\":%s,\"format\":\"jpeg\",\"image\":\"",
         questionJson
     );
 
-    if (prefix <= 0 || (size_t)prefix >= sizeof(visionJson))
+    if (prefix <= 0 || (size_t)prefix >= VISION_JSON_MAX)
         return false;
 
     size_t encodedLength = 0;
     int result = mbedtls_base64_encode(
         (unsigned char *)visionJson + prefix,
-        sizeof(visionJson) - prefix,
+        VISION_JSON_MAX - prefix,
         &encodedLength,
         visionJpeg,
         jpegLength
@@ -148,7 +162,7 @@ static bool buildVisionJSON(const String &question, size_t jpegLength,
     }
 
     size_t end = (size_t)prefix + encodedLength;
-    if (end + 3 > sizeof(visionJson)) return false;
+    if (end + 3 > VISION_JSON_MAX) return false;
 
     visionJson[end++] = '"';
     visionJson[end++] = '}';
@@ -158,20 +172,37 @@ static bool buildVisionJSON(const String &question, size_t jpegLength,
     return true;
 }
 
-// KIRIM FOTO + PERTANYAAN DALAM SATU JSON
-static String sendVisionJSON(const String &question,
-                             size_t jpegLength) {
+// TLS + HTTP
+static String sendVisionJSON(
+    const String &question,
+    size_t jpegLength
+) {
     if (WiFi.status() != WL_CONNECTED) {
         Serial.println("TARS: VISION WIFI DISCONNECTED");
         return "";
     }
 
-    Serial.printf("TARS: VISION TLS HEAP=%u LARGEST=%u\n",
-                  ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+    Serial.printf(
+        "TARS: VISION TLS HEAP=%u LARGEST=%u\n",
+        ESP.getFreeHeap(), ESP.getMaxAllocHeap()
+    );
+
+    // JSON DIALOKASIKAN SETELAH KAMERA OFF
+    visionJson = (char *)malloc(VISION_JSON_MAX);
+
+    if (!visionJson) {
+        Serial.printf(
+            "TARS: VISION JSON MALLOC FAILED HEAP=%u LARGEST=%u\n",
+            ESP.getFreeHeap(), ESP.getMaxAllocHeap()
+        );
+        return "";
+    }
 
     size_t bodyLength = 0;
+
     if (!buildVisionJSON(question, jpegLength, bodyLength)) {
         Serial.println("TARS: VISION JSON BUILD FAILED");
+        freeVisionJSON();
         return "";
     }
 
@@ -180,15 +211,19 @@ static String sendVisionJSON(const String &question,
     client.setTimeout(20000);
 
     HTTPClient http;
+
     if (!http.begin(client, cloudURL() + "/vision")) {
         Serial.println("TARS: VISION HTTP BEGIN FAILED");
+        freeVisionJSON();
         return "";
     }
 
     http.setTimeout(45000);
     http.addHeader("Content-Type", "application/json");
-    http.addHeader("Authorization",
-                   String("Bearer ") + TARS_LIVE_TOKEN);
+    http.addHeader(
+        "Authorization",
+        String("Bearer ") + TARS_LIVE_TOKEN
+    );
 
     int code = http.POST(
         (uint8_t *)visionJson,
@@ -198,6 +233,7 @@ static String sendVisionJSON(const String &question,
     Serial.printf("TARS: VISION HTTP=%d\n", code);
 
     String answer;
+
     if (code >= 200 && code < 300) {
         String response = http.getString();
         JsonDocument doc;
@@ -214,18 +250,23 @@ static String sendVisionJSON(const String &question,
 
     http.end();
 
-    Serial.printf("TARS: VISION TLS DONE HEAP=%u LARGEST=%u\n",
-                  ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+    // BEBASKAN JSON SETELAH HTTP SELESAI
+    freeVisionJSON();
+
+    Serial.printf(
+        "TARS: VISION TLS DONE HEAP=%u LARGEST=%u\n",
+        ESP.getFreeHeap(), ESP.getMaxAllocHeap()
+    );
 
     return answer;
 }
 
-// BEGIN: TIDAK ADA TASK UPLOAD BERKALA
+// BEGIN
 void visionLiveBegin() {
     Serial.println("TARS: ON-DEMAND VISION READY");
 }
 
-// PAUSE: KUNCI SIKLUS, BELUM MEMATIKAN KAMERA
+// PAUSE
 bool visionLivePause() {
     if (!visionLiveEnabled()) return false;
     if (visionPaused) return true;
@@ -242,26 +283,32 @@ bool visionLivePause() {
     return true;
 }
 
-// RESUME: DIPANGGIL SETELAH TTS DAN AUDIO SELESAI
-   void visionLiveResume() {
+// RESUME SETELAH TTS DAN AUDIO SELESAI
+void visionLiveResume() {
     if (!visionPaused) return;
 
     if (playing) {
         Serial.println("TARS: VISION RESUME BLOCKED - AUDIO ACTIVE");
         return;
     }
+
     if (cameraStoppedForVision &&
         visionLiveEnabled() &&
         WiFi.status() == WL_CONNECTED) {
         startCamera();
     }
+
     cameraStoppedForVision = false;
     visionPaused = false;
     releaseVision();
-    Serial.printf("TARS: VISION CYCLE END HEAP=%u LARGEST=%u\n",
-                  ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+
+    Serial.printf(
+        "TARS: VISION CYCLE END HEAP=%u LARGEST=%u\n",
+        ESP.getFreeHeap(), ESP.getMaxAllocHeap()
+    );
 }
-// ASK: CAPTURE -> CAMERA OFF -> TLS -> JSON
+
+// ASK: CAPTURE -> CAMERA OFF -> TLS -> FREE JSON
 String visionLiveAsk(const String &question) {
     if (!visionLiveEnabled() || !visionPaused || !visionBusy)
         return "";
@@ -288,7 +335,6 @@ String visionLiveAsk(const String &question) {
     String answer = sendVisionJSON(question, jpegLength);
 
     memset(visionJpeg, 0, jpegLength);
-    memset(visionJson, 0, sizeof(visionJson));
 
     return answer;
 }
