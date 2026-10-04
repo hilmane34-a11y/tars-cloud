@@ -97,6 +97,7 @@ WebSocketsClient sttWS;
 OV7670*camera=nullptr;
 SemaphoreHandle_t previewMux=nullptr;
 SemaphoreHandle_t cameraMux=nullptr;
+static uint8_t cameraEnvironment[128*64];
 static uint8_t cameraPreview[128*64];
 bool previewReady=false;
 portMUX_TYPE visionEventMux=portMUX_INITIALIZER_UNLOCKED;
