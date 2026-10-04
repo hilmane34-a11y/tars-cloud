@@ -384,8 +384,11 @@ bool I2SCamera::encodeFrameToJPEG(
   for(int i=0;i<STREAM_BLOCKS;i++)
     streamState[i]=0;
 
+  const size_t jpegCapacity =
+   min((size_t)OV7670_MAX_JPEG_SIZE,(size_t)20000);
+
   if(!JPEGEncoderWrapper::begin(
-       outBuffer,OV7670_MAX_JPEG_SIZE,xres,yres,quality))
+     outBuffer,jpegCapacity,xres,yres,quality))
     return false;
 
   if(!i2sRunChecked()){
