@@ -88,7 +88,7 @@ static bool captureFrame(size_t &length) {
 
     if (ready)
         ok = I2SCamera::encodeFrameToJPEG(
-            visionJpeg, &length, 10
+            visionJpeg, &length, 35
         );
 
     xSemaphoreGive(cameraMux);
