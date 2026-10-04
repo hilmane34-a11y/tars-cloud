@@ -373,10 +373,12 @@ void I2SCamera::dmaBufferInit(int bytes)
   dmaBuffer[dmaBufferCount-1]->next(dmaBuffer[0]);
 }
 
+
 bool I2SCamera::encodeFrameToJPEG(
   uint8_t* outBuffer,size_t* outLen,int quality)
 {
   if(!outBuffer||!outLen)return false;
+  *outLen=0;
 
   streamFill=0;
   streamLine=0;
@@ -390,11 +392,16 @@ bool I2SCamera::encodeFrameToJPEG(
     streamState[i]=0;
 
   if(!JPEGEncoderWrapper::begin(
-       outBuffer,OV7670_MAX_JPEG_SIZE,xres,yres,quality))
+       outBuffer,OV7670_MAX_JPEG_SIZE,
+       xres,yres,quality)){
+    Serial.println("TARS: JPEG BEGIN FAILED");
     return false;
+  }
 
   if(!i2sRunChecked()){
-    JPEGEncoderWrapper::finish(outLen);
+    size_t discard=0;
+    JPEGEncoderWrapper::finish(&discard);
+    Serial.println("TARS: JPEG CAMERA START FAILED");
     return false;
   }
 
@@ -403,9 +410,13 @@ bool I2SCamera::encodeFrameToJPEG(
   uint32_t start=millis();
 
   while(blocksDone<blocksNeeded){
+
     if(millis()-start>CAMERA_CAPTURE_TIMEOUT){
       i2sStop();
-      JPEGEncoderWrapper::finish(outLen);
+      size_t discard=0;
+      JPEGEncoderWrapper::finish(&discard);
+      Serial.printf("TARS: JPEG TIMEOUT BLOCK=%d/%d\n",
+                    blocksDone,blocksNeeded);
       return false;
     }
 
@@ -418,9 +429,13 @@ bool I2SCamera::encodeFrameToJPEG(
     readyTail=(readyTail+1)%STREAM_BLOCKS;
     streamReady--;
 
-    if(!JPEGEncoderWrapper::addBlock(streamBlock[idx],xres,STREAM_LINES)){
+    if(!JPEGEncoderWrapper::addBlock(
+         streamBlock[idx],xres,STREAM_LINES)){
       i2sStop();
-      JPEGEncoderWrapper::finish(outLen);
+      size_t discard=0;
+      JPEGEncoderWrapper::finish(&discard);
+      Serial.printf("TARS: JPEG ADD BLOCK FAILED AT=%d\n",
+                    blocksDone);
       return false;
     }
 
@@ -431,8 +446,25 @@ bool I2SCamera::encodeFrameToJPEG(
   }
 
   i2sStop();
-  return JPEGEncoderWrapper::finish(outLen);
+
+  if(!JPEGEncoderWrapper::finish(outLen)){
+    *outLen=0;
+    Serial.println("TARS: JPEG FINISH FAILED");
+    return false;
+  }
+
+  if(!*outLen||*outLen>OV7670_MAX_JPEG_SIZE){
+    Serial.printf("TARS: JPEG SIZE INVALID=%u\n",
+                  (unsigned)*outLen);
+    *outLen=0;
+    return false;
+  }
+
+  Serial.printf("TARS: JPEG CAPTURE OK SIZE=%u\n",
+                (unsigned)*outLen);
+  return true;
 }
+
 uint8_t I2SCamera::dominantColor(){
   return lastDominantColor;
 }
