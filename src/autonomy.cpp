@@ -3,7 +3,7 @@
 #include "personality.h"
 
 #define AUTO_SPEED 220
-#define FORWARD_MS 3000
+#define FORWARD_MS 30000
 #define TURN_MS 30000
 #define ENV_TIMEOUT 4000
 #define REST_CONFIRM_MS 1500
