@@ -301,7 +301,6 @@ if(xSemaphoreTake(cameraMux,portMAX_DELAY)==pdTRUE){
   }
   xSemaphoreGive(cameraMux);
 }
-    Serial.printf("CAM ok=%d analyzed=%d\n",ok,analyzed);
      if(ok&&analyzed){
   autonomySetEnvironment(environment);
   if(tarsMode==MODE_ONLINE&&
@@ -1127,7 +1126,7 @@ processOnlineRequest(request,vision,status,false);
 /* SETUP */
 void setup(){
  Serial.begin(SERIAL_BAUD);
- deepSleepBegin();
+ //deepSleepBegin();
  Wire.begin(OLED_SDA,OLED_SCL);Wire.setClock(400000);
  oledOK=oled.begin(SSD1306_SWITCHCAPVCC,OLED_ADDR);
  if(oledOK){
