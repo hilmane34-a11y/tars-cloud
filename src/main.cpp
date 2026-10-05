@@ -303,26 +303,23 @@ if(xSemaphoreTake(cameraMux,portMAX_DELAY)==pdTRUE){
 }
     Serial.printf("CAM ok=%d analyzed=%d\n",ok,analyzed);
      if(ok&&analyzed){
-      autonomySetEnvironment(environment);
-      if(tarsMode==MODE_ONLINE&&
-         environment.event!=ENV_NONE&&
-         millis()-lastVisionEventAt>=VISION_EVENT_COOLDOWN_MS){
-        portENTER_CRITICAL(&visionEventMux);
-        pendingVisionCheck=true;
-        portEXIT_CRITICAL(&visionEventMux);
-        lastVisionEventAt=millis();
-      }
-      frameErrors=0;
-    }else{
-      autonomySetEnvironment(EnvState{});
-      frameErrors++;
-      if(frameErrors>=3&&cameraLive)
-        autonomySetEnvironment(EnvState{});
-    }
-    if(cameraLive&&!playing)
-      autonomyUpdate(true,false);
-    vTaskDelay(1);
+  autonomySetEnvironment(environment);
+  if(tarsMode==MODE_ONLINE&&
+     environment.event!=ENV_NONE&&
+     millis()-lastVisionEventAt>=VISION_EVENT_COOLDOWN_MS){
+    portENTER_CRITICAL(&visionEventMux);
+    pendingVisionCheck=true;
+    portEXIT_CRITICAL(&visionEventMux);
+    lastVisionEventAt=millis();
   }
+  frameErrors=0;
+}else{
+  frameErrors++;
+}
+if(cameraLive&&!playing)
+  autonomyUpdate(true,false);
+vTaskDelay(1);
+ }
 }
 /* VISION */
 bool needsVision(String q){
