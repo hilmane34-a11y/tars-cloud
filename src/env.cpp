@@ -455,19 +455,6 @@ bool envAnalyze(
     result.colorConfidence=
       colorConfidence;
   }
-
-  if(millis()-lastEnvDebug>=500){
-
-    lastEnvDebug=millis();
-      result.leftClear,
-      result.centerClear,
-      result.rightClear,
-      result.obstacle,
-      result.valid,
-      result.motion
-    );
-  }
-
   state=result;
 
   return true;
