@@ -131,18 +131,30 @@ if(!dmaBuffer||dmaBufferCount<=0||!i2sInterruptHandle){
   );
   return false;
 }
-if(!waitVSync(1,50)){
-  Serial.println("TARS: I2S FAIL VSYNC HIGH");
-  return false;
-}
-if(!waitVSync(0,50)){
-  Serial.println("TARS: I2S FAIL VSYNC LOW");
-  return false;
-}
 esp_intr_disable(i2sInterruptHandle);
+
 if(!i2sConfReset()){
-  Serial.println("TARS: I2S FAIL RESET");
+  Serial.println("TARS: I2S RESET FAILED");
   return false;
+}
+// Sinkronisasi VSYNC.
+// Tidak langsung menggagalkan capture hanya karena satu pulse terlewat.
+uint32_t vs=millis();
+
+while(gpio_get_level(I2SCamera::vSyncPin)!=0){
+  if(millis()-vs>=100){
+    Serial.println("TARS: VSYNC LOW TIMEOUT");
+    return false;
+  }
+  delay(1);
+}
+vs=millis();
+while(gpio_get_level(I2SCamera::vSyncPin)!=1){
+  if(millis()-vs>=100){
+    Serial.println("TARS: VSYNC HIGH TIMEOUT");
+    return false;
+  }
+  delay(1);
 }
   blocksReceived=0;
   dmaBufferActive=0;
