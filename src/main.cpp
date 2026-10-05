@@ -337,13 +337,7 @@ if(ok&&analyzed){
   if(frameErrors>=3&&cameraLive)
     autonomySetEnvironment(EnvState{});
 }
-if(
-  cameraLive &&
-  !playing &&
-  !sttConnected &&
-  !aiBusy &&
-  !surpriseActive
-){
+if(cameraLive && !playing && !sttConnected && !aiBusy && !surpriseActive )
   autonomyUpdate(true,false);
     vTaskDelay(1);
   }
