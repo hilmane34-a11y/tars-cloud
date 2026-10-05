@@ -1,6 +1,5 @@
 #pragma once
 #include <Arduino.h>
-#include "autonomy.h"
 
 enum EnvEvent:uint8_t{
   ENV_NONE,
