@@ -436,7 +436,7 @@ bool I2SCamera::captureFrameData(
   streamError=false;
   for(int i=0;i<STREAM_BLOCKS;i++)
     streamState[i]=0;
-if(!i2sRunChecked()){ Serial.println("TARS: CAM FAIL = I2S START");
+ i2sRun();
   return false;
 }
   const int blocksNeeded=(yres+STREAM_LINES-1)/STREAM_LINES;
