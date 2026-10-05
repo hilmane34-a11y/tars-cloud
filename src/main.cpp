@@ -982,7 +982,6 @@ bool autoSpeechCallback(const String &prompt){
   }
   return false;
 }
-//suprise\\
 void processSurprise(){
   bool trigger=false;
   portENTER_CRITICAL(&visionEventMux);
