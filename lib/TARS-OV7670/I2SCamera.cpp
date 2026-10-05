@@ -121,61 +121,56 @@ void I2SCamera::i2sStop()
 bool I2SCamera::i2sRunChecked()
 {
   DEBUG_PRINTLN("I2S Run");
-if(!dmaBuffer||dmaBufferCount<=0||!i2sInterruptHandle){
-  Serial.printf(
-    "TARS: I2S FAIL DMA dma=%p count=%d irq=%p\n",
-    dmaBuffer,
-    dmaBufferCount,
-    i2sInterruptHandle
-  );
-  return false;
-}
-esp_intr_disable(i2sInterruptHandle);
-
-if(!i2sConfReset()){
-  Serial.println("TARS: I2S RESET FAILED");
-  return false;
-}
-// Sinkronisasi VSYNC.
-// Tidak langsung menggagalkan capture hanya karena satu pulse terlewat.
-uint32_t vs=millis();
-
-while(gpio_get_level(I2SCamera::vSyncPin)!=0){
-  if(millis()-vs>=100){
-    Serial.println("TARS: VSYNC LOW TIMEOUT");
+  if(!dmaBuffer || dmaBufferCount<=0 || !i2sInterruptHandle){
+    Serial.printf(
+      "TARS: I2S FAIL DMA dma=%p count=%d irq=%p\n",
+      dmaBuffer,dmaBufferCount,i2sInterruptHandle
+    );
     return false;
   }
-  delay(1);
-}
-vs=millis();
-while(gpio_get_level(I2SCamera::vSyncPin)!=1){
-  if(millis()-vs>=100){
-    Serial.println("TARS: VSYNC HIGH TIMEOUT");
+  esp_intr_disable(i2sInterruptHandle);
+  if(!i2sConfReset()){
+    Serial.println("TARS: I2S RESET FAILED");
     return false;
   }
-  delay(1);
-}
+  /*
+   * Jangan menunggu urutan VSYNC LOW -> HIGH.
+   * Tunggu sampai VSYNC berada LOW terlebih dahulu,
+   * lalu langsung siapkan DMA dan mulai I2S.
+   * Capture akan mengikuti frame berikutnya.
+   */
+  uint32_t start=millis();
+  while(gpio_get_level(vSyncPin)!=0){
+    if(millis()-start>=100){
+      Serial.println("TARS: VSYNC LOW TIMEOUT");
+      return false;
+    }
+    delay(1);
+  }
   blocksReceived=0;
   dmaBufferActive=0;
   framePointer=0;
-
-  DEBUG_PRINT("Sample count ");
-  DEBUG_PRINTLN(dmaBuffer[0]->sampleCount());
-
+  streamFill=0;
+  streamLine=0;
+  streamReady=0;
+  readyHead=0;
+  readyTail=0;
+  streamFrameDone=false;
+  streamError=false;
+  for(int i=0;i<STREAM_BLOCKS;i++)
+    streamState[i]=0;
   I2S0.rx_eof_num=dmaBuffer[0]->sampleCount();
-  I2S0.in_link.addr=(uint32_t)&(dmaBuffer[0]->descriptor);
+  I2S0.in_link.addr=
+    (uint32_t)&(dmaBuffer[0]->descriptor);
   I2S0.in_link.start=1;
   I2S0.int_clr.val=I2S0.int_raw.val;
   I2S0.int_ena.val=0;
   I2S0.int_ena.in_done=1;
-
   esp_intr_enable(i2sInterruptHandle);
   esp_intr_enable(vSyncInterruptHandle);
   I2S0.conf.rx_start=1;
-
   return true;
 }
-
 // Tetap void agar kompatibel dengan pemanggil lama.
 void I2SCamera::i2sRun()
 {
