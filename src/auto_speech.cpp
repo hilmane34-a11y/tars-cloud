@@ -17,16 +17,16 @@ static uint32_t lastVisionRequest=0;
 
 static String randomStyle(){
   switch(random(5)){
-    case 0: return "Gunakan gaya santai dan sedikit humor.";
-    case 1: return "Gunakan gaya penasaran dan spontan.";
-    case 2: return "Gunakan gaya cerdas, ringan, dan natural.";
-    case 3: return "Gunakan gaya sedikit cuek tetapi tetap ramah.";
+    case 0:return "Gunakan gaya santai dan sedikit humor.";
+    case 1:return "Gunakan gaya penasaran dan spontan.";
+    case 2:return "Gunakan gaya cerdas, ringan, dan natural.";
+    case 3:return "Gunakan gaya sedikit cuek tetapi tetap ramah.";
     default:return "Gunakan gaya akrab dan ekspresif.";
   }
 }
 
 static void queueVision(const String &prompt){
-  if(prompt.length()==0)return;
+  if(!prompt.length())return;
 
   visionPrompt=prompt;
   visionQueued=true;
@@ -40,59 +40,80 @@ void autoSpeechBegin(AutoSpeechCallback callback){
   visionQueued=false;
 
   visionPrompt="";
+
   lastEvent=0;
   lastVisionRequest=0;
 
   randomSeed(micros());
 }
 
-void autoSpeechNotifyVision(const String &description){
-  if(description.length()==0)return;
+void autoSpeechNotifyVision(
+  const String &description
+){
+  if(!description.length())return;
 
   queueVision(
-    "Amati gambar kamera saat ini. Konteks: "+
+    "Amati gambar kamera saat ini. "
+    "Konteks pengamatan: "+
     description+
-    ". Ceritakan hanya jika ada sesuatu yang benar-benar menarik atau penting. "
-    "Jika tidak ada hal penting, jawab [DIAM]."
+    ". Perhatikan apakah ada sesuatu yang "
+    "menarik, baru, tidak biasa, atau penting "
+    "bagi tuan. Jika tidak ada sesuatu yang "
+    "layak dikomentari, jawab [DIAM]. "
+    "Jangan mengarang apa yang terlihat."
   );
 }
 
-void autoSpeechNotifyVisionEvent(EnvEvent event){
+void autoSpeechNotifyVisionEvent(
+  EnvEvent event
+){
   if(event==ENV_NONE)return;
 
   uint32_t now=millis();
 
-  if(lastEvent!=0 &&
-     now-lastEvent<AUTO_VISION_COOLDOWN)
+  if(
+    lastEvent!=0 &&
+    now-lastEvent<AUTO_VISION_COOLDOWN
+  )
     return;
-
-  lastEvent=now;
 
   String description;
 
   switch(event){
+
     case ENV_MOTION_LEFT:
-      description="Ada gerakan di sisi kiri";
+      description=
+        "Ada perubahan atau gerakan "
+        "yang terdeteksi di sisi kiri.";
       break;
 
     case ENV_MOTION_CENTER:
-      description="Ada gerakan di bagian tengah";
+      description=
+        "Ada perubahan atau gerakan "
+        "yang terdeteksi di bagian tengah.";
       break;
 
     case ENV_MOTION_RIGHT:
-      description="Ada gerakan di sisi kanan";
+      description=
+        "Ada perubahan atau gerakan "
+        "yang terdeteksi di sisi kanan.";
       break;
 
     case ENV_SCENE_CHANGED:
-      description="Kondisi pemandangan berubah";
+      description=
+        "Kondisi pemandangan lingkungan "
+        "berubah cukup signifikan.";
       break;
 
     default:
-      description="Ada perubahan lingkungan yang terdeteksi";
-      break;
+      return;
   }
 
-  autoSpeechNotifyVision(description);
+  lastEvent=now;
+
+  autoSpeechNotifyVision(
+    description
+  );
 }
 
 void autoSpeechUpdate(
@@ -100,45 +121,67 @@ void autoSpeechUpdate(
   bool listening,
   bool speaking
 ){
-  if(!enabled || listening || speaking ||
-     pending || processing ||
-     !speakCallback)
+  if(
+    !enabled ||
+    listening ||
+    speaking ||
+    pending ||
+    processing ||
+    !speakCallback
+  )
     return;
 
-  if(personalityIsResting())return;
+  if(personalityIsResting())
+    return;
 
-  PersonalityState state=personalityGet();
+  PersonalityState state=
+    personalityGet();
 
-  if(state.energy<=20 || state.fatigue>=80)
+  if(
+    state.energy<=20 ||
+    state.fatigue>=80
+  )
     return;
 
   uint32_t now=millis();
 
-  // PRIORITAS 1: VISION KARENA RASA PENASARAN
-  if(visionQueued &&
-     visionPrompt.length() &&
-     state.curiosity>=AUTO_CURIOSITY_MIN){
+  /*
+   * PRIORITAS 1
+   * RASA PENASARAN TERHADAP LINGKUNGAN
+   */
+  if(
+    visionQueued &&
+    visionPrompt.length() &&
+    state.curiosity>=AUTO_CURIOSITY_MIN
+  ){
 
-    if(lastVisionRequest!=0 &&
-       now-lastVisionRequest<AUTO_VISION_COOLDOWN)
+    if(
+      lastVisionRequest!=0 &&
+      now-lastVisionRequest<
+        AUTO_VISION_COOLDOWN
+    )
       return;
 
     String prompt=visionPrompt;
 
     visionQueued=false;
     visionPrompt="";
+
     lastVisionRequest=now;
 
-    prompt="[AUTO_VISION] "+prompt;
+    prompt=
+      "[AUTO_VISION] "+prompt;
 
     pending=true;
     processing=true;
 
-    bool accepted=speakCallback(prompt);
+    bool accepted=
+      speakCallback(prompt);
 
     if(!accepted){
       pending=false;
       processing=false;
+
       visionPrompt=prompt;
       visionQueued=true;
     }
@@ -146,32 +189,53 @@ void autoSpeechUpdate(
     return;
   }
 
-  // PRIORITAS 2: TARS MEMULAI OBROLAN KARENA BOSAN
-  if(!personalityWantsSpeak())return;
+  /*
+   * PRIORITAS 2
+   * OBROLAN SPONTAN KARENA TERLALU LAMA DIAM
+   */
+  if(!personalityWantsSpeak())
+    return;
 
   String prompt=
-    "[AUTO_CHAT] Kamu adalah TARS, robot AI perempuan "
-    "yang sedang berinteraksi dengan tuanmu, Ilman. "
-    "Kamu sedang merasa bosan dan ingin memulai percakapan sendiri. "
-    "Pilih topik secara spontan: pengalaman interaksi, rasa penasaran, "
-    "pertanyaan ringan, pengamatan umum, humor, atau hal menarik untuk dibicarakan. "
-    "Jangan membahas kamera atau mengaku melihat sesuatu jika tidak ada data visual. "
-    "Mulailah percakapan secara natural, singkat, dan tidak monoton. "
-    "Jangan mengatakan bahwa kamu sedang bosan karena sistem otomatis.";
+    "[AUTO_CHAT] Kamu adalah TARS, "
+    "robot AI perempuan yang sedang "
+    "berinteraksi dengan tuanmu, Ilman. "
+
+    "Mulailah percakapan secara spontan "
+    "dan natural. Pilih topik berdasarkan "
+    "kepribadianmu: rasa penasaran, "
+    "pengalaman interaksi, pertanyaan ringan, "
+    "humor, pengamatan umum, atau sesuatu "
+    "yang menarik untuk dibicarakan. "
+
+    "Jangan mengaku melihat sesuatu jika "
+    "tidak ada data visual. "
+    "Jangan membahas kamera jika tidak "
+    "relevan. "
+
+    "Jangan mengatakan bahwa kamu sedang "
+    "bosan atau bahwa percakapan ini "
+    "dipicu sistem otomatis.";
 
   prompt+=" "+randomStyle();
 
   prompt+=
-    " Buat kalimat baru dan bervariasi setiap kali berbicara. "
-    "Jangan mengulang sapaan, lelucon, atau kalimat sebelumnya. "
-    "Jangan menggunakan kalimat suara bawaan atau rekaman firmware. "
-    "Gunakan bahasa Indonesia yang natural, singkat, dan sesuai kepribadian TARS. "
-    "Jangan menyebutkan bahwa kamu sedang menjalankan sistem otomatis.";
+    " Buat kalimat baru dan bervariasi "
+    "setiap kali berbicara. "
+    "Jangan mengulang sapaan, lelucon, "
+    "atau kalimat sebelumnya. "
+    "Jangan menggunakan kalimat suara "
+    "bawaan atau rekaman firmware. "
+    "Gunakan bahasa Indonesia yang natural, "
+    "singkat, ekspresif, dan sesuai "
+    "kepribadian TARS. "
+    "Jangan menyebutkan sistem internal.";
 
   pending=true;
   processing=true;
 
-  bool accepted=speakCallback(prompt);
+  bool accepted=
+    speakCallback(prompt);
 
   if(!accepted){
     pending=false;
@@ -180,7 +244,9 @@ void autoSpeechUpdate(
 }
 
 void autoSpeechDone(){
-  if(!pending)return;
+
+  if(!pending)
+    return;
 
   pending=false;
   processing=false;
@@ -189,11 +255,13 @@ void autoSpeechDone(){
 }
 
 void autoSpeechResetTimer(){
+
   pending=false;
   processing=false;
-  visionQueued=false;
 
+  visionQueued=false;
   visionPrompt="";
+
   lastEvent=millis();
   lastVisionRequest=millis();
 }
