@@ -111,10 +111,8 @@ void I2SCamera::i2sStop()
 {
   if(i2sInterruptHandle)
     esp_intr_disable(i2sInterruptHandle);
-
   if(vSyncInterruptHandle)
     esp_intr_disable(vSyncInterruptHandle);
-
   I2S0.conf.rx_start=0;
   i2sConfReset();
 }
@@ -133,32 +131,9 @@ bool I2SCamera::i2sRunChecked()
     Serial.println("TARS: I2S RESET FAILED");
     return false;
   }
-  /*
-   * Jangan menunggu urutan VSYNC LOW -> HIGH.
-   * Tunggu sampai VSYNC berada LOW terlebih dahulu,
-   * lalu langsung siapkan DMA dan mulai I2S.
-   * Capture akan mengikuti frame berikutnya.
-   */
-  uint32_t start=millis();
-  while(gpio_get_level(vSyncPin)!=0){
-    if(millis()-start>=100){
-      Serial.println("TARS: VSYNC LOW TIMEOUT");
-      return false;
-    }
-    delay(1);
-  }
   blocksReceived=0;
   dmaBufferActive=0;
   framePointer=0;
-  streamFill=0;
-  streamLine=0;
-  streamReady=0;
-  readyHead=0;
-  readyTail=0;
-  streamFrameDone=false;
-  streamError=false;
-  for(int i=0;i<STREAM_BLOCKS;i++)
-    streamState[i]=0;
   I2S0.rx_eof_num=dmaBuffer[0]->sampleCount();
   I2S0.in_link.addr=
     (uint32_t)&(dmaBuffer[0]->descriptor);
