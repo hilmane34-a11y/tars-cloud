@@ -49,6 +49,10 @@ struct EnvState{
   uint8_t leftColorConfidence;
   uint8_t centerColorConfidence;
   uint8_t rightColorConfidence;
+
+  // DETEKSI REFLEKS TERKEJUT
+  bool surprise;
+  uint8_t surpriseConfidence;
 };
 
 void envBegin();
