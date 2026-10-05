@@ -11,15 +11,9 @@
 #define MIN_MOTION_CELLS 3
 #define GLOBAL_CHANGE_CELLS 30
 
-// REFLEKS TERKEJUT
-#define SURPRISE_CENTER_CELLS 5
-#define SURPRISE_TOTAL_CELLS 8
-#define SURPRISE_COOLDOWN 5000UL
-
 static EnvState state={};
 static uint8_t previousGrid[GRID_W*GRID_H]={};
 static bool previousValid=false;
-static uint32_t lastSurprise=0;
 
 struct ColorInfo{
   uint32_t count[11];
@@ -39,7 +33,6 @@ static uint8_t getBrightness(uint16_t p){
   uint8_t r=((p>>11)&31)*255/31;
   uint8_t g=((p>>5)&63)*255/63;
   uint8_t b=(p&31)*255/31;
-
   return (77*r+150*g+29*b)>>8;
 }
 
@@ -47,7 +40,6 @@ static EnvColor getColor(uint16_t p){
   uint8_t r=((p>>11)&31)*255/31;
   uint8_t g=((p>>5)&63)*255/63;
   uint8_t b=(p&31)*255/31;
-
   uint8_t mx=max(r,max(g,b));
   uint8_t mn=min(r,min(g,b));
   uint8_t d=mx-mn;
@@ -57,14 +49,9 @@ static EnvColor getColor(uint16_t p){
   if(d<25)return ENV_COLOR_GRAY;
 
   float h;
-
-  if(mx==r)
-    h=60.0f*((float)g-b)/d;
-  else if(mx==g)
-    h=60.0f*((float)b-r)/d+120;
-  else
-    h=60.0f*((float)r-g)/d+240;
-
+  if(mx==r)h=60.0f*((float)g-b)/d;
+  else if(mx==g)h=60.0f*((float)b-r)/d+120;
+  else h=60.0f*((float)r-g)/d+240;
   if(h<0)h+=360;
 
   if(h<15||h>=345)return ENV_COLOR_RED;
@@ -73,29 +60,21 @@ static EnvColor getColor(uint16_t p){
   if(h<165)return ENV_COLOR_GREEN;
   if(h<200)return ENV_COLOR_CYAN;
   if(h<255)return ENV_COLOR_BLUE;
-
   return ENV_COLOR_PURPLE;
 }
 
-static void addPixel(
-  ColorInfo &info,
-  uint16_t p
-){
+static void addPixel(ColorInfo &info,uint16_t p){
   EnvColor c=getColor(p);
-
   info.count[c]++;
   info.samples++;
   info.brightness+=getBrightness(p);
 }
 
 static EnvColor bestColor(
-  const ColorInfo &info,
-  uint8_t &confidence
+  const ColorInfo &info,uint8_t &confidence
 ){
   confidence=0;
-
-  if(!info.samples)
-    return ENV_COLOR_UNKNOWN;
+  if(!info.samples)return ENV_COLOR_UNKNOWN;
 
   uint8_t best=ENV_COLOR_UNKNOWN;
   uint32_t count=0;
@@ -107,46 +86,23 @@ static EnvColor bestColor(
     }
   }
 
-  confidence=
-    (uint32_t)count*100/info.samples;
-
+  confidence=(uint32_t)count*100/info.samples;
   return (EnvColor)best;
 }
 
 void envBegin(){
   state={};
-
-  memset(
-    previousGrid,
-    0,
-    sizeof(previousGrid)
-  );
-
+  memset(previousGrid,0,sizeof(previousGrid));
   previousValid=false;
-  lastSurprise=0;
 }
 
 void envResetMotion(){
-  memset(
-    previousGrid,
-    0,
-    sizeof(previousGrid)
-  );
-
+  memset(previousGrid,0,sizeof(previousGrid));
   previousValid=false;
-  lastSurprise=millis();
 }
 
-bool envAnalyze(
-  const uint16_t *image,
-  EnvState &result
-){
-  return envAnalyze(
-    image,
-    ENV_COLOR_UNKNOWN,
-    0,
-    result
-  );
+bool envAnalyze(const uint16_t *image,EnvState &result){
+  return envAnalyze(image,ENV_COLOR_UNKNOWN,0,result);
 }
 
 bool envAnalyze(
@@ -156,7 +112,6 @@ bool envAnalyze(
   EnvState &result
 ){
   result={};
-
   if(!image){
     state=result;
     previousValid=false;
@@ -167,34 +122,17 @@ bool envAnalyze(
   ColorInfo global={};
   SectorInfo detail[3]={};
 
-  uint8_t currentGrid[
-    GRID_W*GRID_H
-  ]={};
-
+  uint8_t currentGrid[GRID_W*GRID_H]={};
   uint8_t changedRegion[3]={};
   uint8_t changedCells=0;
-  uint8_t centerChanged=0;
 
-  // WARNA
+  // Warna dan kecerahan
   for(int y=2;y<ENV_HEIGHT;y+=2){
     for(int x=0;x<ENV_WIDTH;x+=2){
-
-      uint8_t r=
-        x<32?0:
-        x<64?1:2;
-
-      uint16_t p=
-        image[y*ENV_WIDTH+x];
-
-      addPixel(
-        sector[r],
-        p
-      );
-
-      addPixel(
-        global,
-        p
-      );
+      uint8_t r=x<32?0:(x<64?1:2);
+      uint16_t p=image[y*ENV_WIDTH+x];
+      addPixel(sector[r],p);
+      addPixel(global,p);
     }
   }
 
@@ -206,168 +144,80 @@ bool envAnalyze(
     }
   }
 
-  result.leftBright=
-    sector[0].brightness/
-    sector[0].samples;
+  result.leftBright=sector[0].brightness/sector[0].samples;
+  result.centerBright=sector[1].brightness/sector[1].samples;
+  result.rightBright=sector[2].brightness/sector[2].samples;
 
-  result.centerBright=
-    sector[1].brightness/
-    sector[1].samples;
+  result.leftColor=bestColor(sector[0],result.leftColorConfidence);
+  result.centerColor=bestColor(sector[1],result.centerColorConfidence);
+  result.rightColor=bestColor(sector[2],result.rightColorConfidence);
 
-  result.rightBright=
-    sector[2].brightness/
-    sector[2].samples;
-
-  result.leftColor=
-    bestColor(
-      sector[0],
-      result.leftColorConfidence
-    );
-
-  result.centerColor=
-    bestColor(
-      sector[1],
-      result.centerColorConfidence
-    );
-
-  result.rightColor=
-    bestColor(
-      sector[2],
-      result.rightColorConfidence
-    );
-
-  // TEPI / TEKSTUR
+  // Tepi, kontras, tekstur dan perubahan warna
   for(int y=1;y<ENV_HEIGHT-2;y+=2){
     for(int x=1;x<ENV_WIDTH-2;x+=2){
-
-      uint8_t r=
-        x<32?0:
-        x<64?1:2;
-
-      uint16_t p=
-        image[y*ENV_WIDTH+x];
+      uint8_t r=x<32?0:(x<64?1:2);
+      uint16_t p=image[y*ENV_WIDTH+x];
 
       int c=getBrightness(p);
-      int right=
-        getBrightness(
-          image[y*ENV_WIDTH+x+2]
-        );
-
-      int down=
-        getBrightness(
-          image[(y+2)*ENV_WIDTH+x]
-        );
-
-      int diff=
-        max(
-          abs(c-right),
-          abs(c-down)
-        );
+      int right=getBrightness(image[y*ENV_WIDTH+x+2]);
+      int down=getBrightness(image[(y+2)*ENV_WIDTH+x]);
+      int diff=max(abs(c-right),abs(c-down));
 
       detail[r].samples++;
       detail[r].contrast+=diff;
 
-      if(diff>=22)
-        detail[r].edges++;
+      if(diff>=22)detail[r].edges++;
+      if(diff>=10)detail[r].texture++;
 
-      if(diff>=10)
-        detail[r].texture++;
-
-      if(
-        getColor(p)!=
-        getColor(
-          image[y*ENV_WIDTH+x+2]
-        )
-      ){
+      if(getColor(p)!=getColor(image[y*ENV_WIDTH+x+2]))
         detail[r].colorChanges++;
-      }
     }
   }
 
-  // MOTION GRID
+  // Motion grid
   for(int gy=0;gy<GRID_H;gy++){
     for(int gx=0;gx<GRID_W;gx++){
-
-      int x0=
-        gx*ENV_WIDTH/GRID_W;
-
-      int x1=
-        (gx+1)*ENV_WIDTH/GRID_W;
-
-      int y0=
-        gy*ENV_HEIGHT/GRID_H;
-
-      int y1=
-        (gy+1)*ENV_HEIGHT/GRID_H;
+      int x0=gx*ENV_WIDTH/GRID_W;
+      int x1=(gx+1)*ENV_WIDTH/GRID_W;
+      int y0=gy*ENV_HEIGHT/GRID_H;
+      int y1=(gy+1)*ENV_HEIGHT/GRID_H;
 
       uint32_t sum=0;
       uint16_t samples=0;
 
       for(int y=y0;y<y1;y+=2){
         for(int x=x0;x<x1;x+=2){
-
-          sum+=getBrightness(
-            image[y*ENV_WIDTH+x]
-          );
-
+          sum+=getBrightness(image[y*ENV_WIDTH+x]);
           samples++;
         }
       }
 
-      currentGrid[
-        gy*GRID_W+gx
-      ]=
-        samples?
-        sum/samples:
-        0;
+      currentGrid[gy*GRID_W+gx]=samples?sum/samples:0;
     }
   }
 
   if(previousValid){
-
     for(int gy=0;gy<GRID_H;gy++){
       for(int gx=0;gx<GRID_W;gx++){
-
-        int index=
-          gy*GRID_W+gx;
-
-        int diff=
-          abs(
-            (int)currentGrid[index]-
-            (int)previousGrid[index]
-          );
+        int index=gy*GRID_W+gx;
+        int diff=abs(
+          (int)currentGrid[index]-(int)previousGrid[index]
+        );
 
         if(diff>=MOTION_THRESHOLD){
-
           changedCells++;
-
-          int cx=
-            gx*ENV_WIDTH/GRID_W+
-            ENV_WIDTH/GRID_W/2;
-
-          uint8_t r=
-            cx<32?0:
-            cx<64?1:2;
-
+          int cx=gx*ENV_WIDTH/GRID_W+ENV_WIDTH/GRID_W/2;
+          uint8_t r=cx<32?0:(cx<64?1:2);
           changedRegion[r]++;
-
-          // BAGIAN TENGAH LEBIH DIPERHATIKAN
-          if(gx>=5&&gx<=10)
-            centerChanged++;
         }
       }
     }
   }
 
-  memcpy(
-    previousGrid,
-    currentGrid,
-    sizeof(previousGrid)
-  );
-
+  memcpy(previousGrid,currentGrid,sizeof(previousGrid));
   previousValid=true;
 
-  // CLEAR / CLUTTER
+  // Penilaian keterbukaan visual
   bool *clear[3]={
     &result.leftClear,
     &result.centerClear,
@@ -375,26 +225,13 @@ bool envAnalyze(
   };
 
   for(int i=0;i<3;i++){
-
     SectorInfo &d=detail[i];
+    if(!d.samples)continue;
 
-    if(!d.samples)
-      continue;
-
-    uint16_t edgeRate=
-      (uint32_t)d.edges*100/
-      d.samples;
-
-    uint16_t textureRate=
-      (uint32_t)d.texture*100/
-      d.samples;
-
-    uint16_t colorRate=
-      (uint32_t)d.colorChanges*100/
-      d.samples;
-
-    uint16_t avgContrast=
-      d.contrast/d.samples;
+    uint16_t edgeRate=(uint32_t)d.edges*100/d.samples;
+    uint16_t textureRate=(uint32_t)d.texture*100/d.samples;
+    uint16_t colorRate=(uint32_t)d.colorChanges*100/d.samples;
+    uint16_t avgContrast=d.contrast/d.samples;
 
     uint16_t clutter=
       edgeRate*2+
@@ -402,147 +239,43 @@ bool envAnalyze(
       colorRate+
       avgContrast/3;
 
-    uint8_t bright=
-      i==0?
-      result.leftBright:
-      i==1?
-      result.centerBright:
-      result.rightBright;
+    uint8_t bright=i==0?result.leftBright:
+                   i==1?result.centerBright:result.rightBright;
 
-    *clear[i]=
-      bright>20 &&
-      clutter<95;
+    *clear[i]=(bright>20 && clutter<95);
   }
 
   result.valid=true;
-
-  result.obstacle=
-    !result.centerClear;
+  result.obstacle=!result.centerClear;
 
   uint8_t clearCount=
-    result.leftClear+
-    result.centerClear+
-    result.rightClear;
+    result.leftClear+result.centerClear+result.rightClear;
+  result.confidence=clearCount*100/3;
 
-  result.confidence=
-    clearCount*100/3;
-
-  result.motion=
-    changedCells>=MIN_MOTION_CELLS;
-
-  result.motionLevel=
-    changedCells;
+  result.motion=changedCells>=MIN_MOTION_CELLS;
+  result.motionLevel=changedCells;
 
   if(changedCells>=GLOBAL_CHANGE_CELLS){
-
-    result.event=
-      ENV_SCENE_CHANGED;
-
+    result.event=ENV_SCENE_CHANGED;
   }else if(result.motion){
-
-    if(
-      changedRegion[0]>=changedRegion[1] &&
-      changedRegion[0]>=changedRegion[2]
-    ){
-      result.event=
-        ENV_MOTION_LEFT;
-
-    }else if(
-      changedRegion[1]>=changedRegion[0] &&
-      changedRegion[1]>=changedRegion[2]
-    ){
-      result.event=
-        ENV_MOTION_CENTER;
-
-    }else{
-      result.event=
-        ENV_MOTION_RIGHT;
-    }
-
+    if(changedRegion[0]>=changedRegion[1]&&
+       changedRegion[0]>=changedRegion[2])
+      result.event=ENV_MOTION_LEFT;
+    else if(changedRegion[1]>=changedRegion[0]&&
+            changedRegion[1]>=changedRegion[2])
+      result.event=ENV_MOTION_CENTER;
+    else
+      result.event=ENV_MOTION_RIGHT;
   }else{
     result.event=ENV_NONE;
   }
 
-  // WARNA DOMINAN GLOBAL
-  result.dominantColor=
-    bestColor(
-      global,
-      result.colorConfidence
-    );
+  result.dominantColor=bestColor(global,result.colorConfidence);
 
-  if(
-    dominantColor>ENV_COLOR_UNKNOWN &&
-    dominantColor<=ENV_COLOR_PURPLE
-  ){
-    result.dominantColor=
-      (EnvColor)dominantColor;
-
-    result.colorConfidence=
-      colorConfidence;
-  }
-
-  /*
-   * REFLEKS TERKEJUT
-   *
-   * BUKAN hanya obstacle.
-   *
-   * Syarat:
-   * 1. perubahan mendadak cukup besar
-   * 2. mayoritas perubahan berada di tengah
-   * 3. tengah sebelumnya/sekitar menjadi sangat penuh
-   * 4. sisi kiri/kanan ikut kehilangan ruang
-   * 5. tidak sedang cooldown
-   */
-  result.surprise=false;
-  result.surpriseConfidence=0;
-
-  uint32_t now=millis();
-
-  bool suddenCenter=
-    centerChanged>=SURPRISE_CENTER_CELLS;
-
-  bool largeChange=
-    changedCells>=SURPRISE_TOTAL_CELLS;
-
-  bool centerBlocked=
-    !result.centerClear;
-
-  bool viewRestricted=
-    !result.leftClear ||
-    !result.rightClear;
-
-  bool suddenVisual=
-    suddenCenter &&
-    largeChange &&
-    centerBlocked &&
-    viewRestricted;
-
-  if(
-    previousValid &&
-    suddenVisual &&
-    now-lastSurprise>=SURPRISE_COOLDOWN
-  ){
-    uint16_t score=0;
-
-    score+=
-      min(35,
-        centerChanged*5);
-
-    score+=
-      min(35,
-        changedCells*3);
-
-    if(centerBlocked)
-      score+=15;
-
-    if(viewRestricted)
-      score+=15;
-
-    result.surprise=true;
-    result.surpriseConfidence=
-    score>100?100:(uint8_t)score;
-
-    lastSurprise=now;
+  if(dominantColor>ENV_COLOR_UNKNOWN&&
+     dominantColor<=ENV_COLOR_PURPLE){
+    result.dominantColor=(EnvColor)dominantColor;
+    result.colorConfidence=colorConfidence;
   }
 
   state=result;
