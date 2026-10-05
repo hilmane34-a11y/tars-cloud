@@ -5,7 +5,7 @@
 #define AUTO_SPEED 150
 #define FORWARD_MS 2000
 #define TURN_MS 800
-#define OBSERVE_MS 60000
+#define OBSERVE_MS 15000
 #define ENV_TIMEOUT 4000
 #define REST_CONFIRM_MS 1500
 
