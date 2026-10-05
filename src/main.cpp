@@ -77,9 +77,6 @@ bool sleepPreparing=false;
 uint32_t sleepPrepareAt=0;
 volatile bool pendingVisionCheck=false;
 uint32_t lastVisionEventAt=0;
-volatile bool pendingSurprise=false;
-volatile bool surpriseActive=false;
-volatile bool aiBusy=false;
 
 /* STT LIFECYCLE */
 const uint32_t STT_NORMAL_COOLDOWN=1000;
@@ -110,10 +107,7 @@ static void personalityTask(void *parameter)
 {
   for(;;){
     personalityUpdate(
-      playing ||
-      sttConnected ||
-      surpriseActive ||
-      aiBusy,
+      false,
       autonomyIsMoving(),
       false
     );
@@ -121,6 +115,7 @@ static void personalityTask(void *parameter)
     vTaskDelay(pdMS_TO_TICKS(250));
   }
 }
+
 void ramDiag(const char*tag){
  uint32_t f=ESP.getFreeHeap(),m=ESP.getMinFreeHeap(),a=ESP.getMaxAllocHeap();
  uint32_t i=heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT);
@@ -301,45 +296,25 @@ EnvState environment={};
   }
   xSemaphoreGive(cameraMux);
 }
-if(ok&&analyzed){
-  autonomySetEnvironment(environment);
-  if(
-    environment.surprise &&
-    tarsMode==MODE_ONLINE &&
-    !sttConnected &&
-    !playing &&
-    !aiBusy &&
-    !surpriseActive
-  ){
-    portENTER_CRITICAL(&visionEventMux);
-    pendingSurprise=true;
-    portEXIT_CRITICAL(&visionEventMux);
-    Serial.printf(
-      "TARS: SURPRISE DETECTED confidence=%u\n",
-      environment.surpriseConfidence
-    );
-  }
-  if(
-    tarsMode==MODE_ONLINE &&
-    environment.event!=ENV_NONE &&
-    !environment.surprise &&
-    millis()-lastVisionEventAt>=VISION_EVENT_COOLDOWN_MS
-  ){
-    portENTER_CRITICAL(&visionEventMux);
-    pendingVisionCheck=true;
-    portEXIT_CRITICAL(&visionEventMux);
-    lastVisionEventAt=millis();
-  }
-  frameErrors=0;
-}else{
-  autonomySetEnvironment(EnvState{});
-  frameErrors++;
-  if(frameErrors>=3&&cameraLive)
-    autonomySetEnvironment(EnvState{});
-}
-if(cameraLive && !playing && !sttConnected && !aiBusy && !surpriseActive ){
-  autonomyUpdate(true,false);
-}
+    if(ok&&analyzed){
+      autonomySetEnvironment(environment);
+      if(tarsMode==MODE_ONLINE&&
+         environment.event!=ENV_NONE&&
+         millis()-lastVisionEventAt>=VISION_EVENT_COOLDOWN_MS){
+        portENTER_CRITICAL(&visionEventMux);
+        pendingVisionCheck=true;
+        portEXIT_CRITICAL(&visionEventMux);
+        lastVisionEventAt=millis();
+      }
+      frameErrors=0;
+    }else{
+      autonomySetEnvironment(EnvState{});
+      frameErrors++;
+      if(frameErrors>=3&&cameraLive)
+        autonomySetEnvironment(EnvState{});
+    }
+    if(cameraLive&&!playing)
+      autonomyUpdate(true,false);
     vTaskDelay(1);
   }
 }
@@ -698,10 +673,8 @@ String stopSTT(uint32_t samples,bool offline=false){
 }
 
 String recordSTT(bool offline){
-  autonomyStop();if(!startSTT(offline))
-  return ""; autonomyStop();
- if(offline) oledSetStatus("READY");
- else oledSetListening();
+ if(!startSTT(offline))return "";
+ if(offline)oledSetStatus("READY");else oledSetListening();
   size_t prePos=0,preCount=0;
  uint32_t voiceStart=0,lastVoice=0,samples=0;
  uint32_t listenStart=millis();
@@ -882,18 +855,19 @@ bool streamAudio(const String&url,const String&text){
 }
 /* SHARED ONLINE AI CYCLE */
 bool processOnlineRequest(const String &q,bool vision,bool status,bool automatic=false){
-  aiBusy=true;
   wheelsStop();
   autonomyStop();
   ramDiag("BEFORE-CAMERA-CYCLE");
+  // Kunci siklus vision terlebih dahulu
   if(!visionLivePause()){
     Serial.println("TARS: VISION PAUSE FAILED");
     wheelsStop();
     autonomyStop();
     oledSetStatus("CAMERA ERROR");
-    aiBusy=false;
     return false;
   }
+  // Permintaan biasa tidak membutuhkan foto
+  // Vision akan mengambil foto sendiri di visionLiveAsk()
   if(!vision){
     stopCamera();
     if(camera || cameraLive || cameraOK){
@@ -901,7 +875,6 @@ bool processOnlineRequest(const String &q,bool vision,bool status,bool automatic
       visionLiveResume();
       startCamera();
       oledSetStatus("CAMERA ERROR");
-      aiBusy=false;
       return false;
     }
   }
@@ -909,59 +882,53 @@ bool processOnlineRequest(const String &q,bool vision,bool status,bool automatic
   autonomyStop();
   ramDiag("CAMERA-OFF-BEFORE-TLS");
   String answer;
-  if(vision)
-    answer=visionLiveAsk(q);
-  else if(status)
-    answer=systemStatus();
-  else
-    answer=ask(q);
+  if(vision) answer=visionLiveAsk(q);
+  else if(status) answer=systemStatus();
+  else answer=ask(q);
   if(!answer.length()){
     Serial.println("TARS: AI EMPTY RESPONSE");
     wheelsStop();
     autonomyStop();
+    // Vision resume menghidupkan kamera jika sebelumnya dimatikan.
     visionLiveResume();
-    if(!vision)
-      startCamera();
+    // Untuk permintaan biasa, kamera dihidupkan di sini.
+    if(!vision) startCamera();
     oledSetStatus("AI ERROR");
     ramDiag("AFTER-AI-ERROR");
-    aiBusy=false;
     return false;
   }
   wheelsStop();
   autonomyStop();
-  oledShowText(
-    answer,
+  oledShowText(answer,
     automatic?"AUTO SPEECH":
     vision?"VISION":
-    status?"STATUS":"ASK"
-  );
+    status?"STATUS":"ASK");
   delay(300);
   ramDiag("BEFORE-TTS");
-  bool ok=streamAudio(
-    String(TARS_CLOUD_URL)+"/tts",
-    answer
-  );
+  bool ok=streamAudio(String(TARS_CLOUD_URL)+"/tts",answer);
+  // Pastikan seluruh audio sudah berhenti
   audioRing.stop();
   audioStop();
   playing=false;
   wheelsStop();
   autonomyStop();
   ramDiag("AFTER-TTS-AUDIO-OFF");
-  wheelsStop();
-  autonomyStop();
-  oledSetStatus(
-    ok?"Siap Tuan":"AUDIO ERROR"
-  );
-  visionLiveResume();
-  if(!vision)
-    startCamera();
-  wheelsStop();
-  autonomyStop();
-  if(automatic && ok)
-    autoSpeechDone();
-  aiBusy=false;
-  ramDiag("AFTER-CAMERA-RESTART");
-  return ok;
+  // Lepaskan kunci dan pulihkan kamera
+     wheelsStop();
+     autonomyStop();
+
+      oledSetStatus(ok?"Siap Tuan":"AUDIO ERROR");
+
+     visionLiveResume();
+    if(!vision) startCamera();
+
+    wheelsStop();
+    autonomyStop();
+
+    if(automatic && ok) autoSpeechDone();
+
+    ramDiag("AFTER-CAMERA-RESTART");
+    return ok;
 }
 /* AUTO SPEECH */
 bool autoSpeechCallback(const String &prompt){
@@ -981,83 +948,6 @@ bool autoSpeechCallback(const String &prompt){
     return processOnlineRequest(q,true,false,true);
   }
   return false;
-}
-void processSurprise(){
-  bool trigger=false;
-  portENTER_CRITICAL(&visionEventMux);
-  if(pendingSurprise){
-    pendingSurprise=false;
-    trigger=true;
-  }
-  portEXIT_CRITICAL(&visionEventMux);
-  if(!trigger)
-    return;
-  if(
-    tarsMode!=MODE_ONLINE ||
-    playing ||
-    sttConnected ||
-    aiBusy ||
-    surpriseActive
-  ){
-    return;
-  }
-  surpriseActive=true;
-  aiBusy=true;
-  Serial.println("TARS: !!! SURPRISE !!!");
-  personalitySetEmotion(
-    EMOTION_SURPRISED
-  );
-  wheelsStop();
-  autonomyStop();
-  // REFLEKS MUNDUR 500 MS
-  wheelsBackward(220);
-  uint32_t st=millis();
-  while(millis()-st<500){
-    wheelsBackward(220);
-    delay(1);
-    yield();
-  }
-  wheelsStop();
-  autonomyStop();
-  Serial.println(
-    "TARS: SURPRISE REFLEX DONE"
-  );
-  // ASK + TTS
-  processOnlineRequest(
-    "Ucapkan secara spontan dan singkat: "
-    "WOAH! Saya terkejut, tuan. "
-    "Jangan menjelaskan sistem atau proses internal.",
-    false,
-    false,
-    false
-  );
-  wheelsStop();
-  autonomyStop();
-  // SETELAH UCAPAN, BARU LIHAT APA YANG MEMBUATNYA TERKEJUT
-  if(
-    tarsMode==MODE_ONLINE &&
-    !playing
-  ){
-    processOnlineRequest(
-      "Amati benda atau objek yang tadi "
-      "tiba-tiba muncul sangat dekat di depanmu. "
-      "Identifikasi apa yang sebenarnya terlihat "
-      "dan jelaskan secara singkat kepada tuan.",
-      true,
-      false,
-      false
-    );
-  }
-  wheelsStop();
-  autonomyStop();
-  personalitySetEmotion(
-    EMOTION_NEUTRAL
-  );
-  aiBusy=false;
-  surpriseActive=false;
-  Serial.println(
-    "TARS: SURPRISE SELESAI -> EXPLORE"
-  );
 }
 /* VISION EVENT */
 void processVisionEvent(){
@@ -1404,11 +1294,10 @@ void loop(){
     oledSetStatus(tarsMode==MODE_ONLINE?"LISTENING":"READY");
   }
 
-if(  !playing &&  tarsMode==MODE_ONLINE &&  !sttConnected &&  !aiBusy &&  !surpriseActive
-){  processSurprise();  if(    !surpriseActive &&    !aiBusy  ){
+  if(!playing&&tarsMode==MODE_ONLINE&&!sttConnected){
     processVisionEvent();
     autoSpeechUpdate(true,false,false);
   }
-}
+
   delay(1);
 }
