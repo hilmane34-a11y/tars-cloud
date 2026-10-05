@@ -1,7 +1,6 @@
 #include "autonomy.h"
 #include "wheels.h"
 #include "personality.h"
-#include "env.h"
 
 #define AUTO_SPEED 220
 #define FORWARD_MS 30000
