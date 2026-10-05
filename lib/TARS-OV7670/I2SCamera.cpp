@@ -135,13 +135,23 @@ bool I2SCamera::i2sRunChecked()
     );
     return false;
   }
-  // PENTING:
-  // kamera lama menunggu VSYNC SEBELUM reset I2S.
-  if(!waitVSyncFrame(500)){
-    Serial.println("TARS: VSYNC FRAME TIMEOUT");
-    return false;
+  // SAMA SEPERTI KODE LAMA:
+  // tunggu VSYNC HIGH lalu tunggu kembali LOW
+  uint32_t start=millis();
+  while(gpio_get_level(vSyncPin)==0){
+    if(millis()-start>=500){
+      Serial.println("TARS: VSYNC HIGH TIMEOUT");
+      return false;
+    }
   }
-  // Urutan setelah VSYNC dibuat sama seperti kamera lama.
+  start=millis();
+  while(gpio_get_level(vSyncPin)!=0){
+    if(millis()-start>=500){
+      Serial.println("TARS: VSYNC LOW TIMEOUT");
+      return false;
+    }
+  }
+  // Setelah sinkron VSYNC, baru siapkan I2S
   esp_intr_disable(i2sInterruptHandle);
   if(!i2sConfReset()){
     Serial.println("TARS: I2S RESET FAILED");
@@ -150,9 +160,20 @@ bool I2SCamera::i2sRunChecked()
   blocksReceived=0;
   dmaBufferActive=0;
   framePointer=0;
+
+  streamFill=0;
+  streamLine=0;
+  streamReady=0;
+  readyHead=0;
+  readyTail=0;
+  streamFrameDone=false;
+  streamError=false;
+
+  for(int i=0;i<STREAM_BLOCKS;i++)
+    streamState[i]=0;
   I2S0.rx_eof_num=dmaBuffer[0]->sampleCount();
   I2S0.in_link.addr=
-    (uint32_t)&dmaBuffer[0]->descriptor;
+    (uint32_t)&(dmaBuffer[0]->descriptor);
   I2S0.in_link.start=1;
   I2S0.int_clr.val=I2S0.int_raw.val;
   I2S0.int_ena.val=0;
@@ -162,7 +183,6 @@ bool I2SCamera::i2sRunChecked()
   I2S0.conf.rx_start=1;
   return true;
 }
-// Tetap void agar kompatibel dengan pemanggil lama.
 void I2SCamera::i2sRun()
 {
   (void)i2sRunChecked();
