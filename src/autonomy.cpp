@@ -2,10 +2,11 @@
 #include "wheels.h"
 #include "personality.h"
 
-#define AUTO_SPEED 150
-#define FORWARD_MS 2000
+#define AUTO_SPEED 120
+#define FORWARD_MS 3000
 #define TURN_MS 800
 #define OBSERVE_MS 15000
+#define BACKOFF_MS 700
 #define ENV_TIMEOUT 4000
 #define REST_CONFIRM_MS 1500
 
@@ -96,6 +97,17 @@ void autonomyUpdate(bool enabled,bool busy){
   if(mode==OBSERVE){
     wheelsStop();
 
+    // Ada sesuatu di depan / gerakan mendekat
+    if(env.obstacle ||
+       (env.motion&&!env.centerClear)){
+
+      wheelsBackward(AUTO_SPEED);
+      moveUntil=now+BACKOFF_MS;
+      moving=true;
+      return;
+    }
+
+    // Tetap mengamati sampai waktu observe selesai
     if((int32_t)(now-observeUntil)<0)
       return;
 
