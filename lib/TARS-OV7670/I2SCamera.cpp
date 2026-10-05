@@ -436,9 +436,7 @@ bool I2SCamera::captureFrameData(
   streamError=false;
   for(int i=0;i<STREAM_BLOCKS;i++)
     streamState[i]=0;
- i2sRun();
-  return false;
-}
+  i2sRun();
   const int blocksNeeded=(yres+STREAM_LINES-1)/STREAM_LINES;
   int blocksDone=0;
   uint32_t start=millis();
