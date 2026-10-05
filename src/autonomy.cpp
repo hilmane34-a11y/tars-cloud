@@ -5,11 +5,13 @@
 #define AUTO_SPEED 150
 #define FORWARD_MS 2000
 #define TURN_MS 800
+#define OBSERVE_MS 100000
 #define ENV_TIMEOUT 4000
 #define REST_CONFIRM_MS 1500
 
 enum AutoState {
   EXPLORE,
+  OBSERVE,
   TIRED,
   SEEK_REST,
   RESTING,
@@ -21,6 +23,7 @@ static EnvState env={};
 
 static bool moving=false;
 static uint32_t moveUntil=0;
+static uint32_t observeUntil=0;
 static uint32_t lastDecision=0;
 static uint32_t lastEnvUpdate=0;
 static uint32_t restSince=0;
@@ -31,6 +34,7 @@ void autonomyBegin(){
   env={};
   moving=false;
   moveUntil=0;
+  observeUntil=0;
   lastDecision=0;
   lastEnvUpdate=0;
   restSince=0;
@@ -64,6 +68,7 @@ void autonomyUpdate(bool enabled,bool busy){
   if(!enabled||busy){
     autonomyStop();
     restSince=0;
+    mode=EXPLORE;
     return;
   }
 
@@ -82,6 +87,20 @@ void autonomyUpdate(bool enabled,bool busy){
       return;
 
     autonomyStop();
+
+    mode=OBSERVE;
+    observeUntil=now+OBSERVE_MS;
+    return;
+  }
+
+  if(mode==OBSERVE){
+    wheelsStop();
+
+    if((int32_t)(now-observeUntil)<0)
+      return;
+
+    mode=EXPLORE;
+    lastDecision=0;
   }
 
   if(mode==EXPLORE&&personalityNeedsRest())
@@ -149,11 +168,10 @@ void autonomyUpdate(bool enabled,bool busy){
   }
 
   if(env.leftClear&&env.rightClear){
-    if(preferLeft){
+    if(preferLeft)
       wheelsLeft(AUTO_SPEED);
-    }else{
+    else
       wheelsRight(AUTO_SPEED);
-    }
 
     preferLeft=!preferLeft;
     moveUntil=now+TURN_MS;
