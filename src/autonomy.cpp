@@ -5,7 +5,7 @@
 #define AUTO_SPEED 220
 #define FORWARD_MS 3000
 #define TURN_MS 480
-#define ENV_TIMEOUT 1800
+#define ENV_TIMEOUT 4000
 #define REST_CONFIRM_MS 1500
 
 enum AutoState {
@@ -29,7 +29,6 @@ static bool preferLeft=true;
 
 void autonomyBegin(){
   env={};
-
   moving=false;
   moveUntil=0;
   lastDecision=0;
@@ -50,10 +49,9 @@ void autonomyStop(){
 
 void autonomySetEnvironment(const EnvState &e){
   env=e;
-  lastEnvUpdate=millis();
 
-  if(!env.valid)
-    autonomyStop();
+  if(e.valid)
+    lastEnvUpdate=millis();
 }
 
 bool autonomyIsMoving(){
@@ -63,15 +61,22 @@ bool autonomyIsMoving(){
 void autonomyUpdate(bool enabled,bool busy){
   uint32_t now=millis();
 
-  // Hentikan jika data lingkungan tidak tersedia
-  if(!enabled||busy||!env.valid||
-     now-lastEnvUpdate>ENV_TIMEOUT){
+  if(!enabled||busy){
     autonomyStop();
     restSince=0;
     return;
   }
 
-  // Tunggu gerakan saat ini selesai
+  if(!env.valid){
+    autonomyStop();
+    return;
+  }
+
+  if(now-lastEnvUpdate>ENV_TIMEOUT){
+    autonomyStop();
+    return;
+  }
+
   if(moving){
     if((int32_t)(now-moveUntil)<0)
       return;
@@ -79,7 +84,6 @@ void autonomyUpdate(bool enabled,bool busy){
     autonomyStop();
   }
 
-  // Periksa kebutuhan istirahat
   if(mode==EXPLORE&&personalityNeedsRest())
     mode=TIRED;
 
@@ -89,7 +93,6 @@ void autonomyUpdate(bool enabled,bool busy){
     mode=SEEK_REST;
   }
 
-  // Menunggu lingkungan stabil sebelum istirahat
   if(mode==SEEK_REST){
     if(env.leftClear&&
        env.centerClear&&
@@ -110,7 +113,6 @@ void autonomyUpdate(bool enabled,bool busy){
     return;
   }
 
-  // Selama istirahat, motor tetap berhenti
   if(mode==RESTING){
     wheelsStop();
 
@@ -122,44 +124,64 @@ void autonomyUpdate(bool enabled,bool busy){
     return;
   }
 
-  // Kembali eksplorasi setelah pulih
   if(mode==RECOVER){
     autonomyStop();
     mode=EXPLORE;
-    lastDecision=now;
+    lastDecision=0;
     return;
   }
 
-  if(!personalityCanExplore())
+  if(!personalityCanExplore()){
+    autonomyStop();
     return;
+  }
 
-  if(now-lastDecision<1200)
+  if(now-lastDecision<500)
     return;
 
   lastDecision=now;
 
-  // Tentukan arah berdasarkan area kamera
   if(env.centerClear){
     wheelsForward(AUTO_SPEED);
     moveUntil=now+FORWARD_MS;
-  }else if(env.leftClear&&env.rightClear){
-    if(preferLeft)
-      wheelsLeft(AUTO_SPEED);
-    else
-      wheelsRight(AUTO_SPEED);
-
-    preferLeft=!preferLeft;
-    moveUntil=now+TURN_MS;
-  }else if(env.leftClear){
-    wheelsLeft(AUTO_SPEED);
-    moveUntil=now+TURN_MS;
-  }else if(env.rightClear){
-    wheelsRight(AUTO_SPEED);
-    moveUntil=now+TURN_MS;
-  }else{
-    autonomyStop();
+    moving=true;
     return;
   }
 
+  if(env.leftClear&&env.rightClear){
+    if(preferLeft){
+      wheelsLeft(AUTO_SPEED);
+    }else{
+      wheelsRight(AUTO_SPEED);
+    }
+
+    preferLeft=!preferLeft;
+    moveUntil=now+TURN_MS;
+    moving=true;
+    return;
+  }
+
+  if(env.leftClear){
+    wheelsLeft(AUTO_SPEED);
+    moveUntil=now+TURN_MS;
+    moving=true;
+    return;
+  }
+
+  if(env.rightClear){
+    wheelsRight(AUTO_SPEED);
+    moveUntil=now+TURN_MS;
+    moving=true;
+    return;
+  }
+
+  // Buntu: putar di tempat
+  if(preferLeft)
+    wheelsLeft(AUTO_SPEED);
+  else
+    wheelsRight(AUTO_SPEED);
+
+  preferLeft=!preferLeft;
+  moveUntil=now+TURN_MS;
   moving=true;
 }
