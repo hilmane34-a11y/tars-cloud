@@ -508,8 +508,8 @@ bool envAnalyze(
     !result.centerClear;
 
   bool viewRestricted=
-    (!result.leftClear)+
-    (!result.rightClear)>=1;
+    !result.leftClear ||
+    !result.rightClear;
 
   bool suddenVisual=
     suddenCenter &&
