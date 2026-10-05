@@ -301,7 +301,8 @@ if(xSemaphoreTake(cameraMux,portMAX_DELAY)==pdTRUE){
   }
   xSemaphoreGive(cameraMux);
 }
-    if(ok&&analyzed){
+    Serial.printf("CAM ok=%d analyzed=%d\n",ok,analyzed);
+     if(ok&&analyzed){
       autonomySetEnvironment(environment);
       if(tarsMode==MODE_ONLINE&&
          environment.event!=ENV_NONE&&
