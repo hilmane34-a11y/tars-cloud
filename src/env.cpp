@@ -1,4 +1,5 @@
 #include "env.h"
+#include <Arduino.h>
 #include <string.h>
 #include <stdlib.h>
 
@@ -14,6 +15,8 @@
 static EnvState state={};
 static uint8_t previousGrid[GRID_W*GRID_H]={};
 static bool previousValid=false;
+
+static uint32_t lastEnvDebug=0;
 
 struct ColorInfo{
   uint32_t count[11];
@@ -94,6 +97,7 @@ void envBegin(){
   state={};
   memset(previousGrid,0,sizeof(previousGrid));
   previousValid=false;
+  lastEnvDebug=0;
 }
 
 void envResetMotion(){
@@ -243,6 +247,33 @@ bool envAnalyze(
                    i==1?result.centerBright:result.rightBright;
 
     *clear[i]=(bright>20 && clutter<95);
+
+    if(millis()-lastEnvDebug>=500){
+      Serial.printf(
+        "ENV %c: B=%u E=%u T=%u C=%u K=%u CLEAR=%d\n",
+        i==0?'L':i==1?'C':'R',
+        bright,
+        edgeRate,
+        textureRate,
+        colorRate,
+        clutter,
+        *clear[i]
+      );
+    }
+  }
+
+  if(millis()-lastEnvDebug>=500){
+    lastEnvDebug=millis();
+
+    Serial.printf(
+      "ENV RESULT: L=%d C=%d R=%d | obstacle=%d valid=%d motion=%d\n",
+      result.leftClear,
+      result.centerClear,
+      result.rightClear,
+      result.obstacle,
+      result.valid,
+      result.motion
+    );
   }
 
   result.valid=true;
