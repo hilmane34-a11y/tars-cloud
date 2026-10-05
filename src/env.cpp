@@ -459,9 +459,6 @@ bool envAnalyze(
   if(millis()-lastEnvDebug>=500){
 
     lastEnvDebug=millis();
-
-    Serial.printf(
-      "ENV RESULT: L=%d C=%d R=%d | obstacle=%d valid=%d motion=%d\n",
       result.leftClear,
       result.centerClear,
       result.rightClear,
