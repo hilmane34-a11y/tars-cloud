@@ -1,4 +1,5 @@
 #include "I2SCamera.h"
+#include <Arduino.h>
 #include "Config.h"
 #include "Log.h"
 #include "../../src/env.h"
