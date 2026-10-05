@@ -504,8 +504,6 @@ static uint8_t classifyRGB565(uint16_t p){
   if(h<255)return ENV_COLOR_BLUE;
   return ENV_COLOR_PURPLE;
 }
-
-
 bool I2SCamera::captureFrameData(
   uint16_t *environmentOut,
   uint8_t *previewOut
