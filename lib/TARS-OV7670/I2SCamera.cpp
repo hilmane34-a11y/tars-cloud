@@ -37,15 +37,23 @@ static volatile uint8_t lastDominantColor=ENV_COLOR_UNKNOWN;
 static volatile uint8_t lastColorConfidence=0;
 
 // Penantian VSYNC dibatasi agar task tidak terkunci.
-static bool waitVSync(int level,uint32_t timeout)
+static bool waitVSyncFrame(uint32_t timeout)
 {
   uint32_t start=millis();
-
-  while(gpio_get_level(I2SCamera::vSyncPin)!=level){
-    if(millis()-start>=timeout)return false;
+  // Sama seperti kamera lama:
+  // tunggu VSYNC HIGH
+  while(gpio_get_level(I2SCamera::vSyncPin)==0){
+    if(millis()-start>=timeout)
+      return false;
     delay(1);
   }
-
+  // lalu tunggu VSYNC kembali LOW
+  start=millis();
+  while(gpio_get_level(I2SCamera::vSyncPin)!=0){
+    if(millis()-start>=timeout)
+      return false;
+    delay(1);
+  }
   return true;
 }
 
@@ -106,15 +114,14 @@ void IRAM_ATTR I2SCamera::vSyncInterrupt(void* arg)
 
   gpio_intr_enable(vSyncPin);
 }
-
 void I2SCamera::i2sStop()
 {
   if(i2sInterruptHandle)
     esp_intr_disable(i2sInterruptHandle);
   if(vSyncInterruptHandle)
     esp_intr_disable(vSyncInterruptHandle);
-  I2S0.conf.rx_start=0;
   i2sConfReset();
+  I2S0.conf.rx_start=0;
 }
 bool I2SCamera::i2sRunChecked()
 {
@@ -122,10 +129,19 @@ bool I2SCamera::i2sRunChecked()
   if(!dmaBuffer || dmaBufferCount<=0 || !i2sInterruptHandle){
     Serial.printf(
       "TARS: I2S FAIL DMA dma=%p count=%d irq=%p\n",
-      dmaBuffer,dmaBufferCount,i2sInterruptHandle
+      dmaBuffer,
+      dmaBufferCount,
+      i2sInterruptHandle
     );
     return false;
   }
+  // PENTING:
+  // kamera lama menunggu VSYNC SEBELUM reset I2S.
+  if(!waitVSyncFrame(500)){
+    Serial.println("TARS: VSYNC FRAME TIMEOUT");
+    return false;
+  }
+  // Urutan setelah VSYNC dibuat sama seperti kamera lama.
   esp_intr_disable(i2sInterruptHandle);
   if(!i2sConfReset()){
     Serial.println("TARS: I2S RESET FAILED");
@@ -136,7 +152,7 @@ bool I2SCamera::i2sRunChecked()
   framePointer=0;
   I2S0.rx_eof_num=dmaBuffer[0]->sampleCount();
   I2S0.in_link.addr=
-    (uint32_t)&(dmaBuffer[0]->descriptor);
+    (uint32_t)&dmaBuffer[0]->descriptor;
   I2S0.in_link.start=1;
   I2S0.int_clr.val=I2S0.int_raw.val;
   I2S0.int_ena.val=0;
