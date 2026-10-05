@@ -24,8 +24,15 @@ OV7670::OV7670(
 
   DEBUG_PRINT("Waiting for VSYNC...");
   pinMode(VSYNC,INPUT);
-  while(!digitalRead(VSYNC));
-  while(digitalRead(VSYNC));
+
+  uint32_t t=millis();
+  while(!digitalRead(VSYNC)&&millis()-t<30)
+    delay(1);
+
+  t=millis();
+  while(digitalRead(VSYNC)&&millis()-t<30)
+    delay(1);
+
   DEBUG_PRINTLN(" done");
 
   mode=m;
@@ -144,36 +151,36 @@ void OV7670::QVGA()
 
 void OV7670::QQVGARGB565()
 {
-  i2c.writeRegister(ADDR, REG_COM7, 0b10000000);
-  i2c.writeRegister(ADDR, REG_CLKRC, 0b10000000);
-  i2c.writeRegister(ADDR, REG_COM11, 0b1000 | 0b10);
-  i2c.writeRegister(ADDR, REG_COM7, 0b100);
-  i2c.writeRegister(ADDR, REG_COM15, 0b11000000 | 0b010000);
+  i2c.writeRegister(ADDR,REG_COM7,0b10000000);
+  i2c.writeRegister(ADDR,REG_CLKRC,0b10000000);
+  i2c.writeRegister(ADDR,REG_COM11,0b1000|0b10);
+  i2c.writeRegister(ADDR,REG_COM7,0b100);
+  i2c.writeRegister(ADDR,REG_COM15,0b11000000|0b010000);
 
   QQVGA();
 
   frameControl(196,52,8,488);
 
-  i2c.writeRegister(ADDR, 0xb0, 0x84);
+  i2c.writeRegister(ADDR,0xb0,0x84);
   saturation(0);
-  i2c.writeRegister(ADDR, 0x13, 0xe7);
-  i2c.writeRegister(ADDR, 0x6f, 0x9f);
+  i2c.writeRegister(ADDR,0x13,0xe7);
+  i2c.writeRegister(ADDR,0x6f,0x9f);
 }
 
 void OV7670::QVGARGB565()
 {
-  i2c.writeRegister(ADDR, REG_COM7, 0b10000000);
-  i2c.writeRegister(ADDR, REG_CLKRC, 0b10000000);
-  i2c.writeRegister(ADDR, REG_COM11, 0b1000 | 0b10);
-  i2c.writeRegister(ADDR, REG_COM7, 0b100);
-  i2c.writeRegister(ADDR, REG_COM15, 0b11000000 | 0b010000);
+  i2c.writeRegister(ADDR,REG_COM7,0b10000000);
+  i2c.writeRegister(ADDR,REG_CLKRC,0b10000000);
+  i2c.writeRegister(ADDR,REG_COM11,0b1000|0b10);
+  i2c.writeRegister(ADDR,REG_COM7,0b100);
+  i2c.writeRegister(ADDR,REG_COM15,0b11000000|0b010000);
 
   QVGA();
 
   frameControl(168,24,12,492);
 
-  i2c.writeRegister(ADDR, 0xb0, 0x84);
+  i2c.writeRegister(ADDR,0xb0,0x84);
   saturation(0);
-  i2c.writeRegister(ADDR, 0x13, 0xe7);
-  i2c.writeRegister(ADDR, 0x6f, 0x9f);
+  i2c.writeRegister(ADDR,0x13,0xe7);
+  i2c.writeRegister(ADDR,0x6f,0x9f);
 }
