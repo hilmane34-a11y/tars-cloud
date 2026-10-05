@@ -529,14 +529,24 @@ bool I2SCamera::captureFrameData(
   streamError=false;
   for(int i=0;i<STREAM_BLOCKS;i++)
     streamState[i]=0;
-  if(!i2sRunChecked())return false;
+if(!i2sRunChecked()){ Serial.println("TARS: CAM FAIL = I2S START");
+  return false;
+}
   const int blocksNeeded=(yres+STREAM_LINES-1)/STREAM_LINES;
   int blocksDone=0;
   uint32_t start=millis();
   while(blocksDone<blocksNeeded){
-    if(millis()-start>CAMERA_CAPTURE_TIMEOUT){
-      i2sStop();
-      return false;
+if(millis()-start>CAMERA_CAPTURE_TIMEOUT){
+  Serial.printf(
+    "TARS: CAM FAIL = CAPTURE TIMEOUT blocks=%d/%d ready=%d fill=%d line=%d\n",
+    blocksDone,
+    blocksNeeded,
+    streamReady,
+    streamFill,
+    streamLine
+  );
+  i2sStop();
+  return false;
     }
     if(streamReady<=0){
       delay(1);
