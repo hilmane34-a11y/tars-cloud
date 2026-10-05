@@ -540,7 +540,7 @@ bool envAnalyze(
 
     result.surprise=true;
     result.surpriseConfidence=
-      min(100,score);
+    score>100?100:(uint8_t)score;
 
     lastSurprise=now;
   }
