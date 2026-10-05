@@ -96,6 +96,7 @@ WAVDecoder wav;
 WebSocketsClient sttWS;
 OV7670*camera=nullptr;
 SemaphoreHandle_t previewMux=nullptr;
+SemaphoreHandle_t envMux=nullptr;
 SemaphoreHandle_t cameraMux=nullptr;
 static uint16_t cameraEnvironment[96*32];
 static uint8_t cameraPreview[128*64];
@@ -277,14 +278,18 @@ void cameraTask(void*){
 bool ok=false;
 bool analyzed=false;
 EnvState environment={};
-    if(xSemaphoreTake(cameraMux,portMAX_DELAY)==pdTRUE){
-  if(xSemaphoreTake(previewMux,portMAX_DELAY)==pdTRUE){
-    ok=I2SCamera::captureFrameData(
-      cameraEnvironment,
-      cameraPreview
-    );
+if(xSemaphoreTake(cameraMux,portMAX_DELAY)==pdTRUE){
+  if(xSemaphoreTake(envMux,portMAX_DELAY)==pdTRUE){
+    if(xSemaphoreTake(previewMux,portMAX_DELAY)==pdTRUE){
+      ok=I2SCamera::captureFrameData(
+        cameraEnvironment,
+        cameraPreview
+      );
+      if(ok)
+        previewReady=true;
+      xSemaphoreGive(previewMux);
+    }
     if(ok){
-      previewReady=true;
       analyzed=envAnalyze(
         cameraEnvironment,
         I2SCamera::dominantColor(),
@@ -292,7 +297,7 @@ EnvState environment={};
         environment
       );
     }
-    xSemaphoreGive(previewMux);
+    xSemaphoreGive(envMux);
   }
   xSemaphoreGive(cameraMux);
 }
@@ -1132,8 +1137,9 @@ void setup(){
   oled.setCursor(36,0);oled.print("TARS");oled.setTextSize(1);oled.setCursor(3,27);oled.print("BOOT");oled.display();
  }
  wheelsBegin();
- cameraMux=xSemaphoreCreateMutex();
  previewMux=xSemaphoreCreateMutex();
+ envMux=xSemaphoreCreateMutex();
+ cameraMux=xSemaphoreCreateMutex();
  micOK=initMic();
  if(!LittleFS.begin(true))Serial.println("TARS: LITTLEFS ERROR");
  else Serial.printf("TARS: LITTLEFS READY %u/%u KB\n",(unsigned)(LittleFS.usedBytes()/1024),(unsigned)(LittleFS.totalBytes()/1024));
