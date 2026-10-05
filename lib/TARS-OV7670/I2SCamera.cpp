@@ -119,28 +119,31 @@ void I2SCamera::i2sStop()
   I2S0.conf.rx_start=0;
   i2sConfReset();
 }
-
 bool I2SCamera::i2sRunChecked()
 {
   DEBUG_PRINTLN("I2S Run");
-
-  if(!dmaBuffer||dmaBufferCount<=0||!i2sInterruptHandle){
-    DEBUG_PRINTLN("I2S DMA NOT READY");
-    return false;
-  }
-
-  if(!waitVSync(1,50)||!waitVSync(0,50)){
-    DEBUG_PRINTLN("I2S VSYNC TIMEOUT");
-    return false;
-  }
-
-  esp_intr_disable(i2sInterruptHandle);
-
-  if(!i2sConfReset()){
-    DEBUG_PRINTLN("I2S RESET TIMEOUT");
-    return false;
-  }
-
+if(!dmaBuffer||dmaBufferCount<=0||!i2sInterruptHandle){
+  Serial.printf(
+    "TARS: I2S FAIL DMA dma=%p count=%d irq=%p\n",
+    dmaBuffer,
+    dmaBufferCount,
+    i2sInterruptHandle
+  );
+  return false;
+}
+if(!waitVSync(1,50)){
+  Serial.println("TARS: I2S FAIL VSYNC HIGH");
+  return false;
+}
+if(!waitVSync(0,50)){
+  Serial.println("TARS: I2S FAIL VSYNC LOW");
+  return false;
+}
+esp_intr_disable(i2sInterruptHandle);
+if(!i2sConfReset()){
+  Serial.println("TARS: I2S FAIL RESET");
+  return false;
+}
   blocksReceived=0;
   dmaBufferActive=0;
   framePointer=0;
