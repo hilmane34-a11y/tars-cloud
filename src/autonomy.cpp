@@ -2,9 +2,9 @@
 #include "wheels.h"
 #include "personality.h"
 
-#define AUTO_SPEED 220
-#define FORWARD_MS 30000
-#define TURN_MS 30000
+#define AUTO_SPEED 150
+#define FORWARD_MS 2000
+#define TURN_MS 800
 #define ENV_TIMEOUT 4000
 #define REST_CONFIRM_MS 1500
 
