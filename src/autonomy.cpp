@@ -1,4 +1,5 @@
 #include "autonomy.h"
+#include <Arduino.h>
 #include "wheels.h"
 #include "personality.h"
 
