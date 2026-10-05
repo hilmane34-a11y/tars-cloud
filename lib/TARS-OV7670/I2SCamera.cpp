@@ -1,6 +1,8 @@
 #include "I2SCamera.h"
 #include "Config.h"
 #include "Log.h"
+#include "../../src/env.h"
+#include <math.h>
 
 int I2SCamera::blocksReceived = 0;
 int I2SCamera::framesReceived = 0;
@@ -30,6 +32,9 @@ static volatile int streamFill=0,streamLine=0,streamReady=0;
 static volatile int readyQueue[STREAM_BLOCKS]={0};
 static volatile int readyHead=0,readyTail=0;
 static volatile bool streamFrameDone=false,streamError=false;
+
+static volatile uint8_t lastDominantColor=ENV_COLOR_UNKNOWN;
+static volatile uint8_t lastColorConfidence=0;
 
 void IRAM_ATTR I2SCamera::i2sInterrupt(void* arg)
 {
