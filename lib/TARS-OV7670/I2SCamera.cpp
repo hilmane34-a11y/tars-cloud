@@ -374,42 +374,132 @@ bool I2SCamera::encodeFrameToJPEG(uint8_t* outBuffer,size_t* outLen,int quality)
   i2sStop();
   return JPEGEncoderWrapper::finish(outLen);
 }
+uint8_t I2SCamera::dominantColor(){
+  return lastDominantColor;
+}
+uint8_t I2SCamera::dominantColorConfidence(){
+  return lastColorConfidence;
+}
+static uint8_t classifyRGB565(uint16_t p){
+  uint8_t r=((p>>11)&0x1F)*255/31;
+  uint8_t g=((p>>5)&0x3F)*255/63;
+  uint8_t b=(p&0x1F)*255/31;
 
-bool I2SCamera::capturePreview(uint8_t* out)
-{
-  if(!out)return false;
-  memset(out,0,128*64);
-  streamFill=0;streamLine=0;streamReady=0;
-  readyHead=0;readyTail=0;streamFrameDone=false;streamError=false;
-  for(int i=0;i<STREAM_BLOCKS;i++)streamState[i]=0;
-  i2sRun();
+  uint8_t mx=max(r,max(g,b));
+  uint8_t mn=min(r,min(g,b));
+  uint8_t delta=mx-mn;
+
+  if(mx<35)return ENV_COLOR_BLACK;
+  if(mn>220&&delta<35)return ENV_COLOR_WHITE;
+  if(delta<25)return ENV_COLOR_GRAY;
+
+  float h=0;
+
+  if(mx==r)
+    h=60.0f*((float)g-b)/delta;
+  else if(mx==g)
+    h=60.0f*((float)b-r)/delta+120.0f;
+  else
+    h=60.0f*((float)r-g)/delta+240.0f;
+
+  if(h<0)h+=360.0f;
+
+  if(h<15||h>=345)return ENV_COLOR_RED;
+  if(h<40)return ENV_COLOR_ORANGE;
+  if(h<70)return ENV_COLOR_YELLOW;
+  if(h<165)return ENV_COLOR_GREEN;
+  if(h<200)return ENV_COLOR_CYAN;
+  if(h<255)return ENV_COLOR_BLUE;
+  return ENV_COLOR_PURPLE;
+}
+bool I2SCamera::captureFrameData(
+  uint16_t *environmentOut,
+  uint8_t *previewOut
+){
+  if(!environmentOut&&!previewOut)return false;
+  lastDominantColor=ENV_COLOR_UNKNOWN;
+  lastColorConfidence=0;
+  // ENV RGB565: 96x32 = 6144 byte
+  if(environmentOut)
+    memset(environmentOut,0,96*32*sizeof(uint16_t));
+  // OLED preview tetap 128x64
+  if(previewOut)
+    memset(previewOut,0,128*64);
+  uint32_t colorCount[11]={};
+  uint32_t colorSamples=0;
+  streamFill=0;
+  streamLine=0;
+  streamReady=0;
+  readyHead=0;
+  readyTail=0;
+  streamFrameDone=false;
+  streamError=false;
+  for(int i=0;i<STREAM_BLOCKS;i++)
+    streamState[i]=0;
+if(!i2sRunChecked()){ Serial.println("TARS: CAM FAIL = I2S START");
+  return false;
+}
   const int blocksNeeded=(yres+STREAM_LINES-1)/STREAM_LINES;
   int blocksDone=0;
   uint32_t start=millis();
   while(blocksDone<blocksNeeded){
-    if(millis()-start>CAMERA_CAPTURE_TIMEOUT){
-      i2sStop();
-      return false;
+if(millis()-start>CAMERA_CAPTURE_TIMEOUT){
+  Serial.printf(
+    "TARS: CAM FAIL = CAPTURE TIMEOUT blocks=%d/%d ready=%d fill=%d line=%d\n",
+    blocksDone,
+    blocksNeeded,
+    streamReady,
+    streamFill,
+    streamLine
+  );
+  i2sStop();
+  return false;
     }
-    if(streamReady<=0){delay(1);continue;}
+    if(streamReady<=0){
+      delay(1);
+      continue;
+    }
     int idx=readyQueue[readyTail];
     readyTail=(readyTail+1)%STREAM_BLOCKS;
     streamReady--;
-    uint16_t* src=(uint16_t*)streamBlock[idx];
+    uint16_t *src=(uint16_t*)streamBlock[idx];
     int blockY=blocksDone*STREAM_LINES;
     for(int y=0;y<STREAM_LINES;y++){
       if((y&3)==0)vTaskDelay(1);
-      int oy=(blockY+y)*64/yres;
-      if(oy>=64)continue;
+      int sourceY=blockY+y;
+      if(sourceY>=yres)continue;
+      // Pemetaan ENV 96x32
+      int envY=sourceY*32/yres;
       for(int x=0;x<xres;x++){
-        int ox=x*128/xres;
-        if(ox>=128)continue;
         uint16_t p=src[y*xres+x];
-        uint8_t r=((p>>11)&0x1F)*255/31;
-        uint8_t g=((p>>5)&0x3F)*255/63;
-        uint8_t b=(p&0x1F)*255/31;
-        uint8_t gray=(uint8_t)((77*r+150*g+29*b)>>8);
-        if(gray<=47)out[oy*128+ox]=1;
+        if((sourceY&3)==0&&(x&3)==0){
+          uint8_t c=classifyRGB565(p);
+          if(c<11){
+            colorCount[c]++;
+            colorSamples++;
+          }
+        }
+        // ENV RGB565 96x32
+        if(environmentOut){
+          int envX=x*96/xres;
+          if(envX<96&&envY<32){
+            int envPos=envY*96+envX;
+            environmentOut[envPos]=p;
+          }
+        }
+        // OLED grayscale tetap 128x64
+        if(previewOut){
+          int oy=sourceY*64/yres;
+          int ox=x*128/xres;
+          if(ox<128&&oy<64){
+            int pos=oy*128+ox;
+            uint8_t r=((p>>11)&31)*255/31;
+            uint8_t g=((p>>5)&63)*255/63;
+            uint8_t b=(p&31)*255/31;
+            uint8_t gray=(77*r+150*g+29*b)>>8;
+            previewOut[pos]=(gray<=47)?1:0;
+          }
+        }
       }
     }
     streamState[idx]=0;
@@ -417,25 +507,43 @@ bool I2SCamera::capturePreview(uint8_t* out)
     start=millis();
   }
   i2sStop();
-
-  // MEDIAN FILTER 3x3: pertahankan detail gelap dan kurangi noise
-  for(int y=0;y<64;y++){
-    for(int x=0;x<128;x++){
-      int count=0,total=0;
-      for(int dy=-1;dy<=1;dy++){
-        for(int dx=-1;dx<=1;dx++){
-          int nx=x+dx,ny=y+dy;
-          if(nx<0||nx>=128||ny<0||ny>=64)continue;
-          count+=out[ny*128+nx];
-          total++;
-        }
+  if(colorSamples){
+    uint8_t best=ENV_COLOR_UNKNOWN;
+    uint32_t count=0;
+    for(uint8_t i=1;i<11;i++){
+      if(colorCount[i]>count){
+        count=colorCount[i];
+        best=i;
       }
-      previewFiltered[y*128+x]=(count>=total/2+1)?1:0;
     }
-    if((y&7)==0)vTaskDelay(1);
+    lastDominantColor=best;
+    lastColorConfidence=(uint32_t)count*100/colorSamples;
   }
-  memcpy(out,previewFiltered,128*64);
+  // Filter 3x3 hanya untuk OLED
+  if(previewOut){
+    for(int y=0;y<64;y++){
+      for(int x=0;x<128;x++){
+        int count=0,total=0;
+        for(int dy=-1;dy<=1;dy++){
+          for(int dx=-1;dx<=1;dx++){
+            int nx=x+dx,ny=y+dy;
+            if(nx<0||nx>=128||ny<0||ny>=64)
+              continue;
+            count+=previewOut[ny*128+nx];
+            total++;
+          }
+        }
+        previewFiltered[y*128+x]=
+          count>=total/2+1?1:0;
+      }
+      if((y&3)==0)vTaskDelay(1);
+    }
+    memcpy(previewOut,previewFiltered,128*64);
+  }
   return true;
+}
+bool I2SCamera::capturePreview(uint8_t *out){
+  return captureFrameData(nullptr,out);
 }
 void I2SCamera::dmaDiagnostic()
 {
