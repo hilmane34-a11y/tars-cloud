@@ -304,7 +304,9 @@ if(xSemaphoreTake(cameraMux,portMAX_DELAY)==pdTRUE){
 }
      if(ok&&analyzed){
   autonomySetEnvironment(environment);
-  if(tarsMode==MODE_ONLINE&&
+   uint8_t people=I2SCamera::personCount();
+tarsEmotionPeople(people);
+       if(tarsMode==MODE_ONLINE&&
      environment.event!=ENV_NONE&&
      millis()-lastVisionEventAt>=VISION_EVENT_COOLDOWN_MS){
     portENTER_CRITICAL(&visionEventMux);
@@ -1168,6 +1170,7 @@ oledSetStatus("READY");
 envBegin();
 visionLiveBegin();
 personalityBegin();
+tarsEmotionBegin();
 autonomyBegin();
 if(!personalityTaskHandle){
   BaseType_t result=xTaskCreate(
