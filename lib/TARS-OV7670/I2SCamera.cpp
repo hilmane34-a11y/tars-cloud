@@ -637,7 +637,18 @@ if(millis()-start>CAMERA_CAPTURE_TIMEOUT){
     blocksDone++;
     start=millis();
   }
+  // DETEKSI MANUSIA LOKAL
+  if(xres>=160&&yres>=120){
+    if(environmentOut){
+      lastPeopleCount=detectPeopleLocal(
+        environmentOut,
+        96,
+        32
+      );
+    }
+  }
   i2sStop();
+
   if(colorSamples){
     uint8_t best=ENV_COLOR_UNKNOWN;
     uint32_t count=0;
