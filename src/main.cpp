@@ -1127,7 +1127,7 @@ processOnlineRequest(request,vision,status,false);
 /* SETUP */
 void setup(){
  Serial.begin(SERIAL_BAUD);
- //deepSleepBegin();
+ deepSleepBegin();
  Wire.begin(OLED_SDA,OLED_SCL);Wire.setClock(400000);
  oledOK=oled.begin(SSD1306_SWITCHCAPVCC,OLED_ADDR);
  if(oledOK){
@@ -1187,6 +1187,7 @@ if(!personalityTaskHandle){
 }
 autoSpeechBegin(autoSpeechCallback);
 startCamera();
+cameraWifiLiveBegin();
 xTaskCreatePinnedToCore(
  cameraTask,"TARS_EYE",4096,nullptr,2,nullptr,1);
 ramDiag("READY");
