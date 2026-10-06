@@ -2,226 +2,251 @@
 
 #include <Arduino.h>
 #include <WiFi.h>
-#include <OV7670.h>
 #include <I2SCamera.h>
 #include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 #include <freertos/semphr.h>
 
-extern OV7670 *camera;
 extern SemaphoreHandle_t cameraMux;
 extern bool cameraLive;
 extern bool cameraOK;
 extern bool playing;
 
-static WiFiServer liveServer(80);
-static WiFiClient liveClient;
+#define LIVE_PORT       80
+#define LIVE_JPEG_MAX   8192
+#define LIVE_QUALITY    40
+#define LIVE_INTERVAL   200
+#define LIVE_TASK_STACK 3072
 
-static uint8_t liveJpeg[12000];
+static WiFiServer liveServer(LIVE_PORT);
 
-static void sendRoot(WiFiClient &c) {
-  c.println("HTTP/1.1 200 OK");
-  c.println("Content-Type: text/html");
-  c.println("Connection: close");
-  c.println();
-  c.println("<!doctype html><html><body>");
-  c.println("<h3>TARS LIVE CAMERA</h3>");
-  c.println("<img src=\"/stream\" style=\"width:100%;max-width:640px;\">");
-  c.println("</body></html>");
+/*
+   INTERNAL RAM
+   8 KB saja supaya heap TARS tetap lega.
+*/
+static uint8_t liveJpeg[LIVE_JPEG_MAX];
+
+static void sendPage(WiFiClient &client)
+{
+    static const char page[] =
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Type: text/html\r\n"
+        "Connection: close\r\n"
+        "\r\n"
+        "<!DOCTYPE html>"
+        "<html>"
+        "<head>"
+        "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+        "<title>TARS CAMERA</title>"
+        "<style>"
+        "html,body{margin:0;background:#000;color:#fff;text-align:center}"
+        "img{width:100%;max-width:640px;height:auto}"
+        "</style>"
+        "</head>"
+        "<body>"
+        "<h3>TARS LIVE CAMERA</h3>"
+        "<img src='/stream'>"
+        "</body>"
+        "</html>";
+
+    client.print(page);
 }
 
-static void send404(WiFiClient &c) {
-  c.println("HTTP/1.1 404 Not Found");
-  c.println("Content-Type: text/plain");
-  c.println("Connection: close");
-  c.println();
-  c.println("TARS LIVE CAMERA");
-}
-
-static bool captureLiveJPEG(size_t &len) {
-  len = 0;
-
-  if (!cameraMux || !camera || !cameraLive || !cameraOK || playing)
-    return false;
-
-  if (xSemaphoreTake(cameraMux, pdMS_TO_TICKS(1000)) != pdTRUE)
-    return false;
-
-  bool ok = false;
-
-  if (camera && cameraLive && cameraOK && !playing) {
-    ok = I2SCamera::encodeFrameToJPEG(
-      liveJpeg,
-      &len,
-      58
+static void sendStreamHeader(WiFiClient &client)
+{
+    client.print(
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Type: multipart/x-mixed-replace; boundary=frame\r\n"
+        "Cache-Control: no-cache\r\n"
+        "Pragma: no-cache\r\n"
+        "Connection: close\r\n"
+        "\r\n"
     );
-  }
-
-  xSemaphoreGive(cameraMux);
-
-  if (!ok || len == 0 || len > sizeof(liveJpeg)) {
-    len = 0;
-    return false;
-  }
-
-  return true;
 }
 
-static void streamClient(WiFiClient &c) {
+static bool captureLiveJPEG(size_t &length)
+{
+    length = 0;
 
-  c.println("HTTP/1.1 200 OK");
-  c.println("Content-Type: multipart/x-mixed-replace; boundary=frame");
-  c.println("Cache-Control: no-cache");
-  c.println("Pragma: no-cache");
-  c.println("Connection: close");
-  c.println();
+    if (!cameraMux)
+        return false;
 
-  uint32_t lastFrame = 0;
+    if (!cameraLive || !cameraOK || !camera || playing)
+        return false;
 
-  while (c.connected()) {
+    if (xSemaphoreTake(cameraMux, pdMS_TO_TICKS(1000)) != pdTRUE)
+        return false;
 
-    if (!cameraLive || !camera || !cameraOK || playing) {
-      vTaskDelay(pdMS_TO_TICKS(50));
-      continue;
+    bool ok = false;
+
+    if (cameraLive && cameraOK && camera && !playing) {
+        ok = I2SCamera::encodeFrameToJPEG(
+            liveJpeg,
+            &length,
+            LIVE_QUALITY
+        );
     }
 
-    if (millis() - lastFrame < 140) {
-      vTaskDelay(pdMS_TO_TICKS(5));
-      continue;
+    xSemaphoreGive(cameraMux);
+
+    if (!ok || length == 0 || length > LIVE_JPEG_MAX) {
+        length = 0;
+        return false;
     }
 
-    lastFrame = millis();
-
-    size_t len = 0;
-
-    if (!captureLiveJPEG(len)) {
-      vTaskDelay(pdMS_TO_TICKS(20));
-      continue;
-    }
-
-    c.print("--frame\r\n");
-    c.print("Content-Type: image/jpeg\r\n");
-    c.print("Content-Length: ");
-    c.print(len);
-    c.print("\r\n\r\n");
-
-    size_t sent = 0;
-
-    while (sent < len && c.connected()) {
-      size_t n = c.write(liveJpeg + sent, len - sent);
-
-      if (!n) {
-        vTaskDelay(pdMS_TO_TICKS(2));
-        continue;
-      }
-
-      sent += n;
-    }
-
-    c.print("\r\n");
-
-    memset(liveJpeg, 0, len);
-
-    if (sent != len)
-      break;
-  }
-
-  c.stop();
+    return true;
 }
 
-static void liveTask(void *) {
+static void streamClient(WiFiClient &client)
+{
+    sendStreamHeader(client);
 
-  liveServer.begin();
-  liveServer.setNoDelay(true);
+    uint32_t lastFrame = 0;
 
-  Serial.println("TARS: WIFI LIVE CAMERA SERVER READY");
+    while (client.connected()) {
 
-  for (;;) {
+        /*
+           Jangan ganggu kamera saat TARS sedang
+           memproses STT/TTS/vision.
+        */
+        if (playing || !cameraLive || !cameraOK || !camera) {
+            vTaskDelay(pdMS_TO_TICKS(50));
+            continue;
+        }
 
-    if (!WiFi.isConnected()) {
-      if (liveClient)
-        liveClient.stop();
+        if (millis() - lastFrame < LIVE_INTERVAL) {
+            vTaskDelay(pdMS_TO_TICKS(5));
+            continue;
+        }
 
-      vTaskDelay(pdMS_TO_TICKS(500));
-      continue;
+        lastFrame = millis();
+
+        size_t jpegLength = 0;
+
+        if (!captureLiveJPEG(jpegLength)) {
+            vTaskDelay(pdMS_TO_TICKS(30));
+            continue;
+        }
+
+        client.print(
+            "--frame\r\n"
+            "Content-Type: image/jpeg\r\n"
+            "Content-Length: "
+        );
+
+        client.print(jpegLength);
+
+        client.print("\r\n\r\n");
+
+        size_t sent = 0;
+
+        while (sent < jpegLength && client.connected()) {
+
+            size_t chunk = jpegLength - sent;
+
+            if (chunk > 1024)
+                chunk = 1024;
+
+            size_t n = client.write(
+                liveJpeg + sent,
+                chunk
+            );
+
+            if (!n)
+                break;
+
+            sent += n;
+
+            vTaskDelay(1);
+        }
+
+        client.print("\r\n");
     }
 
-    if (!liveClient || !liveClient.connected()) {
-
-      WiFiClient incoming = liveServer.available();
-
-      if (!incoming) {
-        vTaskDelay(pdMS_TO_TICKS(10));
-        continue;
-      }
-
-      liveClient = incoming;
-
-      uint32_t start = millis();
-
-      while (liveClient.connected() &&
-             !liveClient.available() &&
-             millis() - start < 2000) {
-        vTaskDelay(pdMS_TO_TICKS(5));
-      }
-
-      if (!liveClient.available()) {
-        liveClient.stop();
-        continue;
-      }
-
-      String request = liveClient.readStringUntil('\n');
-      request.trim();
-
-      while (liveClient.available()) {
-        String h = liveClient.readStringUntil('\n');
-        if (h == "\r" || h.length() == 0)
-          break;
-      }
-
-      Serial.println("TARS: LIVE REQUEST " + request);
-
-      if (request.startsWith("GET /stream")) {
-        streamClient(liveClient);
-      }
-      else if (request.startsWith("GET /")) {
-        sendRoot(liveClient);
-        liveClient.stop();
-      }
-      else {
-        send404(liveClient);
-        liveClient.stop();
-      }
-
-      continue;
-    }
-
-    vTaskDelay(pdMS_TO_TICKS(10));
-  }
+    client.stop();
 }
 
-void cameraWifiLiveBegin() {
+static void cameraWifiTask(void *)
+{
+    for (;;) {
 
-  static bool started = false;
+        if (WiFi.status() != WL_CONNECTED) {
+            vTaskDelay(pdMS_TO_TICKS(500));
+            continue;
+        }
 
-  if (started)
-    return;
+        WiFiClient client = liveServer.available();
 
-  started = true;
+        if (!client) {
+            vTaskDelay(pdMS_TO_TICKS(10));
+            continue;
+        }
 
-  BaseType_t r = xTaskCreatePinnedToCore(
-    liveTask,
-    "TARS_CAM_WIFI",
-    4096,
-    nullptr,
-    1,
-    nullptr,
-    0
-  );
+        client.setTimeout(1000);
 
-  if (r == pdPASS)
-    Serial.println("TARS: WIFI LIVE CAMERA TASK READY");
-  else {
-    started = false;
-    Serial.println("TARS: WIFI LIVE CAMERA TASK FAILED");
-  }
+        char request[128];
+        size_t pos = 0;
+
+        uint32_t start = millis();
+
+        while (client.connected() &&
+               millis() - start < 1000) {
+
+            while (client.available()) {
+
+                char c = client.read();
+
+                if (c == '\n') {
+                    request[pos] = '\0';
+                    break;
+                }
+
+                if (pos < sizeof(request) - 1)
+                    request[pos++] = c;
+            }
+
+            if (pos && request[pos - 1] == '\r')
+                request[pos - 1] = '\0';
+
+            if (strstr(request, "GET /stream")) {
+                streamClient(client);
+                break;
+            }
+
+            if (strstr(request, "GET /")) {
+                sendPage(client);
+                client.stop();
+                break;
+            }
+
+            vTaskDelay(1);
+        }
+
+        if (client.connected())
+            client.stop();
+    }
+}
+
+void cameraWifiLiveBegin()
+{
+    liveServer.begin();
+    liveServer.setNoDelay(true);
+
+    xTaskCreatePinnedToCore(
+        cameraWifiTask,
+        "TARS_WIFI_CAM",
+        LIVE_TASK_STACK,
+        nullptr,
+        1,
+        nullptr,
+        0
+    );
+
+    Serial.println("TARS: WIFI CAMERA LIVE READY");
+    Serial.printf(
+        "TARS: CAMERA LIVE PORT=%u JPEG=%u QUALITY=%u\n",
+        LIVE_PORT,
+        LIVE_JPEG_MAX,
+        LIVE_QUALITY
+    );
 }
