@@ -28,6 +28,9 @@ public:
   static bool capturePreview(uint8_t*out);
   static uint8_t dominantColor();
   static uint8_t dominantColorConfidence();
+  // Deteksi manusia lokal untuk sistem emosi.
+  static uint8_t personCount();
+  static bool localPersonDetection(uint8_t &count);
 
   static void dmaDiagnostic();
   static ImageFormat imageFormat;
