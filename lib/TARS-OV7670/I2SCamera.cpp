@@ -35,7 +35,140 @@ static volatile bool streamFrameDone=false,streamError=false;
 
 static volatile uint8_t lastDominantColor=ENV_COLOR_UNKNOWN;
 static volatile uint8_t lastColorConfidence=0;
+// ============================================================
+// LOCAL BODY / PEOPLE DETECTOR
+// Ringan: memakai frame RGB565 yang sedang diproses.
+// Tidak memakai wajah, JPEG, WiFi, atau cloud.
+// ============================================================
+static volatile uint8_t lastPeopleCount=0;
 
+#define PEOPLE_GRID_W 24
+#define PEOPLE_GRID_H 16
+
+static uint8_t peopleMask[PEOPLE_GRID_W*PEOPLE_GRID_H];
+
+static inline uint8_t pixelBrightness(uint16_t p){
+  uint8_t r=((p>>11)&31)*255/31;
+  uint8_t g=((p>>5)&63)*255/63;
+  uint8_t b=(p&31)*255/31;
+  return (77*r+150*g+29*b)>>8;
+}
+// Menilai apakah pixel cukup berbeda dari lingkungan.
+// Bukan skin detector: pakaian/warna tubuh tetap bisa terbaca.
+static inline bool bodyPixel(uint16_t p,uint8_t avg){
+  uint8_t b=pixelBrightness(p);
+  int d=abs((int)b-(int)avg);
+  return d>=24;
+}
+static uint8_t detectPeopleLocal(
+  uint16_t *image,
+  int w,
+  int h
+){
+  if(!image)return 0;
+  memset(peopleMask,0,sizeof(peopleMask));
+  // Ambil brightness kasar tiap grid.
+  uint32_t total=0;
+  uint32_t samples=0;
+  for(int y=0;y<h;y+=8){
+    for(int x=0;x<w;x+=8){
+      total+=pixelBrightness(image[y*w+x]);
+      samples++;
+    }
+  }
+  uint8_t avg=samples?total/samples:0;
+  // Bentuk siluet kasar.
+  for(int gy=0;gy<PEOPLE_GRID_H;gy++){
+    int y0=gy*h/PEOPLE_GRID_H;
+    int y1=(gy+1)*h/PEOPLE_GRID_H;
+    for(int gx=0;gx<PEOPLE_GRID_W;gx++){
+      int x0=gx*w/PEOPLE_GRID_W;
+      int x1=(gx+1)*w/PEOPLE_GRID_W;
+      int sum=0;
+      int n=0;
+      for(int y=y0;y<y1;y+=3){
+        for(int x=x0;x<x1;x+=3){
+          sum+=pixelBrightness(image[y*w+x]);
+          n++;
+        }
+      }
+      if(n){
+        uint8_t b=sum/n;
+        int diff=abs((int)b-(int)avg);
+        if(diff>=24)
+          peopleMask[gy*PEOPLE_GRID_W+gx]=1;
+      }
+    }
+  }
+  // Hilangkan noise kecil.
+  for(int gy=1;gy<PEOPLE_GRID_H-1;gy++){
+    for(int gx=1;gx<PEOPLE_GRID_W-1;gx++){
+      int n=0;
+      for(int dy=-1;dy<=1;dy++)
+        for(int dx=-1;dx<=1;dx++)
+          n+=peopleMask[
+            (gy+dy)*PEOPLE_GRID_W+
+            (gx+dx)
+          ];
+
+      if(n<3)
+        peopleMask[gy*PEOPLE_GRID_W+gx]=0;
+    }
+  }
+  // Cari dua massa tubuh yang cukup tinggi.
+  // Tidak peduli wajah terlihat atau tidak.
+  int columns[PEOPLE_GRID_W]={};
+
+  for(int gx=0;gx<PEOPLE_GRID_W;gx++){
+    for(int gy=0;gy<PEOPLE_GRID_H;gy++)
+      columns[gx]+=peopleMask[
+        gy*PEOPLE_GRID_W+gx
+      ];
+  }
+  // Kelompokkan kolom berisi bentuk tubuh.
+  uint8_t groups=0;
+  bool active=false;
+  int start=0;
+  for(int gx=0;gx<PEOPLE_GRID_W;gx++){
+    bool occupied=columns[gx]>=2;
+    if(occupied&&!active){
+      active=true;
+      start=gx;
+    }
+    if((!occupied||gx==PEOPLE_GRID_W-1)&&active){
+      int end=occupied&&gx==PEOPLE_GRID_W-1?
+              gx:gx-1;
+      int width=end-start+1;
+      int cells=0;
+      int top=PEOPLE_GRID_H;
+      int bottom=0;
+      for(int x=start;x<=end;x++){
+        for(int y=0;y<PEOPLE_GRID_H;y++){
+          if(peopleMask[y*PEOPLE_GRID_W+x]){
+            cells++;
+            if(y<top)top=y;
+            if(y>bottom)bottom=y;
+          }
+        }
+      }
+      int height=bottom-top+1;
+      // Kandidat tubuh harus punya tinggi dan massa.
+      if(width>=2 &&
+         height>=5 &&
+         cells>=12){
+        groups++;
+      }
+      active=false;
+    }
+  }
+  // Maksimal dua orang yang dibutuhkan untuk cemburu.
+  if(groups>2)groups=2;
+  lastPeopleCount=groups;
+  return groups;
+}
+uint8_t I2SCamera::peopleCount(){
+  return lastPeopleCount;
+}
 void IRAM_ATTR I2SCamera::i2sInterrupt(void* arg)
 {
   I2S0.int_clr.val=I2S0.int_raw.val;
