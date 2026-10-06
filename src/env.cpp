@@ -342,7 +342,7 @@ bool envAnalyze(
     */
     bool rawClear=
       bright>20 &&
-      clutter<220;
+      clutter<120;
 
     /*
       Hysteresis temporal.
@@ -371,24 +371,7 @@ bool envAnalyze(
       if(blockedStable[i]>=CLEAR_LOST_FRAMES)
         *clear[i]=false;
     }
-
-if(millis()-lastEnvDebug>=500){
-  lastEnvDebug=millis();
-
-  Serial.printf(
-    "ENV %c: B=%u E=%u T=%u C=%u K=%u RAW=%d CLEAR=%d\n",
-    i==0?'L':
-    i==1?'C':'R',
-    bright,
-    edgeRate,
-    textureRate,
-    colorRate,
-    clutter,
-    rawClear,
-    *clear[i]
-      );
-    }
-  }
+   }
   result.valid=true;
   result.obstacle=!result.centerClear;
 
