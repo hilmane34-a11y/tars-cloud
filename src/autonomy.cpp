@@ -2,13 +2,12 @@
 #include "wheels.h"
 #include "personality.h"
 
-#define AUTO_SPEED 200
+#define AUTO_SPEED 220
 #define FORWARD_MS 2000
 #define TURN_MS 800
 #define OBSERVE_MS 30000
 #define ENV_TIMEOUT 4000
 #define REST_CONFIRM_MS 1500
-#define AUTONOMY_START_DELAY 10000
 
 enum AutoState {
   EXPLORE,
@@ -31,9 +30,6 @@ static uint32_t restSince=0;
 
 static bool preferLeft=true;
 
-static uint32_t autonomyStartAt=0;
-static bool autonomyReady=false;
-
 void autonomyBegin(){
   env={};
   moving=false;
@@ -45,9 +41,6 @@ void autonomyBegin(){
 
   mode=EXPLORE;
   preferLeft=true;
-
-  autonomyStartAt=millis()+AUTONOMY_START_DELAY;
-  autonomyReady=false;
 
   wheelsStop();
 }
@@ -71,15 +64,6 @@ bool autonomyIsMoving(){
 
 void autonomyUpdate(bool enabled,bool busy){
   uint32_t now=millis();
-
-  if(!autonomyReady){
-    if((int32_t)(now-autonomyStartAt)<0){
-      wheelsStop();
-      return;
-    }
-
-    autonomyReady=true;
-  }
 
   if(!enabled||busy){
     autonomyStop();
