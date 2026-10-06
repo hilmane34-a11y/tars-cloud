@@ -5,7 +5,7 @@
 #define WHEEL_R1 17  // L9110S B-1A
 #define WHEEL_R2 19  // L9110S B-2A (RX0)
 
-#define MAX_SPEED 255
+#define MAX_SPEED 200
 
 static void motorWrite(uint8_t a, uint8_t b, int16_t speed) {
   speed = constrain(speed, -MAX_SPEED, MAX_SPEED);
