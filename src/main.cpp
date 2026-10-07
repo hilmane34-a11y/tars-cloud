@@ -85,7 +85,7 @@ const uint32_t STT_ERROR_COOLDOWN=6000;
 const uint32_t STT_QUOTA_COOLDOWN=15000;
 const uint32_t STT_RECONNECT_GUARD=60000;
 const uint32_t STT_IDLE_TIMEOUT_MS=10000;
-const uint32_t VISION_EVENT_COOLDOWN_MS=45000;
+const uint32_t VISION_EVENT_COOLDOWN_MS=120000;
 
 static int32_t rawBuf[BUF/4];
 static int16_t pcmBuf[BUF/4],preBuf[PREROLL_SAMPLES],sendBuf[256];
