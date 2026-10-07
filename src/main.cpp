@@ -104,7 +104,7 @@ static uint8_t cameraPreview[128*64];
 bool previewReady=false;
 portMUX_TYPE visionEventMux=portMUX_INITIALIZER_UNLOCKED;
 static TaskHandle_t personalityTaskHandle=nullptr;
-
+static bool visionSceneLatched=false;
 static void personalityTask(void *parameter)
 {
   for(;;){
@@ -305,14 +305,21 @@ if(xSemaphoreTake(cameraMux,portMAX_DELAY)==pdTRUE){
   autonomySetEnvironment(environment);
 uint8_t people=I2SCamera::peopleCount();
 tarsEmotionPeople(people);
-       if(tarsMode==MODE_ONLINE&&
-     environment.event!=ENV_NONE&&
+if(tarsMode==MODE_ONLINE){
+  if(environment.event==ENV_NONE){
+    visionSceneLatched=false;
+  }
+  if(environment.event==ENV_SCENE_CHANGED &&
+     !visionSceneLatched &&
      millis()-lastVisionEventAt>=VISION_EVENT_COOLDOWN_MS){
     portENTER_CRITICAL(&visionEventMux);
     pendingVisionCheck=true;
     portEXIT_CRITICAL(&visionEventMux);
+    visionSceneLatched=true;
     lastVisionEventAt=millis();
+    Serial.println("TARS: SIGNIFICANT SCENE CHANGE -> VISION");
   }
+}
   frameErrors=0;
 }else{
   frameErrors++;
