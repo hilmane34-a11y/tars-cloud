@@ -78,6 +78,9 @@ bool personalityWantsSpeak(){
   return !resting && p.boredom>70 && p.energy>20 &&
          millis()-lastSpeech>120000;
 }
+void personalityResetSpeechTimer(){
+  lastSpeech=millis();
+}
 
 void personalitySpeechDone(){
   lastSpeech=millis();
