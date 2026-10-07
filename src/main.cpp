@@ -31,7 +31,6 @@
 #include "deep_sleep.h"
 #include <I2SCamera.h>
 #include "sleep_oled.h"
-#include <camera_wifi_live.h>
 #include <tars_emotion.h>
 
 #define MIC_PORT I2S_NUM_1
