@@ -71,7 +71,7 @@ static bool captureLiveJPEG(size_t &length)
     if (!cameraMux)
         return false;
 
-    if (!cameraLive || !cameraOK || !camera || playing)
+    if (!cameraLive || !cameraOK || playing)
         return false;
 
     if (xSemaphoreTake(cameraMux, pdMS_TO_TICKS(1000)) != pdTRUE)
@@ -79,7 +79,7 @@ static bool captureLiveJPEG(size_t &length)
 
     bool ok = false;
 
-    if (cameraLive && cameraOK && camera && !playing) {
+    if (cameraLive && cameraOK && !playing){
         ok = I2SCamera::encodeFrameToJPEG(
             liveJpeg,
             &length,
@@ -109,7 +109,7 @@ static void streamClient(WiFiClient &client)
            Jangan ganggu kamera saat TARS sedang
            memproses STT/TTS/vision.
         */
-        if (playing || !cameraLive || !cameraOK || !camera) {
+     if (playing || !cameraLive || !cameraOK) {
             vTaskDelay(pdMS_TO_TICKS(50));
             continue;
         }
