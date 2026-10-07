@@ -6,8 +6,8 @@ static AutoSpeechCallback speakCallback=nullptr;
 
 static bool pending=false;
 static bool processing=false;
-static bool visionQueued=false;
 
+static bool visionQueued=false;
 static String visionPrompt;
 
 static uint32_t lastEvent=0;
@@ -29,6 +29,8 @@ default:return "Gunakan gaya akrab dan ekspresif.";
 static void queueVision(const String &prompt){
 if(!prompt.length())return;
 
+// Hanya satu event vision yang boleh menunggu.
+// Event baru menggantikan event lama.
 visionPrompt=prompt;
 visionQueued=true;
 }
@@ -38,8 +40,8 @@ speakCallback=callback;
 
 pending=false;
 processing=false;
-visionQueued=false;
 
+visionQueued=false;
 visionPrompt="";
 
 lastEvent=0;
@@ -48,9 +50,7 @@ lastVisionRequest=0;
 randomSeed(micros());
 }
 
-void autoSpeechNotifyVision(
-const String &description
-){
+void autoSpeechNotifyVision(const String &description){
 if(!description.length())return;
 
 queueVision(
@@ -70,24 +70,14 @@ description+
 );
 }
 
-void autoSpeechNotifyVisionEvent(
-EnvEvent event
-){
-/*
+void autoSpeechNotifyVisionEvent(EnvEvent event){
 
-* Hanya gerakan lokal yang memicu pemeriksaan Vision.
-* 
-* ENV_SCENE_CHANGED sengaja tidak digunakan karena
-* perubahan seluruh pemandangan bisa disebabkan oleh
-* cahaya, bayangan, kamera bergeser, atau perubahan
-* lingkungan lain yang bukan manusia/hewan.
-  */
-  if(
-  event!=ENV_MOTION_LEFT &&
-  event!=ENV_MOTION_CENTER &&
-  event!=ENV_MOTION_RIGHT
-  )
-  return;
+if(
+event!=ENV_MOTION_LEFT &&
+event!=ENV_MOTION_CENTER &&
+event!=ENV_MOTION_RIGHT
+)
+return;
 
 uint32_t now=millis();
 
@@ -126,9 +116,7 @@ default:
 
 lastEvent=now;
 
-autoSpeechNotifyVision(
-description
-);
+autoSpeechNotifyVision(description);
 }
 
 void autoSpeechUpdate(
@@ -136,6 +124,7 @@ bool enabled,
 bool listening,
 bool speaking
 ){
+
 if(
 !enabled ||
 listening ||
@@ -147,13 +136,12 @@ processing ||
 return;
 
 if(tarsEmotionHasEvent())
-  return;
+return;
 
 if(personalityIsResting())
 return;
 
-PersonalityState state=
-personalityGet();
+PersonalityState state=personalityGet();
 
 if(
 state.energy<=20 ||
@@ -166,43 +154,45 @@ uint32_t now=millis();
 /*
 
 * PRIORITAS 1
-* RASA PENASARAN TERHADAP LINGKUNGAN
+* VISION
   */
-  if(
-  visionQueued &&
-  visionPrompt.length() &&
-  state.curiosity>=AUTO_CURIOSITY_MIN
-  ){
+
+if(
+visionQueued &&
+visionPrompt.length() &&
+state.curiosity>=AUTO_CURIOSITY_MIN
+){
 
 if(
   lastVisionRequest!=0 &&
-  now-lastVisionRequest<
-    AUTO_VISION_COOLDOWN
-)
+  now-lastVisionRequest<AUTO_VISION_COOLDOWN
+){
+  // Event sudah tidak relevan.
+  visionQueued=false;
+  visionPrompt="";
   return;
+}
 
 String prompt=visionPrompt;
 
+// Hapus dari queue SEBELUM callback.
 visionQueued=false;
 visionPrompt="";
 
 lastVisionRequest=now;
 
-prompt=
-  "[AUTO_VISION] "+prompt;
+prompt="[AUTO_VISION] "+prompt;
 
 pending=true;
 processing=true;
 
-bool accepted=
-  speakCallback(prompt);
+bool accepted=speakCallback(prompt);
 
 if(!accepted){
+  // Jangan masukkan kembali ke queue.
+  // Callback gagal berarti event ini dibuang.
   pending=false;
   processing=false;
-
-  visionPrompt=prompt;
-  visionQueued=true;
 }
 
 return;
@@ -212,10 +202,11 @@ return;
 /*
 
 * PRIORITAS 2
-* OBROLAN SPONTAN KARENA TERLALU LAMA DIAM
+* OBROLAN SPONTAN
   */
-  if(!personalityWantsSpeak())
-  return;
+
+if(!personalityWantsSpeak())
+return;
 
 String prompt=
 "[AUTO_CHAT] Kamu adalah TARS, "
@@ -236,9 +227,9 @@ String prompt=
 
 "Jangan mengatakan bahwa kamu sedang "
 "bosan atau bahwa percakapan ini "
-"dipicu sistem otomatis.";
+"dipicu sistem otomatis. ";
 
-prompt+=" "+randomStyle();
+prompt+=randomStyle();
 
 prompt+=
 " Buat kalimat baru dan bervariasi "
@@ -255,8 +246,7 @@ prompt+=
 pending=true;
 processing=true;
 
-bool accepted=
-speakCallback(prompt);
+bool accepted=speakCallback(prompt);
 
 if(!accepted){
 pending=false;
@@ -276,6 +266,13 @@ personalitySpeechDone();
 }
 
 void autoSpeechResetTimer(){
+
+/*
+
+* Bersihkan seluruh event otomatis.
+* Tidak ada event lama yang boleh dibawa
+* melewati pergantian mode.
+  */
 
 pending=false;
 processing=false;
