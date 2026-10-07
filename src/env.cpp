@@ -9,7 +9,7 @@
 #define GRID_H 8
 
 #define MOTION_THRESHOLD 30
-#define MIN_MOTION_CELLS 3
+#define MIN_MOTION_CELLS 10
 #define GLOBAL_CHANGE_CELLS 50
 
 // Stabilitas pandangan sebelum memberi keputusan gerak
