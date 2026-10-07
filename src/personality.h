@@ -19,3 +19,4 @@ bool personalityNeedsRest();
 bool personalityIsResting();
 void personalityStartRest();
 void personalityStopRest();
+void personalityResetSpeechTimer();
