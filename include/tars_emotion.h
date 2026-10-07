@@ -16,6 +16,7 @@ enum TarsEmotionEvent : uint8_t {
 
 void tarsEmotionBegin();
 void tarsEmotionUpdate();
+void tarsEmotionResetPending();
 
 void tarsEmotionQuestion(const String &text);
 void tarsEmotionSpeechPeak(uint16_t peak,bool sttSpeech);
