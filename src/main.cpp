@@ -114,11 +114,10 @@ static void personalityTask(void *parameter)
       autonomyIsMoving(),
       false
     );
-
+    tarsEmotionUpdate();
     vTaskDelay(pdMS_TO_TICKS(250));
   }
 }
-
 void ramDiag(const char*tag){
  uint32_t f=ESP.getFreeHeap(),m=ESP.getMinFreeHeap(),a=ESP.getMaxAllocHeap();
  uint32_t i=heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT);
@@ -305,7 +304,7 @@ if(xSemaphoreTake(cameraMux,portMAX_DELAY)==pdTRUE){
 }
      if(ok&&analyzed){
   autonomySetEnvironment(environment);
-   uint8_t people=I2SCamera::personCount();
+uint8_t people=I2SCamera::peopleCount();
 tarsEmotionPeople(people);
        if(tarsMode==MODE_ONLINE&&
      environment.event!=ENV_NONE&&
@@ -703,7 +702,10 @@ String recordSTT(bool offline){
    }
    for(size_t i=0;i<count;i++){preBuf[prePos]=pcmBuf[i];prePos=(prePos+1)%PREROLL_SAMPLES;if(preCount<PREROLL_SAMPLES)preCount++;}
    if(peak>=MIC_THRESHOLD||rms>=3000){
-    voice=true;voiceStart=lastVoice=millis();
+  voice=true; voiceStart=lastVoice=millis();
+    tarsEmotionSpeechPeak(
+    (uint16_t)min(peak,32767L),
+    true);
     size_t start=preCount==PREROLL_SAMPLES?prePos:0,nsend=0;
     for(size_t i=0;i<preCount;i++){
      sendBuf[nsend++]=preBuf[(start+i)%PREROLL_SAMPLES];
@@ -918,6 +920,8 @@ bool processOnlineRequest(const String &q,bool vision,bool status,bool automatic
   playing=false;
   wheelsStop();
   autonomyStop();
+  if(ok)
+  tarsEmotionSpeechDone();
   ramDiag("AFTER-TTS-AUDIO-OFF");
   // Lepaskan kunci dan pulihkan kamera
      wheelsStop();
@@ -935,6 +939,27 @@ bool processOnlineRequest(const String &q,bool vision,bool status,bool automatic
 
     ramDiag("AFTER-CAMERA-RESTART");
     return ok;
+}
+bool processEmotionEvent(){
+  if(tarsMode!=MODE_ONLINE ||
+     playing ||
+     sttConnected ||
+     !tarsEmotionHasEvent())
+    return false;
+  TarsEmotionEvent e=tarsEmotionTakeEvent();
+  String prompt=tarsEmotionPrompt(e);
+  if(!prompt.length())
+    return false;
+  Serial.printf(
+    "TARS: EMOTION EVENT = %s\n",
+    tarsEmotionName(e)
+  );
+  return processOnlineRequest(
+    prompt,
+    false,
+    false,
+    false
+  );
 }
 /* AUTO SPEECH */
 bool autoSpeechCallback(const String &prompt){
@@ -1112,8 +1137,27 @@ void processQuestion(const String&q){
     Serial.println("TARS: MODE OFFLINE");
     return;
   }
-  oledShowText(q,"STT");
-  delay(300);  
+oledShowText(q,"STT");
+delay(300);
+tarsEmotionQuestion(q);
+if(tarsEmotionHasEvent()){
+  TarsEmotionEvent e=tarsEmotionTakeEvent();
+  String prompt=tarsEmotionPrompt(e);
+  if(prompt.length()){
+    prompt=
+      "Ucapan pengguna tadi: \""+
+      q+
+      "\". "+
+      prompt;
+   processOnlineRequest(
+      prompt,
+      false,
+      false,
+      false
+    );
+  }
+  return;
+}
 bool vision=needsVision(q);
 bool status=isStatusQuery(q);
 String request=q;
@@ -1236,24 +1280,19 @@ void enterTarsDeepSleep(){
 
 // LOOP
 void loop(){
-
   time_t now=time(nullptr);
   struct tm t={};
-
   if(now>=1704067200){
     localtime_r(&now,&t);
-
     bool prepare=
       (t.tm_hour==21&&t.tm_min>=58)||
       (t.tm_hour==22&&t.tm_min==0);
-
     if(prepare&&!sleepPreparing){
       sleepPreparing=true;
       sleepPrepareAt=millis();
       sleepOLEDStart();
       Serial.println("TARS: SLEEP ANIMATION START");
     }
-
     if(sleepPreparing){
       if(t.tm_hour>=22){
         sleepOLEDStop();
@@ -1262,51 +1301,48 @@ void loop(){
       }
     }
   }
-
   ramMonitor();
-
   if(playing){
     wheelsStop();
     autonomyStop();
     delay(1);
     return;
   }
-
   if(tarsMode==MODE_ONLINE&&!wifiOK()){
     oledSetStatus("WIFI ERROR");
     delay(500);
     return;
   }
-
   if(alarmDue()){
     autonomyStop();
     runAlarm();
     return;
   }
-
   checkTimeGreeting();
-
   if(playing){
     wheelsStop();
     autonomyStop();
     return;
   }
-
-  String q=tarsMode==MODE_ONLINE?
-    recordRealtime():recordOffline();
-
-  if(q.length()){
+if(tarsMode==MODE_ONLINE &&
+   !playing &&
+   !sttConnected &&
+   tarsEmotionHasEvent()){
+  if(processEmotionEvent())
+    return;
+}
+String q=tarsMode==MODE_ONLINE?
+  recordRealtime():recordOffline();
+if(q.length()){
     wheelsStop();
     autonomyStop();
     processQuestion(q);
   }else if(!oledSpecial){
     oledSetStatus(tarsMode==MODE_ONLINE?"LISTENING":"READY");
   }
-
   if(!playing&&tarsMode==MODE_ONLINE&&!sttConnected){
     processVisionEvent();
     autoSpeechUpdate(true,false,false);
   }
-
   delay(1);
 }
