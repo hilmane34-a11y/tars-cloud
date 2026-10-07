@@ -1207,13 +1207,20 @@ void setup(){
  Serial.println("TARS: MODE OFFLINE");
  Serial.printf("TARS: AUDIO RING=%u PREBUFFER=%u\n",(unsigned)AUDIO_RING_SIZE,(unsigned)AUDIO_PREBUFFER);
 
- ramDiag("BOOT");
- if(oledOK)xTaskCreatePinnedToCore(oledTask,"TARS_OLED",4096,nullptr,1,nullptr,0);
- wifiManagerBegin();
- if(wifiManagerConnect(true))if(syncTime())checkTimeGreeting();
-
+ramDiag("BOOT");
+if(oledOK)xTaskCreatePinnedToCore(oledTask,"TARS_OLED",4096,nullptr,1,nullptr,0);
+wifiManagerBegin();
+if(wifiManagerConnect(true)){
+  if(MDNS.begin("tars")){
+    Serial.println("TARS: MDNS READY");
+    Serial.println("TARS: CAMERA URL = http://tars.local/");
+  }else{
+    Serial.println("TARS: MDNS FAILED");
+  }
+  if(syncTime())
+    checkTimeGreeting();
+}
 oledSetStatus("READY");
-
 envBegin();
 visionLiveBegin();
 personalityBegin();
