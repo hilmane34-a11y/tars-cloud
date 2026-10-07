@@ -703,7 +703,7 @@ String recordSTT(bool offline){
    if(peak>=MIC_THRESHOLD||rms>=3000){
   voice=true; voiceStart=lastVoice=millis();
     tarsEmotionSpeechPeak(
-    (uint16_t)min(peak,32767L),
+    (uint16_t)(peak>32767?32767:peak),
     true);
     size_t start=preCount==PREROLL_SAMPLES?prePos:0,nsend=0;
     for(size_t i=0;i<preCount;i++){
