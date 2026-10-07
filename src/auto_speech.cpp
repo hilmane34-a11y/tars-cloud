@@ -145,6 +145,9 @@ processing ||
 )
 return;
 
+if(tarsEmotionHasPending())
+  return;
+
 if(personalityIsResting())
 return;
 
