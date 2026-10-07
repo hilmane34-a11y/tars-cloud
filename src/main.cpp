@@ -1217,6 +1217,8 @@ void processQuestion(const String&q){
     Serial.println("TARS: SWITCH ONLINE -> OFFLINE");
     closeSTT();
     tarsMode=MODE_OFFLINE;
+    startCamera();
+    ramDiag("SWITCH-OFFLINE-CAMERA-ON");
     portENTER_CRITICAL(&visionEventMux);
     pendingVisionCheck=false;
     portEXIT_CRITICAL(&visionEventMux);
