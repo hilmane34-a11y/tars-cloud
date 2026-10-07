@@ -1,6 +1,7 @@
 #include "autonomy.h"
 #include "wheels.h"
 #include "personality.h"
+#include <tars_emotion.h>
 
 #define AUTO_SPEED 255
 #define FORWARD_MS 8000
@@ -103,14 +104,15 @@ void autonomyUpdate(bool enabled,bool busy){
     lastDecision=0;
   }
 
-  if(mode==EXPLORE&&personalityNeedsRest())
-    mode=TIRED;
+if(mode==EXPLORE&&personalityNeedsRest())
+  mode=TIRED;
 
-  if(mode==TIRED){
-    autonomyStop();
-    restSince=0;
-    mode=SEEK_REST;
-  }
+if(mode==TIRED){
+  autonomyStop();
+  restSince=0;
+  tarsEmotionExhausted();
+  mode=SEEK_REST;
+}
 
   if(mode==SEEK_REST){
     if(env.leftClear&&
