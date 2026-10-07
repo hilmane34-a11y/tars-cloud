@@ -1,11 +1,12 @@
 #include "tars_emotion.h"
-#include "personality.h"
+#include <personality.h>
 
 static TarsEmotionEvent pending=EMOTION_NONE;
 
 static uint32_t lastQuestion=0;
 static uint32_t lastSpeech=0;
 static uint32_t lastPeopleCheck=0;
+static uint32_t lastPeopleSeen=0;
 
 static uint32_t lastTriggered[10]={};
 
@@ -67,6 +68,7 @@ void tarsEmotionBegin(){
   lastQuestion=now;
   lastSpeech=now;
   lastPeopleCheck=now;
+  lastPeopleSeen=now;
 
   for(uint8_t i=0;i<10;i++)
     lastTriggered[i]=0;
@@ -126,9 +128,10 @@ void tarsEmotionUpdate(){
   /*
     Reset pengamatan orang setelah terlalu lama.
   */
-  if(now-lastPeopleCheck>3000){
-    peopleStable=0;
-    lastPeopleCheck=now;
+  if(now-lastPeopleSeen>3000){
+     peopleStable=0;
+     lastPeople=0;
+     jealousyArmed=true;
   }
 }
 
@@ -323,11 +326,11 @@ void tarsEmotionPeople(uint8_t count){
     2+ stabil = cemburu
   */
   uint32_t now=millis();
-
   if(now-lastPeopleCheck<150)
     return;
 
   lastPeopleCheck=now;
+  lastPeopleSeen=now;
 
   if(count>=2){
     if(lastPeople>=2){
