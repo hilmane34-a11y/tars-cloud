@@ -8,9 +8,9 @@
 #define GRID_W 16
 #define GRID_H 8
 
-#define MOTION_THRESHOLD 18
+#define MOTION_THRESHOLD 30
 #define MIN_MOTION_CELLS 3
-#define GLOBAL_CHANGE_CELLS 30
+#define GLOBAL_CHANGE_CELLS 50
 
 // Stabilitas pandangan sebelum memberi keputusan gerak
 #define CLEAR_CONFIRM_FRAMES 3
