@@ -1,10 +1,10 @@
 Import("env")
 
-for f in [
-    "include/tars_emotion.cpp",
-    "include/camera_wifi_live.cpp"
-]:
-    env.BuildSources(
-        "$BUILD_DIR/include_cpp",
-        f
-    )
+env.BuildSources(
+    "$BUILD_DIR/include_cpp",
+    "include",
+    src_filter=[
+        "+<tars_emotion.cpp>",
+        "+<camera_wifi_live.cpp>"
+    ]
+)
