@@ -29,7 +29,7 @@ public:
   static uint8_t dominantColor();
   static uint8_t dominantColorConfidence();
   // Deteksi manusia lokal untuk sistem emosi.
-  static uint8_t personCount();
+  static uint8_t peopleCount();
   static bool localPersonDetection(uint8_t &count);
 
   static void dmaDiagnostic();
