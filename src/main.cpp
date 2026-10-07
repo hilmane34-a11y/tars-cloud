@@ -85,9 +85,8 @@ const uint32_t STT_ERROR_COOLDOWN=6000;
 const uint32_t STT_QUOTA_COOLDOWN=15000;
 const uint32_t STT_RECONNECT_GUARD=60000;
 const uint32_t STT_IDLE_TIMEOUT_MS=10000;
-const uint32_t VISION_EVENT_COOLDOWN_MS=420000;
-const uint32_t EMOTION_EVENT_COOLDOWN_MS=6000;
-uint32_t emotionEventCooldownUntil=0;
+const uint32_t VISION_EVENT_COOLDOWN_MS=45000;
+
 static int32_t rawBuf[BUF/4];
 static int16_t pcmBuf[BUF/4],preBuf[PREROLL_SAMPLES],sendBuf[256];
 
@@ -676,159 +675,63 @@ String stopSTT(uint32_t samples,bool offline=false){
  while(!sttDone&&!sttError&&millis()-st<6000){sttWS.loop();delay(2);yield();}
  String r=sttFinal;closeSTT();return r;
 }
+
 String recordSTT(bool offline){
-  bool cameraStoppedForOnline=false;
-  if(!offline){
-    wheelsStop();
-    autonomyStop();
-    Serial.println("TARS: ONLINE STT -> CAMERA OFF BEFORE TLS");
-    ramDiag("ONLINE-STT-BEFORE-CAM-OFF");
-    stopCamera();
-    cameraStoppedForOnline=true;
-    ramDiag("ONLINE-STT-AFTER-CAM-OFF");
-  }
-  if(!startSTT(offline)){
-    if(cameraStoppedForOnline){
-      Serial.println("TARS: ONLINE STT FAILED -> CAMERA ON");
-      startCamera();
-      ramDiag("ONLINE-STT-CAMERA-RESTORED");
-    }
-    return "";
-  }
-  if(offline)oledSetStatus("READY");
-  else oledSetListening();
+ if(!startSTT(offline))return "";
+ if(offline)oledSetStatus("READY");else oledSetListening();
   size_t prePos=0,preCount=0;
-  uint32_t voiceStart=0,lastVoice=0,samples=0;
-  uint32_t listenStart=millis();
-  bool voice=false;
-  for(;;){
-    sttWS.loop();
-    if(sttError)break;
-    size_t bytes=0;
-    if(i2s_read(MIC_PORT,rawBuf,sizeof(rawBuf),&bytes,pdMS_TO_TICKS(30))!=ESP_OK)
-      continue;
-    size_t count=bytes/4;
-    int32_t peak=0;
-    uint64_t sum=0;
-    for(size_t i=0;i<count;i++){
-      int32_t v=constrain(rawBuf[i]>>16,-32768,32767);
-      pcmBuf[i]=(int16_t)v;
-      int32_t a=abs(v);
-      if(a>peak)peak=a;
-      sum+=(uint64_t)a*a;
-    }
-    uint32_t rms=count?(uint32_t)sqrt((double)sum/count):0;
-    if(!voice){
-      if(!offline&&millis()-listenStart>=STT_IDLE_TIMEOUT_MS){
-        Serial.println("TARS: STT IDLE TIMEOUT - CLOSE NORMAL");
-        closeSTT();
-        if(cameraStoppedForOnline){
-          Serial.println("TARS: ONLINE STT IDLE -> CAMERA ON");
-          startCamera();
-          ramDiag("ONLINE-STT-IDLE-CAMERA-ON");
-        }
-        return "";
-      }
-      for(size_t i=0;i<count;i++){
-        preBuf[prePos]=pcmBuf[i];
-        prePos=(prePos+1)%PREROLL_SAMPLES;
-        if(preCount<PREROLL_SAMPLES)preCount++;
-      }
-      if(peak>=MIC_THRESHOLD||rms>=3000){
-        voice=true;
-        voiceStart=lastVoice=millis();
-        tarsEmotionSpeechPeak(
-          (uint16_t)(peak>32767?32767:peak),
-          true
-        );
-        size_t start=preCount==PREROLL_SAMPLES?prePos:0;
-        size_t nsend=0;
-        for(size_t i=0;i<preCount;i++){
-          sendBuf[nsend++]=preBuf[(start+i)%PREROLL_SAMPLES];
-          if(nsend==256){
-            if(!sttWS.sendBIN(
-              (uint8_t*)sendBuf,
-              nsend*2
-            )){
-              sttError=true;
-              break;
-            }
-            nsend=0;
-          }
-        }
-        if(nsend&&!sttError&&!sttWS.sendBIN(
-          (uint8_t*)sendBuf,
-          nsend*2
-        ))
-          sttError=true;
-        samples+=preCount;
-        Serial.printf(
-          "TARS: %s VOICE PEAK=%ld RMS=%lu\n",
-          offline?"OFFLINE":"ONLINE",
-          (long)peak,
-          (unsigned long)rms
-        );
-      }
-    }else{
-      if(!sttWS.sendBIN(
-        (uint8_t*)pcmBuf,
-        count*2
-      )){
-        Serial.println(
-          offline?
-          "TARS: OFFLINE STT PCM SEND FAILED":
-          "TARS: STT PCM SEND FAILED"
-        );
-        sttError=true;
-        break;
-      }
-      samples+=count;
-      if(peak>=MIC_SILENCE||rms>=1800)
-        lastVoice=millis();
-      if(
-        millis()-voiceStart>=RECORD_MIN_MS &&
-        millis()-lastVoice>=SILENCE_MS
-      )
-        break;
-    }
-    yield();
+ uint32_t voiceStart=0,lastVoice=0,samples=0;
+ uint32_t listenStart=millis();
+ bool voice=false;
+ for(;;){
+  sttWS.loop();if(sttError)break;
+  size_t bytes=0;
+  if(i2s_read(MIC_PORT,rawBuf,sizeof(rawBuf),&bytes,pdMS_TO_TICKS(30))!=ESP_OK)continue;
+  size_t count=bytes/4;int32_t peak=0;uint64_t sum=0;
+  for(size_t i=0;i<count;i++){
+   int32_t v=constrain(rawBuf[i]>>16,-32768,32767);pcmBuf[i]=(int16_t)v;
+   int32_t a=abs(v);if(a>peak)peak=a;sum+=(uint64_t)a*a;
   }
-  if(!voice||sttError){
+  uint32_t rms=count?(uint32_t)sqrt((double)sum/count):0;
+  if(!voice){
+   if(!offline&&millis()-listenStart>=STT_IDLE_TIMEOUT_MS){
+    Serial.println("TARS: STT IDLE TIMEOUT - CLOSE NORMAL");
     closeSTT();
-    if(!offline)
-      Serial.println("TARS: ONLINE STT FAILED -> CAMERA ON");
-    if(cameraStoppedForOnline){
-      startCamera();
-      ramDiag("ONLINE-STT-FAILED-CAMERA-ON");
-    }
-    if(!voice)
-      Serial.println(
-        offline?
-        "TARS: OFFLINE MIC AUDIO TOO LOW":
-        "TARS: MIC AUDIO TOO LOW"
-      );
     return "";
+   }
+   for(size_t i=0;i<count;i++){preBuf[prePos]=pcmBuf[i];prePos=(prePos+1)%PREROLL_SAMPLES;if(preCount<PREROLL_SAMPLES)preCount++;}
+   if(peak>=MIC_THRESHOLD||rms>=3000){
+  voice=true; voiceStart=lastVoice=millis();
+    tarsEmotionSpeechPeak(
+    (uint16_t)min(peak,32767L),
+    true);
+    size_t start=preCount==PREROLL_SAMPLES?prePos:0,nsend=0;
+    for(size_t i=0;i<preCount;i++){
+     sendBuf[nsend++]=preBuf[(start+i)%PREROLL_SAMPLES];
+     if(nsend==256){if(!sttWS.sendBIN((uint8_t*)sendBuf,nsend*2)){sttError=true;break;}nsend=0;}
+    }
+    if(nsend&&!sttError&&!sttWS.sendBIN((uint8_t*)sendBuf,nsend*2))sttError=true;
+    samples+=preCount;
+    Serial.printf("TARS: %s VOICE PEAK=%ld RMS=%lu\n",offline?"OFFLINE":"ONLINE",(long)peak,(unsigned long)rms);
+   }
+  }else{
+   if(!sttWS.sendBIN((uint8_t*)pcmBuf,count*2)){
+    Serial.println(offline?"TARS: OFFLINE STT PCM SEND FAILED":"TARS: STT PCM SEND FAILED");sttError=true;break;
+   }
+   samples+=count;if(peak>=MIC_SILENCE||rms>=1800)lastVoice=millis();
+   if(millis()-voiceStart>=RECORD_MIN_MS&&millis()-lastVoice>=SILENCE_MS)break;
   }
-  String result=stopSTT(samples,offline);
-  /*
-     ONLINE:
-     Kamera sengaja TETAP OFF di sini.
-     processOnlineRequest() akan mempertahankan OFF
-     sampai ASK/VISION + TTS selesai.
-  */
-  if(!offline){
-    Serial.println("TARS: ONLINE STT FINAL -> CAMERA REMAINS OFF FOR TLS/AI/TTS");
-    ramDiag("ONLINE-STT-FINAL-CAMERA-OFF");
-  }
-  return result;
-}
-String recordRealtime(){
-  return recordSTT(false);
+  yield();
+ }
+ if(!voice||sttError){
+  closeSTT();if(!voice)Serial.println(offline?"TARS: OFFLINE MIC AUDIO TOO LOW":"TARS: MIC AUDIO TOO LOW");return "";
+ }
+ return stopSTT(samples,offline);
 }
 
-String recordOffline(){
-  return recordSTT(true);
-}
+String recordRealtime(){return recordSTT(false);}
+String recordOffline(){return recordSTT(true);}
+
 /* COMMAND */
 String normCmd(String s){
  s.toLowerCase();
@@ -1222,8 +1125,6 @@ void processQuestion(const String&q){
     Serial.println("TARS: SWITCH ONLINE -> OFFLINE");
     closeSTT();
     tarsMode=MODE_OFFLINE;
-    startCamera();
-    ramDiag("SWITCH-OFFLINE-CAMERA-ON");
     portENTER_CRITICAL(&visionEventMux);
     pendingVisionCheck=false;
     portEXIT_CRITICAL(&visionEventMux);
@@ -1302,14 +1203,14 @@ void setup(){
  Serial.println("TARS: BLUETOOTH DISABLED");
  Serial.println("TARS: MODE OFFLINE");
  Serial.printf("TARS: AUDIO RING=%u PREBUFFER=%u\n",(unsigned)AUDIO_RING_SIZE,(unsigned)AUDIO_PREBUFFER);
-ramDiag("BOOT");
-if(oledOK)xTaskCreatePinnedToCore(oledTask,"TARS_OLED",4096,nullptr,1,nullptr,0);
-wifiManagerBegin();
-if(wifiManagerConnect(true)){
-  if(syncTime())
-    checkTimeGreeting();
-}
+
+ ramDiag("BOOT");
+ if(oledOK)xTaskCreatePinnedToCore(oledTask,"TARS_OLED",4096,nullptr,1,nullptr,0);
+ wifiManagerBegin();
+ if(wifiManagerConnect(true))if(syncTime())checkTimeGreeting();
+
 oledSetStatus("READY");
+
 envBegin();
 visionLiveBegin();
 personalityBegin();
@@ -1424,12 +1325,9 @@ void loop(){
 if(tarsMode==MODE_ONLINE &&
    !playing &&
    !sttConnected &&
-   millis()>=emotionEventCooldownUntil &&
    tarsEmotionHasEvent()){
-  if(processEmotionEvent()){
-    emotionEventCooldownUntil=millis()+EMOTION_EVENT_COOLDOWN_MS;
+  if(processEmotionEvent())
     return;
-  }
 }
 String q=tarsMode==MODE_ONLINE?
   recordRealtime():recordOffline();
