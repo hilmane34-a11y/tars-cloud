@@ -1,6 +1,5 @@
 #include <Arduino.h>
 #include <WiFi.h>
-#include <ESPmDNS.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <LittleFS.h>
@@ -1274,7 +1273,7 @@ processOnlineRequest(request,vision,status,false);
 /* SETUP */
 void setup(){
  Serial.begin(SERIAL_BAUD);
- deepSleepBegin();
+ //deepSleepBegin();
  Wire.begin(OLED_SDA,OLED_SCL);Wire.setClock(400000);
  oledOK=oled.begin(SSD1306_SWITCHCAPVCC,OLED_ADDR);
  if(oledOK){
@@ -1304,17 +1303,10 @@ void setup(){
  Serial.println("TARS: BLUETOOTH DISABLED");
  Serial.println("TARS: MODE OFFLINE");
  Serial.printf("TARS: AUDIO RING=%u PREBUFFER=%u\n",(unsigned)AUDIO_RING_SIZE,(unsigned)AUDIO_PREBUFFER);
-
 ramDiag("BOOT");
 if(oledOK)xTaskCreatePinnedToCore(oledTask,"TARS_OLED",4096,nullptr,1,nullptr,0);
 wifiManagerBegin();
 if(wifiManagerConnect(true)){
-  if(MDNS.begin("tars")){
-    Serial.println("TARS: MDNS READY");
-    Serial.println("TARS: CAMERA URL = http://tars.local/");
-  }else{
-    Serial.println("TARS: MDNS FAILED");
-  }
   if(syncTime())
     checkTimeGreeting();
 }
@@ -1342,7 +1334,6 @@ if(!personalityTaskHandle){
 }
 autoSpeechBegin(autoSpeechCallback);
 startCamera();
-cameraWifiLiveBegin();
 xTaskCreatePinnedToCore(
  cameraTask,"TARS_EYE",4096,nullptr,2,nullptr,1);
 ramDiag("READY");
