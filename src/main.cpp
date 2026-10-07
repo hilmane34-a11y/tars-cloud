@@ -1093,7 +1093,7 @@ bool processOffline(const String&q){
  static const char*hari[]={"hari","hari ini","kata hari","kata kata","kata kata hari ini","kata hari ini tars","tars hari ini","tars kata hari ini"};
  if(cmdMatch(s,hari,sizeof(hari)/sizeof(*hari))){
   oledShowText("HARI INI","OFFLINE");
-  playLocalMP3(hari_start,hari_end,"Kata-kata hari ini, tuan.");
+  playLocalMP3(hari_start,hari_end,"Kata-kata hari ini, Ooo celeng Celeng itu ga tau ilmu huruf.");
   oledSetStatus("READY");
   return true;
  }
@@ -1103,6 +1103,9 @@ bool processOffline(const String&q){
   tarsMode=MODE_ONLINE;
   personalityResetSpeechTimer();
   autoSpeechResetTimer();
+  tarsEmotionResetPending();
+  autoSpeechResetTimer();
+  personalityResetSpeechTimer();
   portENTER_CRITICAL(&visionEventMux);
   pendingVisionCheck=false;
   portEXIT_CRITICAL(&visionEventMux);
