@@ -14,8 +14,8 @@ extern bool cameraOK;
 extern bool playing;
 
 #define LIVE_PORT        80
-#define LIVE_JPEG_MAX    10240
-#define LIVE_QUALITY     50
+#define LIVE_JPEG_MAX    8000
+#define LIVE_QUALITY     40
 #define LIVE_INTERVAL    200
 #define LIVE_TASK_STACK  3072
 
