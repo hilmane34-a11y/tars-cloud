@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <I2SCamera.h>
+#include <string.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <freertos/semphr.h>
@@ -12,14 +13,15 @@ extern bool cameraLive;
 extern bool cameraOK;
 extern bool playing;
 
-#define LIVE_PORT       80
-#define LIVE_JPEG_MAX   10240
-#define LIVE_QUALITY    50
-#define LIVE_INTERVAL   200
-#define LIVE_TASK_STACK 3072
+#define LIVE_PORT        80
+#define LIVE_JPEG_MAX    10240
+#define LIVE_QUALITY     50
+#define LIVE_INTERVAL    200
+#define LIVE_TASK_STACK  3072
 
 static WiFiServer liveServer(LIVE_PORT);
 static uint8_t liveJpeg[LIVE_JPEG_MAX];
+static bool liveServerStarted = false;
 
 static void sendPage(WiFiClient &client)
 {
@@ -30,21 +32,19 @@ static void sendPage(WiFiClient &client)
         "Connection: close\r\n"
         "\r\n"
         "<!DOCTYPE html>"
-        "<html>"
-        "<head>"
+        "<html><head>"
         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+        "<meta http-equiv='refresh' content='10'>"
         "<title>TARS CAMERA</title>"
         "<style>"
         "html,body{margin:0;background:#000;color:#fff;text-align:center;font-family:Arial}"
         "h3{margin:10px}"
         "img{display:block;width:100%;max-width:640px;height:auto;margin:auto}"
         "</style>"
-        "</head>"
-        "<body>"
+        "</head><body>"
         "<h3>TARS LIVE CAMERA</h3>"
         "<img src='/stream'>"
-        "</body>"
-        "</html>"
+        "</body></html>"
     );
 }
 
@@ -98,7 +98,10 @@ static bool captureLiveJPEG(size_t &length)
     return true;
 }
 
-static bool sendJPEGFrame(WiFiClient &client, size_t jpegLength)
+static bool sendJPEGFrame(
+    WiFiClient &client,
+    size_t jpegLength
+)
 {
     if (!client.connected())
         return false;
@@ -146,10 +149,6 @@ static void streamClient(WiFiClient &client)
 
     while (client.connected()) {
 
-        /*
-           Saat STT/TTS/vision aktif:
-           jangan ambil frame.
-        */
         if (playing || !cameraLive || !cameraOK) {
             vTaskDelay(pdMS_TO_TICKS(50));
             continue;
@@ -171,7 +170,9 @@ static void streamClient(WiFiClient &client)
             failCount++;
 
             if (failCount >= 20) {
-                Serial.println("TARS LIVE: JPEG CAPTURE FAILED");
+                Serial.println(
+                    "TARS LIVE: JPEG CAPTURE FAILED"
+                );
                 failCount = 0;
             }
 
@@ -190,32 +191,97 @@ static void streamClient(WiFiClient &client)
     Serial.println("TARS LIVE: STREAM DISCONNECTED");
 }
 
+static void ensureLiveServer()
+{
+    if (WiFi.status() != WL_CONNECTED)
+        return;
+
+    if (liveServerStarted)
+        return;
+
+    liveServer.begin();
+    liveServer.setNoDelay(true);
+
+    liveServerStarted = true;
+
+    Serial.println("TARS LIVE: HTTP SERVER STARTED");
+    Serial.printf(
+        "TARS LIVE: LISTENING PORT %u\n",
+        LIVE_PORT
+    );
+}
+
 static void cameraWifiTask(void *)
 {
+    bool wasConnected = false;
+
     for (;;) {
 
-        if (WiFi.status() != WL_CONNECTED) {
+        bool connected =
+            WiFi.status() == WL_CONNECTED;
+
+        if (!connected) {
+
+            if (wasConnected) {
+                Serial.println(
+                    "TARS LIVE: WIFI DISCONNECTED"
+                );
+
+                liveServerStarted = false;
+            }
+
+            wasConnected = false;
+
             vTaskDelay(pdMS_TO_TICKS(500));
             continue;
         }
 
-        WiFiClient client = liveServer.available();
+        if (!wasConnected) {
+
+            Serial.println(
+                "TARS LIVE: WIFI CONNECTED"
+            );
+
+            Serial.print(
+                "TARS LIVE: IP = "
+            );
+            Serial.println(
+                WiFi.localIP()
+            );
+
+            ensureLiveServer();
+
+            wasConnected = true;
+        }
+
+        ensureLiveServer();
+
+        WiFiClient client =
+            liveServer.available();
 
         if (!client) {
             vTaskDelay(pdMS_TO_TICKS(10));
             continue;
         }
 
+        Serial.println(
+            "TARS LIVE: HTTP CLIENT CONNECTED"
+        );
+
         client.setTimeout(1500);
 
         char request[256];
+        memset(request, 0, sizeof(request));
+
         size_t pos = 0;
         bool gotRequest = false;
 
         uint32_t start = millis();
 
-        while (client.connected() &&
-               millis() - start < 1500) {
+        while (
+            client.connected() &&
+            millis() - start < 1500
+        ) {
 
             while (client.available()) {
 
@@ -224,15 +290,13 @@ static void cameraWifiTask(void *)
                 if (pos < sizeof(request) - 1)
                     request[pos++] = c;
 
-                /*
-                   HTTP request selesai ketika
-                   ditemukan CRLF CRLF.
-                */
-                if (pos >= 4 &&
+                if (
+                    pos >= 4 &&
                     request[pos - 4] == '\r' &&
                     request[pos - 3] == '\n' &&
                     request[pos - 2] == '\r' &&
-                    request[pos - 1] == '\n') {
+                    request[pos - 1] == '\n'
+                ) {
 
                     request[pos] = '\0';
                     gotRequest = true;
@@ -259,13 +323,13 @@ static void cameraWifiTask(void *)
         if (strstr(request, "GET /stream")) {
 
             streamClient(client);
-        }
-        else if (strstr(request, "GET /")) {
+
+        } else if (strstr(request, "GET /")) {
 
             sendPage(client);
             client.stop();
-        }
-        else {
+
+        } else {
 
             client.print(
                 "HTTP/1.1 404 Not Found\r\n"
@@ -284,8 +348,30 @@ static void cameraWifiTask(void *)
 
 void cameraWifiLiveBegin()
 {
-    liveServer.begin();
-    liveServer.setNoDelay(true);
+    liveServerStarted = false;
+
+    Serial.println(
+        "TARS: WIFI CAMERA LIVE INIT"
+    );
+
+    if (WiFi.status() == WL_CONNECTED) {
+
+        ensureLiveServer();
+
+        Serial.print(
+            "TARS: CAMERA URL = http://"
+        );
+        Serial.print(
+            WiFi.localIP()
+        );
+        Serial.println("/");
+
+    } else {
+
+        Serial.println(
+            "TARS: WIFI NOT CONNECTED"
+        );
+    }
 
     xTaskCreatePinnedToCore(
         cameraWifiTask,
@@ -297,17 +383,9 @@ void cameraWifiLiveBegin()
         0
     );
 
-    Serial.println("================================");
-    Serial.println("TARS: WIFI CAMERA LIVE READY");
-
-    if (WiFi.status() == WL_CONNECTED) {
-        Serial.print("TARS: CAMERA URL = http://");
-        Serial.print(WiFi.localIP());
-        Serial.println("/");
-    }
-    else {
-        Serial.println("TARS: WIFI NOT CONNECTED");
-    }
+    Serial.println(
+        "TARS: WIFI CAMERA LIVE READY"
+    );
 
     Serial.printf(
         "TARS: CAMERA LIVE PORT=%u JPEG=%u QUALITY=%u\n",
@@ -316,5 +394,7 @@ void cameraWifiLiveBegin()
         LIVE_QUALITY
     );
 
-    Serial.println("================================");
+    Serial.println(
+        "TARS: CAMERA LIVE SERVER ACTIVE"
+    );
 }
