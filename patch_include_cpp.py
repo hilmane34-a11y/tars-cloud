@@ -2,10 +2,12 @@ Import("env")
 
 env.Append(
     CPPPATH=[
-        "include",
-        "$PROJECTSRC_DIR",
         "$PROJECT_DIR/include",
         "$PROJECT_DIR/src",
+        "$PROJECT_DIR/lib",
+        "$PROJECT_PACKAGES_DIR/framework-arduinoespressif32/cores/esp32",
+        "$PROJECT_PACKAGES_DIR/framework-arduinoespressif32/variants/esp32",
+        "$PROJECT_PACKAGES_DIR/framework-arduinoespressif32/libraries/WiFi/src",
     ]
 )
 
