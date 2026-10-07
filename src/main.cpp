@@ -87,7 +87,8 @@ const uint32_t STT_QUOTA_COOLDOWN=15000;
 const uint32_t STT_RECONNECT_GUARD=60000;
 const uint32_t STT_IDLE_TIMEOUT_MS=10000;
 const uint32_t VISION_EVENT_COOLDOWN_MS=45000;
-
+const uint32_t EMOTION_EVENT_COOLDOWN_MS=6000;
+uint32_t emotionEventCooldownUntil=0;
 static int32_t rawBuf[BUF/4];
 static int16_t pcmBuf[BUF/4],preBuf[PREROLL_SAMPLES],sendBuf[256];
 
@@ -1327,9 +1328,12 @@ void loop(){
 if(tarsMode==MODE_ONLINE &&
    !playing &&
    !sttConnected &&
+   millis()>=emotionEventCooldownUntil &&
    tarsEmotionHasEvent()){
-  if(processEmotionEvent())
+  if(processEmotionEvent()){
+    emotionEventCooldownUntil=millis()+EMOTION_EVENT_COOLDOWN_MS;
     return;
+  }
 }
 String q=tarsMode==MODE_ONLINE?
   recordRealtime():recordOffline();
