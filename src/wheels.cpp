@@ -1,9 +1,9 @@
 #include "wheels.h"
 
-#define WHEEL_L1 23  // L9110S A-1A
-#define WHEEL_L2 16   // L9110S A-2B (TX0)
-#define WHEEL_R1 17  // L9110S B-1A
-#define WHEEL_R2 19  // L9110S B-2A (RX0)
+#define WHEEL_L1 23
+#define WHEEL_L2 16
+#define WHEEL_R1 17
+#define WHEEL_R2 19
 
 #define MAX_SPEED 255
 
@@ -28,8 +28,27 @@ void wheelsDrive(int16_t left, int16_t right) {
   motorWrite(WHEEL_R1, WHEEL_R2, right);
 }
 
-void wheelsForward(uint8_t speed)  { wheelsDrive(speed, speed); }
-void wheelsBackward(uint8_t speed) { wheelsDrive(-speed, -speed); }
-void wheelsLeft(uint8_t speed)     { wheelsDrive(speed, -speed); }
-void wheelsRight(uint8_t speed)    { wheelsDrive(-speed, speed); }
-void wheelsStop()                  { wheelsDrive(0, 0); }
+// MAJU: kedua motor maju
+void wheelsForward(uint8_t speed) {
+  wheelsDrive(speed, speed);
+}
+
+// MUNDUR: kedua motor mundur
+void wheelsBackward(uint8_t speed) {
+  wheelsDrive(-speed, -speed);
+}
+
+// KIRI: hanya motor kanan maju
+void wheelsLeft(uint8_t speed) {
+  wheelsDrive(0, speed);
+}
+
+// KANAN: hanya motor kiri maju
+void wheelsRight(uint8_t speed) {
+  wheelsDrive(speed, 0);
+}
+
+// STOP
+void wheelsStop() {
+  wheelsDrive(0, 0);
+}
