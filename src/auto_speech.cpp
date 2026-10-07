@@ -1,5 +1,6 @@
 #include "auto_speech.h"
 #include "personality.h"
+#include <tars_emotion.h>
 
 static AutoSpeechCallback speakCallback=nullptr;
 
