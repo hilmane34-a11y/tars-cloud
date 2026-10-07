@@ -1101,6 +1101,8 @@ bool processOffline(const String&q){
   Serial.println("TARS: SWITCH OFFLINE -> ONLINE");
   oledShowText("ONLINE","OFFLINE");
   tarsMode=MODE_ONLINE;
+  personalityResetSpeechTimer();
+  autoSpeechResetTimer();
   portENTER_CRITICAL(&visionEventMux);
   pendingVisionCheck=false;
   portEXIT_CRITICAL(&visionEventMux);
