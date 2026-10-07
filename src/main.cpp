@@ -615,7 +615,6 @@ bool syncTime(){
 /* STT */
 uint32_t sttRetryAt=0;bool sttRetryShown=false;
 bool sttCooling(){return millis()<sttRetryAt;}
-
 void sttEvent(WStype_t type,uint8_t*payload,size_t length){
  if(type==WStype_CONNECTED){
   sttConnected=true;sttError=false;Serial.println("TARS: STT WS CONNECTED");oledSetStatus("STT CONNECTED");return;
@@ -642,28 +641,55 @@ void sttEvent(WStype_t type,uint8_t*payload,size_t length){
   Serial.println("TARS: STT ERROR = "+e);oledSetStatus("STT ERROR");
  }
 }
-
 void closeSTT(){
  sttClosing=true;sttWS.disconnect();sttConnected=false;sttReady=false;
  sttRetryAt=millis()+1800;sttClosing=false;
 }
-
 bool startSTT(bool offline=false){
- if(!wifiOK()||!micOK)return false;
- if((int32_t)(millis()-sttRetryAt)<0){
-  if(!sttRetryShown){Serial.println("TARS: STT RETRY COOLDOWN");sttRetryShown=true;}return false;
- }
- closeSTT();sttReady=false;sttDone=false;sttError=false;sttFinal="";sttPartial="";
- sttWS.onEvent(sttEvent);sttWS.setReconnectInterval(60000);sttWS.enableHeartbeat(15000,5000,2);
- sttWS.beginSSL(STT_HOST,443,"/stt");
- uint32_t st=millis();
- while(!sttReady&&!sttError&&millis()-st<20000){sttWS.loop();delay(2);yield();}
- if(!sttReady){
-  if(sttError)Serial.println(offline?"TARS: OFFLINE STT CONNECT ERROR":"TARS: STT CONNECT ERROR");
-  else Serial.println(offline?"TARS: OFFLINE STT REALTIME TIMEOUT":"TARS: STT REALTIME TIMEOUT");
-  closeSTT();return false;
- }
- return true;
+if(!wifiOK()||!micOK)
+return false;
+if((int32_t)(millis()-sttRetryAt)<0){
+if(!sttRetryShown){
+Serial.println("TARS: STT RETRY COOLDOWN");
+sttRetryShown=true;
+}
+return false;
+}
+// Tutup koneksi lama tanpa membuat cooldown baru
+sttClosing=true;
+sttWS.disconnect();
+sttConnected=false;
+sttReady=false;
+sttClosing=false;
+sttDone=false;
+sttError=false;
+sttFinal="";
+sttPartial="";
+sttRetryShown=false;
+sttWS.onEvent(sttEvent);
+sttWS.setReconnectInterval(60000);
+sttWS.enableHeartbeat(15000,5000,2);
+sttWS.beginSSL(STT_HOST,443,"/stt");
+uint32_t st=millis();
+while(!sttReady&&!sttError&&millis()-st<20000){
+sttWS.loop();
+delay(2);
+yield();
+}
+if(!sttReady){ if(sttError)
+Serial.println(offline ?
+"TARS: OFFLINE STT CONNECT ERROR" : "TARS: STT CONNECT ERROR");
+else
+Serial.println(offline ?
+"TARS: OFFLINE STT REALTIME TIMEOUT" :
+"TARS: STT REALTIME TIMEOUT");
+closeSTT();
+return false;
+}
+sttRetryAt=millis();sttRetryShown=false;
+Serial.println(offline ?
+"TARS: OFFLINE STT READY" : "TARS: ONLINE STT READY");
+return true;
 }
 
 String stopSTT(uint32_t samples,bool offline=false){
@@ -862,82 +888,101 @@ bool streamAudio(const String&url,const String&text){
 }
 /* SHARED ONLINE AI CYCLE */
 bool processOnlineRequest(const String &q,bool vision,bool status,bool automatic=false){
-  wheelsStop();
-  autonomyStop();
-  ramDiag("BEFORE-CAMERA-CYCLE");
-  // Kunci siklus vision terlebih dahulu
-  if(!visionLivePause()){
-    Serial.println("TARS: VISION PAUSE FAILED");
-    wheelsStop();
-    autonomyStop();
-    oledSetStatus("CAMERA ERROR");
-    return false;
+wheelsStop();
+autonomyStop();
+ramDiag("BEFORE-CAMERA-CYCLE");
+if(!visionLivePause()){
+Serial.println("TARS: VISION PAUSE FAILED");
+wheelsStop();
+autonomyStop();
+oledSetStatus("CAMERA ERROR");
+return false;
+}
+if(!vision){
+stopCamera();
+if(camera || cameraLive || cameraOK){
+  Serial.println("TARS: CAMERA OFF FAILED");
+  visionLiveResume();
+  startCamera();
+  oledSetStatus("CAMERA ERROR");
+  return false;
   }
-  // Permintaan biasa tidak membutuhkan foto
-  // Vision akan mengambil foto sendiri di visionLiveAsk()
-  if(!vision){
-    stopCamera();
-    if(camera || cameraLive || cameraOK){
-      Serial.println("TARS: CAMERA OFF FAILED");
-      visionLiveResume();
-      startCamera();
-      oledSetStatus("CAMERA ERROR");
-      return false;
-    }
-  }
-  wheelsStop();
-  autonomyStop();
-  ramDiag("CAMERA-OFF-BEFORE-TLS");
-  String answer;
-  if(vision) answer=visionLiveAsk(q);
-  else if(status) answer=systemStatus();
-  else answer=ask(q);
-  if(!answer.length()){
-    Serial.println("TARS: AI EMPTY RESPONSE");
-    wheelsStop();
-    autonomyStop();
-    // Vision resume menghidupkan kamera jika sebelumnya dimatikan.
-    visionLiveResume();
-    // Untuk permintaan biasa, kamera dihidupkan di sini.
-    if(!vision) startCamera();
-    oledSetStatus("AI ERROR");
-    ramDiag("AFTER-AI-ERROR");
-    return false;
-  }
-  wheelsStop();
-  autonomyStop();
-  oledShowText(answer,
-    automatic?"AUTO SPEECH":
-    vision?"VISION":
-    status?"STATUS":"ASK");
-  delay(300);
-  ramDiag("BEFORE-TTS");
-  bool ok=streamAudio(String(TARS_CLOUD_URL)+"/tts",answer);
-  // Pastikan seluruh audio sudah berhenti
-  audioRing.stop();
-  audioStop();
-  playing=false;
-  wheelsStop();
-  autonomyStop();
-  if(ok)
-  tarsEmotionSpeechDone();
-  ramDiag("AFTER-TTS-AUDIO-OFF");
-  // Lepaskan kunci dan pulihkan kamera
-     wheelsStop();
-     autonomyStop();
-
-      oledSetStatus(ok?"Siap Tuan":"AUDIO ERROR");
-
-     visionLiveResume();
-    if(!vision) startCamera();
-
-    wheelsStop();
-    autonomyStop();
-
-    if(automatic && ok) autoSpeechDone();
-
-    ramDiag("AFTER-CAMERA-RESTART");
-    return ok;
+}
+wheelsStop();
+autonomyStop();
+ramDiag("CAMERA-OFF-BEFORE-TLS");
+String answer;
+if(vision)
+  answer=visionLiveAsk(q);
+else if(status)
+  answer=systemStatus();
+else
+  answer=ask(q);
+if(!answer.length()){
+Serial.println("TARS: AI EMPTY RESPONSE");
+wheelsStop();
+autonomyStop();
+visionLiveResume();
+if(!vision)
+  startCamera();
+oledSetStatus("AI ERROR");ramDiag("AFTER-AI-ERROR");
+// Bersihkan state STT agar sesi berikutnya fresh
+sttConnected=false;sttReady=false;sttDone=false;sttError=false;sttClosing=false;
+sttFinal="";sttPartial="";sttRetryAt=millis()+1000;sttRetryShown=false;
+return false;
+}
+wheelsStop();
+autonomyStop();
+oledShowText(
+answer,
+automatic ? "AUTO SPEECH" :
+vision ? "VISION" :
+status ? "STATUS" : "ASK"
+);
+delay(300);
+ramDiag("BEFORE-TTS");
+bool ok=streamAudio(
+String(TARS_CLOUD_URL)+"/tts",
+answer
+);
+// Pastikan seluruh audio benar-benar selesai
+audioRing.stop();
+audioStop();
+playing=false;
+wheelsStop();
+autonomyStop();
+if(ok)
+tarsEmotionSpeechDone();
+ramDiag("AFTER-TTS-AUDIO-OFF");
+// Pulihkan kamera / vision
+visionLiveResume();
+if(!vision)
+startCamera();
+wheelsStop();
+autonomyStop();
+/** RESET STT SETELAH TTS* * Jangan biarkan cooldown dari closeSTT()* menghalangi sesi STT berikutnya.*/
+  sttConnected=false;
+  sttReady=false;
+  sttDone=false;
+  sttError=false;
+  sttClosing=false;
+  sttFinal="";
+  sttPartial="";
+  sttRetryAt=millis();
+  sttRetryShown=false;
+oledSetStatus(
+ok ? "LISTENING" : "AUDIO ERROR"
+);
+if(automatic && ok)
+autoSpeechDone();
+ramDiag("AFTER-CAMERA-RESTART");
+Serial.printf(
+"TARS: POST-TTS STT RESET connected=%d ready=%d retry=%lu\n",
+sttConnected,
+sttReady,
+(unsigned long)sttRetryAt
+);
+return ok;
 }
 bool processEmotionEvent(){
   if(tarsMode!=MODE_ONLINE ||
