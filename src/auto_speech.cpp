@@ -146,7 +146,7 @@ processing ||
 )
 return;
 
-if(tarsEmotionHasPending())
+if(tarsEmotionHasEvent())
   return;
 
 if(personalityIsResting())
