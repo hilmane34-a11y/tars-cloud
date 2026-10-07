@@ -824,6 +824,13 @@ String recordSTT(bool offline){
   }
   return result;
 }
+String recordRealtime(){
+  return recordSTT(false);
+}
+
+String recordOffline(){
+  return recordSTT(true);
+}
 /* COMMAND */
 String normCmd(String s){
  s.toLowerCase();
