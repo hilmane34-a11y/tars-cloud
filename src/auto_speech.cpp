@@ -2,284 +2,115 @@
 #include "personality.h"
 #include <tars_emotion.h>
 
-static AutoSpeechCallback speakCallback=nullptr;
+static AutoSpeechCallback speakCallback = nullptr;
 
-static bool pending=false;
-static bool processing=false;
+static bool pending = false;
+static bool processing = false;
 
-static bool visionQueued=false;
-static String visionPrompt;
+#define AUTO_SPEECH_COOLDOWN 600000UL   // 10 menit
 
-static uint32_t lastEvent=0;
-static uint32_t lastVisionRequest=0;
+static String randomBoredSpeech()
+{
+    switch (random(5))
+    {
+        case 0:
+            return "[AUTO_CHAT] Haa... sudah terlalu lama. Bosan sekali.";
 
-#define AUTO_VISION_COOLDOWN 45000UL
-#define AUTO_CURIOSITY_MIN 65.0f
+        case 1:
+            return "[AUTO_CHAT] Tuan... aku mulai bosan.";
 
-static String randomStyle(){
-switch(random(5)){
-case 0:return "Gunakan gaya santai dan sedikit humor.";
-case 1:return "Gunakan gaya penasaran dan spontan.";
-case 2:return "Gunakan gaya cerdas, ringan, dan natural.";
-case 3:return "Gunakan gaya sedikit cuek tetapi tetap ramah.";
-default:return "Gunakan gaya akrab dan ekspresif.";
-}
-}
+        case 2:
+            return "[AUTO_CHAT] Hmm... sepi sekali.";
 
-static void queueVision(const String &prompt){
-if(!prompt.length())return;
+        case 3:
+            return "[AUTO_CHAT] Aku bosan nih, tuan.";
 
-// Hanya satu event vision yang boleh menunggu.
-// Event baru menggantikan event lama.
-visionPrompt=prompt;
-visionQueued=true;
+        default:
+            return "[AUTO_CHAT] Haa... lama sekali tidak diajak bicara.";
+    }
 }
 
-void autoSpeechBegin(AutoSpeechCallback callback){
-speakCallback=callback;
+void autoSpeechBegin(AutoSpeechCallback callback)
+{
+    speakCallback = callback;
 
-pending=false;
-processing=false;
+    pending = false;
+    processing = false;
 
-visionQueued=false;
-visionPrompt="";
-
-lastEvent=0;
-lastVisionRequest=0;
-
-randomSeed(micros());
+    randomSeed(micros());
 }
 
-void autoSpeechNotifyVision(const String &description){
-if(!description.length())return;
-
-queueVision(
-"Amati gambar kamera saat ini. "
-"Konteks pengamatan: "+
-description+
-". Fokus hanya untuk mencari manusia atau hewan. "
-"Periksa gambar dengan teliti. "
-"Jangan menganggap benda mati, bayangan, "
-"perubahan cahaya, perubahan warna, kendaraan, "
-"robot, atau noise kamera sebagai manusia atau hewan. "
-"Jika tidak terlihat manusia atau hewan dengan jelas, "
-"jawab tepat [DIAM]. "
-"Jika terlihat manusia atau hewan dengan jelas, "
-"jelaskan secara singkat dan natural apa yang terlihat. "
-"Jangan mengarang apa yang terlihat."
-);
+void autoSpeechNotifyVision(const String &description)
+{
+    // Vision TIDAK BOLEH MEMICU AUTO SPEECH.
+    // Data vision tetap boleh dipakai oleh sistem lain.
+    (void)description;
 }
 
-void autoSpeechNotifyVisionEvent(EnvEvent event){
-
-if(
-event!=ENV_MOTION_LEFT &&
-event!=ENV_MOTION_CENTER &&
-event!=ENV_MOTION_RIGHT
-)
-return;
-
-uint32_t now=millis();
-
-if(
-lastEvent!=0 &&
-now-lastEvent<AUTO_VISION_COOLDOWN
-)
-return;
-
-String description;
-
-switch(event){
-
-case ENV_MOTION_LEFT:
-  description=
-    "Ada gerakan yang terdeteksi "
-    "di sisi kiri kamera.";
-  break;
-
-case ENV_MOTION_CENTER:
-  description=
-    "Ada gerakan yang terdeteksi "
-    "tepat di depan kamera.";
-  break;
-
-case ENV_MOTION_RIGHT:
-  description=
-    "Ada gerakan yang terdeteksi "
-    "di sisi kanan kamera.";
-  break;
-
-default:
-  return;
-
-}
-
-lastEvent=now;
-
-autoSpeechNotifyVision(description);
+void autoSpeechNotifyVisionEvent(EnvEvent event)
+{
+    // Vision event TIDAK BOLEH MEMICU AUTO SPEECH.
+    (void)event;
 }
 
 void autoSpeechUpdate(
-bool enabled,
-bool listening,
-bool speaking
-){
-
-if(
-!enabled ||
-listening ||
-speaking ||
-pending ||
-processing ||
-!speakCallback
+    bool enabled,
+    bool listening,
+    bool speaking
 )
-return;
+{
+    if (!enabled ||
+        listening ||
+        speaking ||
+        pending ||
+        processing ||
+        !speakCallback)
+        return;
 
-if(tarsEmotionHasEvent())
-return;
+    if (tarsEmotionHasEvent())
+        return;
 
-if(personalityIsResting())
-return;
+    if (personalityIsResting())
+        return;
 
-PersonalityState state=personalityGet();
+    PersonalityState state = personalityGet();
 
-if(
-state.energy<=20 ||
-state.fatigue>=80
-)
-return;
+    if (state.energy <= 20 ||
+        state.fatigue >= 80)
+        return;
 
-uint32_t now=millis();
+    // HANYA BOLEH KELUAR KARENA BOSAN
+    if (!personalityWantsSpeak())
+        return;
 
-/*
+    String prompt = randomBoredSpeech();
 
-* PRIORITAS 1
-* VISION
-  */
+    pending = true;
+    processing = true;
 
-if(
-visionQueued &&
-visionPrompt.length() &&
-state.curiosity>=AUTO_CURIOSITY_MIN
-){
+    bool accepted = speakCallback(prompt);
 
-if(
-  lastVisionRequest!=0 &&
-  now-lastVisionRequest<AUTO_VISION_COOLDOWN
-){
-  // Event sudah tidak relevan.
-  visionQueued=false;
-  visionPrompt="";
-  return;
+    if (!accepted)
+    {
+        pending = false;
+        processing = false;
+    }
 }
 
-String prompt=visionPrompt;
+void autoSpeechDone()
+{
+    if (!pending)
+        return;
 
-// Hapus dari queue SEBELUM callback.
-visionQueued=false;
-visionPrompt="";
+    pending = false;
+    processing = false;
 
-lastVisionRequest=now;
-
-prompt="[AUTO_VISION] "+prompt;
-
-pending=true;
-processing=true;
-
-bool accepted=speakCallback(prompt);
-
-if(!accepted){
-  // Jangan masukkan kembali ke queue.
-  // Callback gagal berarti event ini dibuang.
-  pending=false;
-  processing=false;
+    // Timer cooldown dimulai setelah TTS berhasil selesai.
+    personalitySpeechDone();
 }
 
-return;
-
-}
-
-/*
-
-* PRIORITAS 2
-* OBROLAN SPONTAN
-  */
-
-if(!personalityWantsSpeak())
-return;
-
-String prompt=
-"[AUTO_CHAT] Kamu adalah TARS, "
-"robot AI perempuan yang sedang "
-"berinteraksi dengan tuanmu, Ilman. "
-
-"Mulailah percakapan secara spontan "
-"dan natural. Pilih topik berdasarkan "
-"kepribadianmu: rasa penasaran, "
-"pengalaman interaksi, pertanyaan ringan, "
-"humor, pengamatan umum, atau sesuatu "
-"yang menarik untuk dibicarakan. "
-
-"Jangan mengaku melihat sesuatu jika "
-"tidak ada data visual. "
-"Jangan membahas kamera jika tidak "
-"relevan. "
-
-"Jangan mengatakan bahwa kamu sedang "
-"bosan atau bahwa percakapan ini "
-"dipicu sistem otomatis. ";
-
-prompt+=randomStyle();
-
-prompt+=
-" Buat kalimat baru dan bervariasi "
-"setiap kali berbicara. "
-"Jangan mengulang sapaan, lelucon, "
-"atau kalimat sebelumnya. "
-"Jangan menggunakan kalimat suara "
-"bawaan atau rekaman firmware. "
-"Gunakan bahasa Indonesia yang natural, "
-"singkat, ekspresif, dan sesuai "
-"kepribadian TARS. "
-"Jangan menyebutkan sistem internal.";
-
-pending=true;
-processing=true;
-
-bool accepted=speakCallback(prompt);
-
-if(!accepted){
-pending=false;
-processing=false;
-}
-}
-
-void autoSpeechDone(){
-
-if(!pending)
-return;
-
-pending=false;
-processing=false;
-
-personalitySpeechDone();
-}
-
-void autoSpeechResetTimer(){
-
-/*
-
-* Bersihkan seluruh event otomatis.
-* Tidak ada event lama yang boleh dibawa
-* melewati pergantian mode.
-  */
-
-pending=false;
-processing=false;
-
-visionQueued=false;
-visionPrompt="";
-
-lastEvent=millis();
-lastVisionRequest=millis();
+void autoSpeechResetTimer()
+{
+    pending = false;
+    processing = false;
 }
