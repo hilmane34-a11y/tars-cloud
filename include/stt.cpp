@@ -113,16 +113,16 @@ sttClosing=false;
 }
 
 bool startSTT(bool offline){
+Serial.printf("TARS: STT START ENTER WIFI=%d MIC=%d\n",WiFi.status(),micOK?1:0);
 if(!wifiOK()){
-Serial.printf("TARS: STT START BLOCKED WIFI=%d\n",WiFi.status());
+Serial.printf("TARS: STT BLOCK WIFI status=%d\n",WiFi.status());
 return false;
 }
-
+Serial.println("TARS: STT WIFI OK");
 if(!micOK){
-Serial.println("TARS: STT START BLOCKED MIC=false");
+Serial.println("TARS: STT BLOCK MIC=false");
 return false;
 }
-
 if((int32_t)(millis()-sttRetryAt)<0){
 if(!sttRetryShown){
 Serial.println("TARS: STT RETRY COOLDOWN");
@@ -130,7 +130,7 @@ sttRetryShown=true;
 }
 return false;
 }
-
+Serial.println("TARS: STT PREPARE WSS");
 sttClosing=true;
 sttWS.disconnect();
 sttConnected=false;
@@ -141,33 +141,28 @@ sttError=false;
 sttFinal="";
 sttPartial="";
 sttRetryShown=false;
-
 sttWS.onEvent(sttEvent);
 sttWS.setReconnectInterval(60000);
 sttWS.enableHeartbeat(15000,5000,2);
+Serial.println("TARS: STT BEGIN SSL");
 sttWS.beginSSL(STT_HOST_LOCAL,443,"/stt");
-
+Serial.println("TARS: STT SSL STARTED");
 uint32_t st=millis();
-
 while(!sttReady&&!sttError&&millis()-st<20000){
 sttWS.loop();
 delay(2);
 yield();
 }
-
 if(!sttReady){
 Serial.println(offline?"TARS: OFFLINE STT CONNECT ERROR":"TARS: STT CONNECT ERROR");
 closeSTT(STT_ERROR_COOLDOWN);
 return false;
 }
-
 sttRetryAt=millis();
 sttRetryShown=false;
-
 Serial.println(offline?"TARS: OFFLINE STT READY":"TARS: ONLINE STT READY");
 return true;
 }
-
 String stopSTT(uint32_t samples,bool offline){
 if(!sttConnected&&!sttDone)return "";
 
