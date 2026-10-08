@@ -4,6 +4,10 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 
+constexpr uint32_t OLED_TYPE_MS = 39;
+constexpr uint32_t OLED_WAVE_MS = 70;
+constexpr uint32_t OLED_PAGE_MS = 2200;
+
 extern Adafruit_SSD1306 oled;
 
 extern bool oledOK;
@@ -25,5 +29,6 @@ void oledSetListening();
 void oledStartSpeak(const String& s);
 void oledShowText(const String& s, const String& status);
 
-void drawSpecialOLED(uint8_t mode);
-void oledTask(void* parameter);
+void drawSpecialOLED(uint8_t m);
+void drawCameraOLED();
+void oledTask(void*);
