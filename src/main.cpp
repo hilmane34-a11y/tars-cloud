@@ -32,6 +32,7 @@
 #include <I2SCamera.h>
 #include "sleep_oled.h"
 #include <tars_emotion.h>
+#include <stt.h>
 
 #define MIC_PORT I2S_NUM_1
 #define MIC_SCK 18
