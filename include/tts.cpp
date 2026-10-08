@@ -10,7 +10,6 @@
 #include "AudioTools/AudioCodecs/CodecMP3Helix.h"
 #include "AudioTools/AudioCodecs/CodecWAV.h"
 #include "config.h"
-#include "wifi_manager.h"
 #include "tars_emotion.h"
 
 extern const uint8_t alarm_start[];
@@ -244,7 +243,7 @@ bool playLocalAlarm(){
 }
 
 bool streamAudio(const String&url,const String&text){
-  if(!wifiOK())return false;
+  if(WiFi.status()!=WL_CONNECTED)return false;
 
   WiFiClientSecure client;
   client.setInsecure();
