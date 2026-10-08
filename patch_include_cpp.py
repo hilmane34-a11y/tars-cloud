@@ -5,38 +5,28 @@ project = env.subst("$PROJECT_DIR")
 framework = env.subst("$PROJECT_PACKAGES_DIR/framework-arduinoespressif32")
 libdeps = os.path.join(env.subst("$PROJECT_LIBDEPS_DIR"), env["PIOENV"])
 
-roots = [
-    project,
-    framework,
-    libdeps,
-]
-
-headers = {
-    "Adafruit_GFX.h",
-    "Adafruit_SSD1306.h",
-    "Adafruit_I2CDevice.h",
-    "Adafruit_BusIO_Register.h",
-    "WebSocketsClient.h",
-    "AudioTools.h",
-    "ArduinoJson.h",
-    "WiFi.h",
-    "WiFiClientSecure.h",
-    "HTTPClient.h",
-    "LittleFS.h",
-}
-
 paths = []
 
-for root in roots:
+def add_header_dirs(root):
     if not os.path.isdir(root):
-        continue
+        return
 
     for dirpath, dirnames, filenames in os.walk(root):
-        found = headers.intersection(filenames)
-
-        if found:
+        if any(f.endswith(".h") for f in filenames):
             paths.append(dirpath)
 
+# Semua header project
+add_header_dirs(os.path.join(project, "include"))
+add_header_dirs(os.path.join(project, "src"))
+add_header_dirs(os.path.join(project, "lib"))
+
+# Semua header framework ESP32
+add_header_dirs(framework)
+
+# Semua header library PlatformIO
+add_header_dirs(libdeps)
+
+# Path utama project/framework
 paths += [
     os.path.join(project, "include"),
     os.path.join(project, "src"),
