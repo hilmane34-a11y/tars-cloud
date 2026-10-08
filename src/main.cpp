@@ -59,7 +59,7 @@ const size_t BUF=256,PREROLL_SAMPLES=MIC_RATE*PREROLL_MS/1000,AUDIO_RING_SIZE=61
 enum TarsMode:uint8_t{MODE_OFFLINE,MODE_ONLINE};
 TarsMode tarsMode=MODE_OFFLINE;
 
-bool alarmRunning=false,greetingPlaying=false,cameraOK=false,cameraLive=false,micOK=false,playing=false,ntpOK=false;
+bool alarmRunning=false,greetingPlaying=false,cameraOK=false,cameraLive=false,micOK=false,ntpOK=false;
 volatile bool ntpSyncEvent=false;
 int alarmLastDay=-1;
 uint8_t lastGreetingPeriod=255;
