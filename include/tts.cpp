@@ -12,24 +12,22 @@
 #include "config.h"
 #include "tars_emotion.h"
 
-extern const uint8_t alarm_start[];
-extern const uint8_t alarm_end[];
-extern const uint8_t follow_start[];
-extern const uint8_t follow_end[];
-extern const uint8_t online_start[];
-extern const uint8_t online_end[];
-extern const uint8_t offline_start[];
-extern const uint8_t offline_end[];
-extern const uint8_t hari_start[];
-extern const uint8_t hari_end[];
-extern const uint8_t pagi_start[];
-extern const uint8_t pagi_end[];
-extern const uint8_t siang_start[];
-extern const uint8_t siang_end[];
-extern const uint8_t sore_start[];
-extern const uint8_t sore_end[];
-extern const uint8_t malam_start[];
-extern const uint8_t malam_end[];
+extern const uint8_t follow_start[] asm("_binary_src_follow_mp3_start");
+extern const uint8_t follow_end[] asm("_binary_src_follow_mp3_end");
+extern const uint8_t online_start[] asm("_binary_src_online_mp3_start");
+extern const uint8_t online_end[] asm("_binary_src_online_mp3_end");
+extern const uint8_t offline_start[] asm("_binary_src_offline_mp3_start");
+extern const uint8_t offline_end[] asm("_binary_src_offline_mp3_end");
+extern const uint8_t hari_start[] asm("_binary_src_hari_mp3_start");
+extern const uint8_t hari_end[] asm("_binary_src_hari_mp3_end");
+extern const uint8_t pagi_start[] asm("_binary_src_pagi_mp3_start");
+extern const uint8_t pagi_end[] asm("_binary_src_pagi_mp3_end");
+extern const uint8_t siang_start[] asm("_binary_src_siang_mp3_start");
+extern const uint8_t siang_end[] asm("_binary_src_siang_mp3_end");
+extern const uint8_t sore_start[] asm("_binary_src_sore_mp3_start");
+extern const uint8_t sore_end[] asm("_binary_src_sore_mp3_end");
+extern const uint8_t malam_start[] asm("_binary_src_malam_mp3_start");
+extern const uint8_t malam_end[] asm("_binary_src_malam_mp3_end");
 
 extern void oledStartSpeak(const String&);
 extern void oledSetStatus(const String&);
