@@ -213,31 +213,46 @@ void audioStop(){
   playing=false;
   dacOK=false;
 }
-
 static bool playMemoryMP3(const uint8_t*start,const uint8_t*end,const String&name){
   if(!start||!end||end<=start)return false;
   if(!audioStart())return false;
   localMP3.begin(start,end);
   oledStartSpeak(name);
+  dec.begin();
   copier.begin(localMP3,dec);
   uint32_t lastData=millis();
+  uint64_t decodedBefore=pcmProbe.decodedBytes();
   while(localMP3.available()||copier.available()){
-    copier.copy();
-    if(localMP3.available())lastData=millis();
+    size_t n=copier.copy();
+    if(n)lastData=millis();
     if(millis()-lastData>3000)break;
     yield();
   }
   copier.end();
+  dec.end();
+  uint64_t decoded=pcmProbe.decodedBytes()-decodedBefore;
+  Serial.printf(
+    "TARS: LOCAL MP3 %s decoded=%lu bytes\n",
+    name.c_str(),
+    (unsigned long)decoded
+  );
   audioStop();
-  return true;
+  return decoded>0;
 }
 
 bool playLocalMP3(const uint8_t*start,const uint8_t*end,const String&name,bool alarm){
-  if(alarm)alarmStream.begin(start,end);
-  else localMP3.begin(start,end);
+  if(!start||!end||end<=start)return false;
+  if(alarm)
+    alarmStream.begin(start,end);
+  else
+    localMP3.begin(start,end);
+  // Semua MP3 lokal tetap diproses lewat localMP3.
+  // Salin stream alarm ke localMP3 supaya jalurnya konsisten.
+  if(alarm){
+    localMP3.begin(start,end);
+  }
   return playMemoryMP3(start,end,name);
 }
-
 bool playLocalAlarm(){
   return playMemoryMP3(alarm_start,alarm_end,"ALARM");
 }
