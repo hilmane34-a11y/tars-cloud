@@ -671,7 +671,7 @@ void checkTimeGreeting(){
   oledShowText(txt,"SALAM");
 
   bool ok=playTimeGreeting(p);
-  if(ok)lastGreetingPeriod=p;
+  lastGreetingPeriod=p;
 
   greetingPlaying=false;
   wheelsStop();
