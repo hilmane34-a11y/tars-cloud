@@ -53,12 +53,11 @@
 #define CAM_PCLK 12
 
 const uint32_t ALARM_DURATION_MS=180000;
-const size_t BUF=256,PREROLL_SAMPLES=MIC_RATE*PREROLL_MS/1000,AUDIO_RING_SIZE=6144,AUDIO_PREBUFFER=1024;
 
 enum TarsMode:uint8_t{MODE_OFFLINE,MODE_ONLINE};
 TarsMode tarsMode=MODE_OFFLINE;
 
-bool alarmRunning=false,greetingPlaying=false,cameraOK=false,cameraLive=false,micOK=false,ntpOK=false;
+bool alarmRunning=false,greetingPlaying=false,cameraOK=false,cameraLive=false,ntpOK=false;
 volatile bool ntpSyncEvent=false;
 int alarmLastDay=-1;
 uint8_t lastGreetingPeriod=255;
@@ -72,7 +71,7 @@ const uint32_t VISION_EVENT_COOLDOWN_MS=120000;
 OV7670*camera=nullptr;
 SemaphoreHandle_t previewMux=nullptr,envMux=nullptr,cameraMux=nullptr;
 static uint16_t cameraEnvironment[96*32];
-static uint8_t cameraPreview[128*64];
+uint8_t cameraPreview[128*64];
 bool previewReady=false;
 portMUX_TYPE visionEventMux=portMUX_INITIALIZER_UNLOCKED;
 static TaskHandle_t personalityTaskHandle=nullptr;
@@ -203,21 +202,6 @@ bool startCamera(){
   ramDiag("CAM-RESTART-DONE");
   camDiag("START-DONE");
   return true;
-}
-void drawCameraOLED(){
-  if(!oledOK||!previewMux)return;
-  if(xSemaphoreTake(previewMux,pdMS_TO_TICKS(100))!=pdTRUE)return;
-  if(!previewReady){
-    xSemaphoreGive(previewMux);
-    return;
-  }
-  oled.clearDisplay();
-  for(int y=0;y<64;y++)
-    for(int x=0;x<128;x++)
-      if(cameraPreview[y*128+x])
-        oled.drawPixel(x,y,SSD1306_WHITE);
-  oled.display();
-  xSemaphoreGive(previewMux);
 }
 void cameraTask(void*){
   uint8_t frameErrors=0;
@@ -852,8 +836,7 @@ void setup(){
   Serial.println("TARS: AUDIO MP3/WAV -> 22050Hz/16bit");
   Serial.println("TARS: INMP441 SCK=18 WS=2 SD=15");
   Serial.println("TARS: L9110S A=23/16 B=17/19");
-  Serial.printf("TARS: MIC THRESHOLD=%ld SILENCE=%ld\n",(long)MIC_THRESHOLD,(long)MIC_SILENCE);
-  Serial.println("TARS: MIC PEAK=12000/8000 RMS=3000/1800 PREROLL=250 ms BUF=256");
+  Serial.println("TARS: MIC PEAK=14000/8000 RMS=3000/1800 PREROLL=250 ms BUF=256");
   Serial.println("TARS: STT ONLINE REALTIME PCM");
   Serial.println("TARS: STT OFFLINE REALTIME PCM");
   Serial.println("TARS: VISION ONLINE ONLY");
@@ -863,8 +846,6 @@ void setup(){
   Serial.println("TARS: GPIO4 RESERVED FOR OV7670 XCLK");
   Serial.println("TARS: BLUETOOTH DISABLED");
   Serial.println("TARS: MODE OFFLINE");
-  Serial.printf("TARS: AUDIO RING=%u PREBUFFER=%u\n",(unsigned)AUDIO_RING_SIZE,(unsigned)AUDIO_PREBUFFER);
-
   ramDiag("BOOT");
 
   if(oledOK)
