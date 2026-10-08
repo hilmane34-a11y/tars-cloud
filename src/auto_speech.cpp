@@ -1,32 +1,32 @@
 #include "auto_speech.h"
 #include "personality.h"
-#include <tars_emotion.h>
 
 static AutoSpeechCallback speakCallback = nullptr;
 
 static bool pending = false;
 static bool processing = false;
 
-#define AUTO_SPEECH_COOLDOWN 600000UL   // 10 menit
-
 static String randomBoredSpeech()
 {
-    switch (random(5))
+    switch (random(6))
     {
         case 0:
-            return "[AUTO_CHAT] Haa... sudah terlalu lama. Bosan sekali.";
+            return "[AUTO_CHAT] Haa... bosan sekali.";
 
         case 1:
-            return "[AUTO_CHAT] Tuan... aku mulai bosan.";
-
-        case 2:
             return "[AUTO_CHAT] Hmm... sepi sekali.";
 
+        case 2:
+            return "[AUTO_CHAT] Haa... lama sekali.";
+
         case 3:
-            return "[AUTO_CHAT] Aku bosan nih, tuan.";
+            return "[AUTO_CHAT] Aku mulai bosan nih.";
+
+        case 4:
+            return "[AUTO_CHAT] Hmm... tidak ada kegiatan.";
 
         default:
-            return "[AUTO_CHAT] Haa... lama sekali tidak diajak bicara.";
+            return "[AUTO_CHAT] Haa... ingin melakukan sesuatu.";
     }
 }
 
@@ -42,14 +42,13 @@ void autoSpeechBegin(AutoSpeechCallback callback)
 
 void autoSpeechNotifyVision(const String &description)
 {
-    // Vision TIDAK BOLEH MEMICU AUTO SPEECH.
-    // Data vision tetap boleh dipakai oleh sistem lain.
+    // Vision tidak pernah memicu auto-speech.
     (void)description;
 }
 
 void autoSpeechNotifyVisionEvent(EnvEvent event)
 {
-    // Vision event TIDAK BOLEH MEMICU AUTO SPEECH.
+    // Vision event tidak pernah memicu auto-speech.
     (void)event;
 }
 
@@ -67,9 +66,6 @@ void autoSpeechUpdate(
         !speakCallback)
         return;
 
-    if (tarsEmotionHasEvent())
-        return;
-
     if (personalityIsResting())
         return;
 
@@ -79,7 +75,7 @@ void autoSpeechUpdate(
         state.fatigue >= 80)
         return;
 
-    // HANYA BOLEH KELUAR KARENA BOSAN
+    // Hanya personality boredom yang boleh memicu.
     if (!personalityWantsSpeak())
         return;
 
@@ -105,7 +101,7 @@ void autoSpeechDone()
     pending = false;
     processing = false;
 
-    // Timer cooldown dimulai setelah TTS berhasil selesai.
+    // Cooldown 10 menit dimulai setelah TTS selesai.
     personalitySpeechDone();
 }
 
