@@ -15,25 +15,42 @@ paths = [
     os.path.join(framework, "variants", "esp32"),
 ]
 
-# Ambil semua folder src/include dari framework dan libdeps
-for root in [
-    os.path.join(framework, "libraries"),
-    libdeps,
-]:
-    if os.path.isdir(root):
-        for dirpath, dirnames, filenames in os.walk(root):
-            if os.path.basename(dirpath) in ("src", "include"):
-                paths.append(dirpath)
+# Cari semua folder yang berisi header library
+wanted = {
+    "Adafruit_GFX.h",
+    "Adafruit_SSD1306.h",
+    "WebSocketsClient.h",
+    "AudioTools.h",
+    "ArduinoJson.h",
+    "JPEGDEC.h",
+    "WiFiClientSecure.h",
+    "HTTPClient.h",
+    "LittleFS.h",
+}
 
-# Hilangkan duplikat
+for root in [framework, libdeps]:
+    if not os.path.isdir(root):
+        continue
+
+    for dirpath, dirnames, filenames in os.walk(root):
+        if wanted.intersection(filenames):
+            paths.append(dirpath)
+
 paths = list(dict.fromkeys(paths))
 
-env.Append(CPPPATH=paths)
+# Paksa include path masuk sebagai compiler -I
+for p in paths:
+    if os.path.isdir(p):
+        env.Append(CPPPATH=[p])
 
+# Build semua .cpp di include/
 env.BuildSources(
-    "$BUILD_DIR/include_cpp",
-    "include",
-    src_filter=[
-        "+<*.cpp>",
-    ]
+    os.path.join(env.subst("$BUILD_DIR"), "include_cpp"),
+    os.path.join(project, "include"),
+    src_filter=["+<*.cpp>"]
 )
+
+print("========== TARS INCLUDE CPP PATH ==========")
+for p in paths:
+    print("TARS INCLUDE:", p)
+print("===========================================")
