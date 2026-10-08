@@ -31,6 +31,7 @@
 #include <stt.h>
 #include <tts.h>
 #include <oled.h>
+#include <lengan.h>
 
 #define MIC_PORT I2S_NUM_1
 #define MIC_SCK 18
@@ -841,7 +842,6 @@ void processQuestion(const String&q){
 
 void setup(){
   Serial.begin(SERIAL_BAUD);
-
   Wire.begin(OLED_SDA,OLED_SCL);
   Wire.setClock(400000);
 
@@ -859,8 +859,7 @@ void setup(){
     oled.display();
   }
 
-  wheelsBegin();
-
+  wheelsBegin(); Wire.begin(21, 22); lenganInit();
   previewMux=xSemaphoreCreateMutex();
   envMux=xSemaphoreCreateMutex();
   cameraMux=xSemaphoreCreateMutex();
