@@ -13,8 +13,8 @@
 #define MIC_WS 2
 #define MIC_SD 15
 #define MIC_RATE 16000
-#define MIC_THRESHOLD 14000
-#define MIC_SILENCE 8000
+#define MIC_THRESHOLD 10000
+#define MIC_SILENCE 6000
 #define RECORD_MIN_MS 500
 #define SILENCE_MS 800
 #define PREROLL_MS 250
