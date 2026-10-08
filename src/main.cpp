@@ -650,64 +650,84 @@ void sttEvent(WStype_t type,uint8_t*payload,size_t length){
 }
 void closeSTT(uint32_t cooldown=STT_NORMAL_COOLDOWN){
   sttClosing=true;sttWS.disconnect();sttConnected=false;
-  sttReady=false;sttClosing=false;
-  sttRetryAt=millis()+cooldown;sttRetryShown=false;}
- }
+  sttReady=false;sttRetryAt=millis()+cooldown;
+  sttRetryShown=false;sttClosing=false;
+}
 bool startSTT(bool offline=false){
-if(!wifiOK()||!micOK)
-return false;
-if((int32_t)(millis()-sttRetryAt)<0){
-if(!sttRetryShown){
-Serial.println("TARS: STT RETRY COOLDOWN");
-sttRetryShown=true;
+  if(!wifiOK()||!micOK)
+    return false;
+  if((int32_t)(millis()-sttRetryAt)<0){
+    if(!sttRetryShown){
+      Serial.println("TARS: STT RETRY COOLDOWN");
+      sttRetryShown=true;
+    }
+    return false;
+  }
+  // Pastikan sesi WebSocket sebelumnya benar-benar ditutup.
+  sttClosing=true;
+  sttWS.disconnect();
+  sttConnected=false;
+  sttReady=false;
+  sttClosing=false;
+  sttDone=false;
+  sttError=false;
+  sttFinal="";
+  sttPartial="";
+  sttRetryShown=false;
+  sttWS.onEvent(sttEvent);
+  // Jangan gunakan reconnect otomatis.
+  // STT TARS memang dibuat per sesi.
+  sttWS.setReconnectInterval(60000);
+  sttWS.enableHeartbeat(15000,5000,2);
+  // Ini hanya memulai koneksi.
+  // Setelah disconnect(), JANGAN panggil loop()
+  // kecuali memang sedang membuka sesi STT.
+  sttWS.beginSSL(STT_HOST,443,"/stt");
+  uint32_t st=millis();
+  while(!sttReady&&!sttError&&millis()-st<20000){
+    sttWS.loop();
+    delay(2);
+    yield();
+  }
+  if(!sttReady){
+    Serial.println(
+      offline ?
+      "TARS: OFFLINE STT CONNECT ERROR" :
+      "TARS: STT CONNECT ERROR"
+    );
+closeSTT(STT_ERROR_COOLDOWN);
+    return false;
+  }
+ sttRetryAt=millis();sttRetryShown=false;
+  Serial.println(
+    offline ?
+    "TARS: OFFLINE STT READY" :
+    "TARS: ONLINE STT READY"
+  );
+  return true;
 }
-return false;
-}
-// Tutup koneksi lama tanpa membuat cooldown baru
-sttClosing=true;
-sttWS.disconnect();
-sttConnected=false;
-sttReady=false;
-sttClosing=false;
-sttDone=false;
-sttError=false;
-sttFinal="";
-sttPartial="";
-sttRetryShown=false;
-sttWS.onEvent(sttEvent);
-sttWS.setReconnectInterval(60000);
-sttWS.enableHeartbeat(15000,5000,2);
-sttWS.beginSSL(STT_HOST,443,"/stt");
-uint32_t st=millis();
-while(!sttReady&&!sttError&&millis()-st<20000){
-sttWS.loop();
-delay(2);
-yield();
-}
-if(!sttReady){ if(sttError)
-Serial.println(offline ?
-"TARS: OFFLINE STT CONNECT ERROR" : "TARS: STT CONNECT ERROR");
-else
-Serial.println(offline ?
-"TARS: OFFLINE STT REALTIME TIMEOUT" :
-"TARS: STT REALTIME TIMEOUT");
-closeSTT();
-return false;
-}
-sttRetryAt=millis();sttRetryShown=false;
-Serial.println(offline ?
-"TARS: OFFLINE STT READY" : "TARS: ONLINE STT READY");
-return true;
-}
-
 String stopSTT(uint32_t samples,bool offline=false){
- if(!sttConnected&&!sttDone)return "";
- JsonDocument j;j["type"]="end";j["timestamp"]=(double)samples/MIC_RATE;
- String msg;serializeJson(j,msg);
- if(!sttWS.sendTXT(msg)){Serial.println("TARS: STT END SEND FAILED");closeSTT();return "";}
- uint32_t st=millis();
- while(!sttDone&&!sttError&&millis()-st<6000){sttWS.loop();delay(2);yield();}
- String r=sttFinal;closeSTT();return r;
+  if(!sttConnected&&!sttDone)
+    return "";
+  JsonDocument j;
+  j["type"]="end";
+  j["timestamp"]=(double)samples/MIC_RATE;
+  String msg;
+  serializeJson(j,msg);
+  if(!sttWS.sendTXT(msg)){ Serial.println("TARS: STT END SEND FAILED");
+    closeSTT(STT_ERROR_COOLDOWN);
+    return "";
+  }
+  uint32_t st=millis();
+while(!sttDone&&!sttError&&millis()-st<6000){
+  sttWS.loop();
+    delay(2);
+    yield();
+  }
+  String r=sttFinal;
+  // Putus SSL setelah final diterima.
+  closeSTT(STT_NORMAL_COOLDOWN);
+  return r;
 }
 
 String recordSTT(bool offline){
@@ -934,9 +954,13 @@ visionLiveResume();
 if(!vision)
   startCamera();
 oledSetStatus("AI ERROR");ramDiag("AFTER-AI-ERROR");
-// Bersihkan state STT agar sesi berikutnya fresh
-sttConnected=false;sttReady=false;sttDone=false;sttError=false;sttClosing=false;
-sttFinal="";sttPartial="";sttRetryAt=millis()+1000;sttRetryShown=false;
+// Tutup STT benar-benar setelah AI error
+closeSTT(STT_ERROR_COOLDOWN);
+sttDone=false;
+sttError=false;
+sttFinal="";
+sttPartial="";
+sttRetryShown=false;
 return false;
 }
 wheelsStop();
@@ -969,15 +993,13 @@ startCamera();
 wheelsStop();
 autonomyStop();
 /** RESET STT SETELAH TTS* * Jangan biarkan cooldown dari closeSTT()* menghalangi sesi STT berikutnya.*/
-  sttConnected=false;
-  sttReady=false;
-  sttDone=false;
-  sttError=false;
-  sttClosing=false;
-  sttFinal="";
-  sttPartial="";
-  sttRetryAt=millis();
-  sttRetryShown=false;
+  closeSTT(STT_NORMAL_COOLDOWN);
+sttDone=false;
+sttError=false;
+sttFinal="";
+sttPartial="";
+sttRetryAt=millis();
+sttRetryShown=false;
 oledSetStatus(
 ok ? "LISTENING" : "AUDIO ERROR"
 );
