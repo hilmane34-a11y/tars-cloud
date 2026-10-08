@@ -32,6 +32,7 @@
 #include <tts.h>
 #include <oled.h>
 #include <lengan.h>
+#include <hand_gesture.h>
 
 #define MIC_PORT I2S_NUM_1
 #define MIC_SCK 18
