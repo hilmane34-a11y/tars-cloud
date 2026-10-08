@@ -54,18 +54,16 @@ oled.display();
 
 void drawCameraOLED(){
 if(!oledOK||!previewMux||!previewReady)return;
-static uint8_t frame[128*64];
 if(xSemaphoreTake(previewMux,pdMS_TO_TICKS(5))!=pdTRUE)return;
-memcpy(frame,cameraPreview,sizeof(frame));
-xSemaphoreGive(previewMux);
+
 oled.clearDisplay();
-for(int y=0;y<64;y++){
-for(int x=0;x<128;x++){
-if(frame[y*128+x])
+for(int y=0;y<64;y++)
+for(int x=0;x<128;x++)
+if(cameraPreview[y*128+x])
 oled.drawPixel(x,y,SSD1306_WHITE);
-}
-}
+
 oled.display();
+xSemaphoreGive(previewMux);
 }
 
 void oledTask(void*){
