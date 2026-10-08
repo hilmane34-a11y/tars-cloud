@@ -5,44 +5,47 @@ project = env.subst("$PROJECT_DIR")
 framework = env.subst("$PROJECT_PACKAGES_DIR/framework-arduinoespressif32")
 libdeps = os.path.join(env.subst("$PROJECT_LIBDEPS_DIR"), env["PIOENV"])
 
-paths = []
-
-def add_header_dirs(root):
-    if not os.path.isdir(root):
-        return
-
-    for dirpath, dirnames, filenames in os.walk(root):
-        if any(f.endswith(".h") for f in filenames):
-            paths.append(dirpath)
-
-# Semua header project
-add_header_dirs(os.path.join(project, "include"))
-add_header_dirs(os.path.join(project, "src"))
-add_header_dirs(os.path.join(project, "lib"))
-
-# Semua header framework ESP32
-add_header_dirs(framework)
-
-# Semua header library PlatformIO
-add_header_dirs(libdeps)
-
-# Path utama project/framework
-paths += [
+paths = [
+    # Project
     os.path.join(project, "include"),
     os.path.join(project, "src"),
     os.path.join(project, "lib"),
     os.path.join(project, "lib", "TARS-OV7670"),
+
+    # ESP32 core
     os.path.join(framework, "cores", "esp32"),
     os.path.join(framework, "variants", "esp32"),
+
+    # Arduino framework libraries
+    os.path.join(framework, "libraries", "Wire", "src"),
+    os.path.join(framework, "libraries", "WiFi", "src"),
+    os.path.join(framework, "libraries", "WiFiClientSecure", "src"),
+    os.path.join(framework, "libraries", "HTTPClient", "src"),
+    os.path.join(framework, "libraries", "LittleFS", "src"),
 ]
 
+# Dependency library roots + common src folders
+if os.path.isdir(libdeps):
+    for name in os.listdir(libdeps):
+        p = os.path.join(libdeps, name)
+
+        if not os.path.isdir(p):
+            continue
+
+        paths.append(p)
+
+        src = os.path.join(p, "src")
+        if os.path.isdir(src):
+            paths.append(src)
+
+# Remove duplicates / invalid paths
 paths = list(dict.fromkeys(
     p for p in paths if os.path.isdir(p)
 ))
 
-for p in paths:
-    env.Append(CPPPATH=[p])
+env.Append(CPPPATH=paths)
 
+# Compile every .cpp inside include/
 env.BuildSources(
     os.path.join(env.subst("$BUILD_DIR"), "include_cpp"),
     os.path.join(project, "include"),
