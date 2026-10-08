@@ -2,8 +2,8 @@ Import("env")
 import os
 
 project = env.subst("$PROJECT_DIR")
-libdeps = os.path.join(env.subst("$PROJECT_LIBDEPS_DIR"), env["PIOENV"])
 framework = env.subst("$PROJECT_PACKAGES_DIR/framework-arduinoespressif32")
+libdeps = os.path.join(env.subst("$PROJECT_LIBDEPS_DIR"), env["PIOENV"])
 
 paths = [
     os.path.join(project, "include"),
@@ -13,26 +13,27 @@ paths = [
 
     os.path.join(framework, "cores", "esp32"),
     os.path.join(framework, "variants", "esp32"),
-    os.path.join(framework, "libraries", "WiFi", "src"),
-    os.path.join(framework, "libraries", "WiFiClientSecure", "src"),
-    os.path.join(framework, "libraries", "HTTPClient", "src"),
-    os.path.join(framework, "libraries", "LittleFS", "src"),
-    os.path.join(framework, "libraries", "Wire", "src"),
-
-    os.path.join(libdeps, "WebSockets", "src"),
-    os.path.join(libdeps, "audio-tools", "src"),
-    os.path.join(libdeps, "libhelix", "src"),
-    os.path.join(libdeps, "JPEGENC", "src"),
-    os.path.join(libdeps, "ArduinoJson", "src"),
-    os.path.join(libdeps, "Adafruit SSD1306", "src"),
-    os.path.join(libdeps, "Adafruit GFX Library", "src"),
-    os.path.join(libdeps, "Adafruit BusIO", "src"),
 ]
+
+# Ambil semua folder src/include dari framework dan libdeps
+for root in [
+    os.path.join(framework, "libraries"),
+    libdeps,
+]:
+    if os.path.isdir(root):
+        for dirpath, dirnames, filenames in os.walk(root):
+            if os.path.basename(dirpath) in ("src", "include"):
+                paths.append(dirpath)
+
+# Hilangkan duplikat
+paths = list(dict.fromkeys(paths))
 
 env.Append(CPPPATH=paths)
 
 env.BuildSources(
     "$BUILD_DIR/include_cpp",
     "include",
-    src_filter=["+<*.cpp>"]
+    src_filter=[
+        "+<*.cpp>",
+    ]
 )
