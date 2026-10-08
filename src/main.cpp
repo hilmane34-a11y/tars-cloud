@@ -21,6 +21,7 @@
 #include "wifi_manager.h"
 #include "Log.h"
 #include "personality.h"
+#include "auto_speech.h"
 #include "autonomy.h"
 #include "wheels.h"
 #include "env.h"
@@ -89,6 +90,7 @@ bool visionLiveEnabled(){return tarsMode==MODE_ONLINE;}
 String normCmd(String);
 String systemStatus();
 String ask(const String&);
+bool processOnlineRequest(const String&,bool,bool,bool);
 
 static void personalityTask(void*){
   for(;;){
@@ -436,7 +438,20 @@ bool playTimeGreeting(uint8_t p){
   return false;
 }
 
-bool processOnlineRequest(const String&q,bool vision,bool status){
+bool autoSpeechCallback(const String&prompt){
+  if(tarsMode!=MODE_ONLINE||playing||sttConnected||WiFi.status()!=WL_CONNECTED)
+    return false;
+  if(!prompt.startsWith("[AUTO_CHAT]"))
+    return false;
+
+  String q=prompt.substring(11);
+  q.trim();
+  if(!q.length())return false;
+
+  return processOnlineRequest(q,false,false,true);
+}
+
+bool processOnlineRequest(const String&q,bool vision,bool status,bool automatic){
   wheelsStop();
   autonomyStop();
   ramDiag("BEFORE-CAMERA-CYCLE");
@@ -480,12 +495,13 @@ bool processOnlineRequest(const String&q,bool vision,bool status){
     closeSTT(STT_ERROR_COOLDOWN);
     sttDone=false;
     sttError=false;
+    if(automatic)autoSpeechResetTimer();
     return false;
   }
 
   wheelsStop();
   autonomyStop();
-  oledShowText(answer,vision?"VISION":status?"STATUS":"ASK");
+  oledShowText(answer,automatic?"AUTO SPEECH":vision?"VISION":status?"STATUS":"ASK");
   delay(300);
   ramDiag("BEFORE-TTS");
 
@@ -509,6 +525,11 @@ bool processOnlineRequest(const String&q,bool vision,bool status){
   sttError=false;
   oledSetStatus(ok?"LISTENING":"AUDIO ERROR");
   ramDiag("AFTER-CAMERA-RESTART");
+
+  if(automatic){
+    if(ok)autoSpeechDone();
+    else autoSpeechResetTimer();
+  }
 
   Serial.printf("TARS: POST-TTS STT RESET connected=%d ready=%d\n",sttConnected,sttReady);
   return ok;
@@ -702,6 +723,7 @@ bool processOffline(const String&q){
     oledShowText("ONLINE","OFFLINE");
     tarsMode=MODE_ONLINE;
     personalityResetSpeechTimer();
+    autoSpeechResetTimer();
     tarsEmotionResetPending();
     portENTER_CRITICAL(&visionEventMux);
     pendingVisionCheck=false;
@@ -725,6 +747,7 @@ void processQuestion(const String&q){
     Serial.println("TARS: SWITCH ONLINE -> OFFLINE");
     closeSTT();
     tarsMode=MODE_OFFLINE;
+    autoSpeechResetTimer();
     portENTER_CRITICAL(&visionEventMux);
     pendingVisionCheck=false;
     portEXIT_CRITICAL(&visionEventMux);
@@ -777,7 +800,7 @@ void processQuestion(const String&q){
     default:request+=" Jawab secara ramah, singkat, dan tidak monoton.";break;
   }
   request+=" Jangan mengulang kalimat atau sapaan yang sama jika tidak diperlukan.";
-  processOnlineRequest(request,vision,status);
+  processOnlineRequest(request,vision,status,false);
 }
 
 void setup(){
@@ -843,6 +866,7 @@ void setup(){
   personalityBegin();
   tarsEmotionBegin();
   autonomyBegin();
+  autoSpeechBegin(autoSpeechCallback);
 
   if(!personalityTaskHandle){
     BaseType_t result=xTaskCreate(personalityTask,"TARS_Personality",2048,nullptr,1,&personalityTaskHandle);
@@ -861,7 +885,7 @@ void setup(){
   Serial.println("TARS: LIFE READY");
   Serial.println("TARS: PERSONALITY READY");
   Serial.println("TARS: AUTONOMY READY");
-  Serial.println("TARS: AUTO SPEECH DISABLED");
+  Serial.println("TARS: AUTO SPEECH BOREDOM READY");
 }
 
 void enterTarsDeepSleep(){
@@ -894,7 +918,7 @@ void enterTarsDeepSleep(){
 }
 
 void loop(){
-/*  time_t now=time(nullptr);
+  time_t now=time(nullptr);
   struct tm t={};
 
   if(now>=1704067200){
@@ -914,7 +938,7 @@ void loop(){
       enterTarsDeepSleep();
       return;
     }
-  }*/
+  }
   ramMonitor();
 
   if(playing){
@@ -953,6 +977,9 @@ void loop(){
   }else if(!oledSpecial){
     oledSetStatus(tarsMode==MODE_ONLINE?"LISTENING":"READY");
   }
+
+  if(!playing&&tarsMode==MODE_ONLINE&&!sttConnected)
+    autoSpeechUpdate(true,false,false);
 
   delay(1);
 }
