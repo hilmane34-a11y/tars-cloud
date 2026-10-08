@@ -1,7 +1,7 @@
 #pragma once
 #include <Arduino.h>
 
-enum TarsEmotionEvent : uint8_t {
+enum TarsEmotionEvent:uint8_t{
   EMOTION_NONE=0,
   EMOTION_ANGRY,
   EMOTION_HURT,
@@ -18,7 +18,7 @@ void tarsEmotionBegin();
 void tarsEmotionUpdate();
 void tarsEmotionResetPending();
 
-void tarsEmotionQuestion(const String &text);
+void tarsEmotionQuestion(const String&text);
 void tarsEmotionSpeechPeak(uint16_t peak,bool sttSpeech);
 void tarsEmotionPeople(uint8_t count);
 void tarsEmotionVisionInteresting(bool interesting);
@@ -29,7 +29,7 @@ bool tarsEmotionHasEvent();
 TarsEmotionEvent tarsEmotionTakeEvent();
 
 String tarsEmotionPrompt(TarsEmotionEvent event);
-const char* tarsEmotionName(TarsEmotionEvent event);
+const char*tarsEmotionName(TarsEmotionEvent event);
 
 void tarsEmotionSpeechDone();
 void tarsEmotionResetActivity();
