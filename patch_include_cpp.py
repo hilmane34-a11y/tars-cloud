@@ -18,13 +18,14 @@ paths = [
 
     # Arduino framework libraries
     os.path.join(framework, "libraries", "Wire", "src"),
+    os.path.join(framework, "libraries", "SPI", "src"),
     os.path.join(framework, "libraries", "WiFi", "src"),
     os.path.join(framework, "libraries", "WiFiClientSecure", "src"),
     os.path.join(framework, "libraries", "HTTPClient", "src"),
     os.path.join(framework, "libraries", "LittleFS", "src"),
 ]
 
-# Dependency library roots + common src folders
+# PlatformIO dependencies
 if os.path.isdir(libdeps):
     for name in os.listdir(libdeps):
         p = os.path.join(libdeps, name)
@@ -38,14 +39,14 @@ if os.path.isdir(libdeps):
         if os.path.isdir(src):
             paths.append(src)
 
-# Remove duplicates / invalid paths
+# Remove duplicates and invalid paths
 paths = list(dict.fromkeys(
     p for p in paths if os.path.isdir(p)
 ))
 
 env.Append(CPPPATH=paths)
 
-# Compile every .cpp inside include/
+# Compile .cpp files located in include/
 env.BuildSources(
     os.path.join(env.subst("$BUILD_DIR"), "include_cpp"),
     os.path.join(project, "include"),
