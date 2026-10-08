@@ -4,25 +4,33 @@
 #define TRACK_CENTER 160
 #define TRACK_DEADZONE 35
 #define TRACK_SPEED 150
+
 #define TRACK_LOST_MS 1000
-#define TRACK_RETURN_MS 1800
+#define TRACK_RETURN_SPEED 150
 
 static VisualTrackState state=TRACK_IDLE;
+
 static int16_t targetX=TRACK_CENTER;
 static uint32_t lastSeen=0;
-static uint32_t returnStart=0;
-static int8_t lastDirection=0;
+
+static int8_t turnDirection=0;
+static int32_t turnBalance=0;
+
+static uint32_t lastTrackTick=0;
 
 void visualTrackingBegin(){
   state=TRACK_IDLE;
   targetX=TRACK_CENTER;
   lastSeen=0;
-  returnStart=0;
-  lastDirection=0;
+  turnDirection=0;
+  turnBalance=0;
+  lastTrackTick=millis();
   wheelsStop();
 }
 
 void visualTrackingTarget(int16_t x,bool valid){
+  uint32_t now=millis();
+
   if(!valid){
     visualTrackingLost();
     return;
@@ -30,28 +38,40 @@ void visualTrackingTarget(int16_t x,bool valid){
 
   x=constrain(x,0,319);
   targetX=x;
-  lastSeen=millis();
+  lastSeen=now;
 
-  if(state==TRACK_RETURNING)
+  if(state==TRACK_RETURNING){
+    wheelsStop();
     state=TRACKING;
+  }
 
   if(abs(x-TRACK_CENTER)<=TRACK_DEADZONE){
     wheelsStop();
-    state=TRACKING;
-    lastDirection=0;
+    turnDirection=0;
     return;
   }
 
   state=TRACKING;
 
+  if(lastTrackTick==0)
+    lastTrackTick=now;
+
+  uint32_t dt=now-lastTrackTick;
+  if(dt>100)dt=100;
+  lastTrackTick=now;
+
   if(x<TRACK_CENTER){
-    // Putar kiri: kiri mundur, kanan maju
+    // Putar kiri:
+    // kiri mundur, kanan maju
     wheelsDrive(-TRACK_SPEED,TRACK_SPEED);
-    lastDirection=-1;
+    turnDirection=-1;
+    turnBalance-=dt;
   }else{
-    // Putar kanan: kiri maju, kanan mundur
+    // Putar kanan:
+    // kiri maju, kanan mundur
     wheelsDrive(TRACK_SPEED,-TRACK_SPEED);
-    lastDirection=1;
+    turnDirection=1;
+    turnBalance+=dt;
   }
 }
 
@@ -71,6 +91,7 @@ void visualTrackingUpdate(bool active,bool busy){
   uint32_t now=millis();
 
   if(state==TRACKING){
+
     if(now-lastSeen>TRACK_LOST_MS){
       wheelsStop();
       state=TRACK_LOST;
@@ -87,31 +108,69 @@ void visualTrackingUpdate(bool active,bool busy){
     else
       wheelsDrive(TRACK_SPEED,-TRACK_SPEED);
 
+    if(lastTrackTick==0)
+      lastTrackTick=now;
+
+    uint32_t dt=now-lastTrackTick;
+
+    if(dt>100)dt=100;
+
+    lastTrackTick=now;
+
+    if(targetX<TRACK_CENTER)
+      turnBalance-=dt;
+    else
+      turnBalance+=dt;
+
     return;
   }
 
   if(state==TRACK_LOST){
     wheelsStop();
-    returnStart=now;
+
+    // Kalau tidak pernah benar-benar berputar,
+    // tidak perlu melakukan return.
+    if(abs(turnBalance)<100){
+      turnBalance=0;
+      targetX=TRACK_CENTER;
+      turnDirection=0;
+      state=TRACK_IDLE;
+      return;
+    }
+
     state=TRACK_RETURNING;
     return;
   }
 
   if(state==TRACK_RETURNING){
-    if(now-returnStart<TRACK_RETURN_MS){
 
-      if(lastDirection<0)
-        wheelsDrive(TRACK_SPEED,-TRACK_SPEED);
-      else if(lastDirection>0)
-        wheelsDrive(-TRACK_SPEED,TRACK_SPEED);
-      else
-        wheelsStop();
+    // turnBalance < 0 = sebelumnya terlalu banyak ke kiri
+    // maka sekarang putar kanan.
+    if(turnBalance<0){
+      wheelsDrive(TRACK_RETURN_SPEED,-TRACK_RETURN_SPEED);
 
-    }else{
+      uint32_t dt=now-lastTrackTick;
+      if(dt>100)dt=100;
+      turnBalance+=dt;
+      lastTrackTick=now;
+    }
+
+    // turnBalance > 0 = sebelumnya terlalu banyak ke kanan
+    // maka sekarang putar kiri.
+    else if(turnBalance>0){
+      wheelsDrive(-TRACK_RETURN_SPEED,TRACK_RETURN_SPEED);
+
+      uint32_t dt=now-lastTrackTick;
+      if(dt>100)dt=100;
+      turnBalance-=dt;
+      lastTrackTick=now;
+    }
+
+    else{
       wheelsStop();
-      state=TRACK_IDLE;
       targetX=TRACK_CENTER;
-      lastDirection=0;
+      turnDirection=0;
+      state=TRACK_IDLE;
     }
 
     return;
