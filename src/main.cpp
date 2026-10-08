@@ -81,8 +81,8 @@ uint32_t lastVisionEventAt=0;
 
 /* STT LIFECYCLE */
 const uint32_t STT_NORMAL_COOLDOWN=1000;
-const uint32_t STT_ERROR_COOLDOWN=6000;
-const uint32_t STT_QUOTA_COOLDOWN=15000;
+const uint32_t STT_ERROR_COOLDOWN=30000;
+const uint32_t STT_QUOTA_COOLDOWN=60000;
 const uint32_t STT_RECONNECT_GUARD=60000;
 const uint32_t STT_IDLE_TIMEOUT_MS=10000;
 const uint32_t VISION_EVENT_COOLDOWN_MS=120000;
@@ -648,10 +648,11 @@ void sttEvent(WStype_t type,uint8_t*payload,size_t length){
   Serial.println("TARS: STT ERROR = "+e);oledSetStatus("STT ERROR");
  }
 }
-void closeSTT(){
- sttClosing=true;sttWS.disconnect();sttConnected=false;sttReady=false;
- sttRetryAt=millis()+1800;sttClosing=false;
-}
+void closeSTT(uint32_t cooldown=STT_NORMAL_COOLDOWN){
+  sttClosing=true;sttWS.disconnect();sttConnected=false;
+  sttReady=false;sttClosing=false;
+  sttRetryAt=millis()+cooldown;sttRetryShown=false;}
+ }
 bool startSTT(bool offline=false){
 if(!wifiOK()||!micOK)
 return false;
