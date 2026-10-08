@@ -89,6 +89,7 @@ bool wifiOK();
 bool visionLiveEnabled(){return tarsMode==MODE_ONLINE;}
 String normCmd(String);
 String systemStatus();
+String ask(const String&);
 static void personalityTask(void*){
   for(;;){
     personalityUpdate(false,autonomyIsMoving(),false);
