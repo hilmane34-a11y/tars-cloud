@@ -231,10 +231,20 @@ void cameraTask(void*){
     if(xSemaphoreTake(cameraMux,portMAX_DELAY)==pdTRUE){
       if(xSemaphoreTake(envMux,portMAX_DELAY)==pdTRUE){
         if(xSemaphoreTake(previewMux,portMAX_DELAY)==pdTRUE){
-          ok=I2SCamera::captureFrameData(
-            cameraEnvironment,
-            cameraPreview
-          );
+          ok=I2SCamera::captureFrameData( cameraEnvironment, cameraPreview );
+          int gesture = handGestureUpdate(cameraEnvironment, 96, 32);
+if (gesture == HAND_OPEN)
+{
+    griperBuka();
+    delay(300);
+    griperStop();
+}
+else if (gesture == HAND_CLOSED)
+{
+    griperTutup();
+    delay(300);
+    griperStop();
+}
           if(ok){
             previewReady=true;
           }else{
