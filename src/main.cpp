@@ -456,7 +456,7 @@ bool processOnlineRequest(const String&q,bool vision,bool status,bool automatic=
 
   bool ok=streamAudio(String(TARS_CLOUD_URL)+"/tts",answer);
 
-  ttsStop();
+  audioStop();
 
   wheelsStop();
   autonomyStop();
@@ -644,7 +644,7 @@ void runAlarm(){
 
   if(played)deepSleepMarkAlarmDone();
 
-  ttsStop();
+  audioStop();
   alarmRunning=false;
   wheelsStop();
   oledSetStatus(tarsMode==MODE_ONLINE?"LISTENING":"READY");
@@ -914,7 +914,7 @@ void enterTarsDeepSleep(){
   wheelsStop();
   autonomyStop();
   closeSTT();
-  ttsStop();
+  audioStop();
   playing=false;
 
   visionLivePause();
