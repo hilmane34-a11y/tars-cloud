@@ -31,7 +31,7 @@ oledStatus=status;oledText=s;oledTypePos=s.length();oledPage=0;
 oledLastType=millis();oledLastPage=millis();
 }
 
-static void drawSpecialOLED(uint8_t m){
+void drawSpecialOLED(uint8_t m){
 oled.clearDisplay();
 oled.setTextColor(SSD1306_WHITE);
 oled.drawLine(15,55,8,37,1);oled.drawLine(8,37,8,22,1);oled.drawLine(8,22,4,17,1);oled.drawLine(8,22,8,14,1);oled.drawLine(8,22,12,15,1);
@@ -52,7 +52,7 @@ if(e>1700){oled.drawLine(53,23,58,28,1);oled.drawLine(58,23,53,28,1);}
 oled.display();
 }
 
-static void drawCameraOLED(){
+void drawCameraOLED(){
 if(!oledOK||!previewMux||!previewReady)return;
 if(xSemaphoreTake(previewMux,pdMS_TO_TICKS(20))!=pdTRUE)return;
 oled.clearDisplay();
