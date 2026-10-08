@@ -8,6 +8,12 @@ constexpr uint32_t STT_QUOTA_COOLDOWN = 60000;
 constexpr uint32_t STT_RECONNECT_GUARD = 60000;
 constexpr uint32_t STT_IDLE_TIMEOUT_MS = 10000;
 
+extern String sttFinal;
+extern String sttPartial;
+extern bool micOK;
+
+bool wifiOK();
+
 extern bool sttConnected;
 extern bool sttReady;
 extern bool sttDone;
