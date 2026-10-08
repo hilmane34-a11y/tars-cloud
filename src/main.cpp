@@ -53,6 +53,7 @@
 #define CAM_PCLK 12
 
 const uint32_t ALARM_DURATION_MS=180000;
+const uint32_t MIC_RATE=16000;
 
 enum TarsMode:uint8_t{MODE_OFFLINE,MODE_ONLINE};
 TarsMode tarsMode=MODE_OFFLINE;
