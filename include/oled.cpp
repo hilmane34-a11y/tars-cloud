@@ -237,7 +237,7 @@ void oledTask(void*) {
       drawCameraOLED();
 
       vTaskDelay(
-        pdMS_TO_TICKS(200)
+        pdMS_TO_TICKS(30)
       );
 
       continue;
