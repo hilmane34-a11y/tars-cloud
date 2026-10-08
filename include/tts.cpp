@@ -28,6 +28,8 @@ extern const uint8_t sore_start[] asm("_binary_src_sore_mp3_start");
 extern const uint8_t sore_end[] asm("_binary_src_sore_mp3_end");
 extern const uint8_t malam_start[] asm("_binary_src_malam_mp3_start");
 extern const uint8_t malam_end[] asm("_binary_src_malam_mp3_end");
+extern const uint8_t alarm_start[] asm("_binary_src_alarm_mp3_start");
+extern const uint8_t alarm_end[] asm("_binary_src_alarm_mp3_end");
 
 extern void oledStartSpeak(const String&);
 extern void oledSetStatus(const String&);
