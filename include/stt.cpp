@@ -8,7 +8,7 @@
 
 #include "config.h"
 #include "wifi_manager.h"
-#include <tars_emotion.h>
+#include "tars_emotion.h"
 
 #define MIC_PORT I2S_NUM_1
 
