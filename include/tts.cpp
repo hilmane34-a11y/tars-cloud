@@ -156,6 +156,8 @@ public:
     dacBytes+=d;return d;
   }
   int availableForWrite()override{return out->availableForWrite();}
+  uint64_t decodedBytes()const{return decBytes;}
+  uint64_t outputBytes()const{return dacBytes;}
   int available()override{return 0;}
   int read()override{return-1;}
   int peek()override{return-1;}
