@@ -54,11 +54,18 @@ oled.display();
 
 void drawCameraOLED(){
 if(!oledOK||!previewMux||!previewReady)return;
-if(xSemaphoreTake(previewMux,pdMS_TO_TICKS(20))!=pdTRUE)return;
-oled.clearDisplay();
-for(int y=0;y<64;y++)for(int x=0;x<128;x++)if(cameraPreview[y*128+x])oled.drawPixel(x,y,SSD1306_WHITE);
-oled.display();
+static uint8_t frame[128*64];
+if(xSemaphoreTake(previewMux,pdMS_TO_TICKS(5))!=pdTRUE)return;
+memcpy(frame,cameraPreview,sizeof(frame));
 xSemaphoreGive(previewMux);
+oled.clearDisplay();
+for(int y=0;y<64;y++){
+for(int x=0;x<128;x++){
+if(frame[y*128+x])
+oled.drawPixel(x,y,SSD1306_WHITE);
+}
+}
+oled.display();
 }
 
 void oledTask(void*){
@@ -83,9 +90,9 @@ vTaskDelay(pdMS_TO_TICKS(20));
 continue;
 }
 
-if(cameraLive&&!playing&&!oledText.length()){
+if(cameraLive&&!playing){
 drawCameraOLED();
-vTaskDelay(pdMS_TO_TICKS(30));
+vTaskDelay(pdMS_TO_TICKS(200));
 continue;
 }
 
