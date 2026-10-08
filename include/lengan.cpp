@@ -11,14 +11,12 @@ PCF8574 pcf(PCF_ADDR);
 // ===============================
 
 // Channel A = MOTOR LENGAN
-#define L_IN1 0
-#define L_IN2 1
-#define L_EN  2
+#define L_IN1 0   // P0
+#define L_IN2 1   // P1
 
 // Channel B = MOTOR GRIPER
-#define G_IN1 3
-#define G_IN2 4
-#define G_EN  5
+#define G_IN1 2   // P2
+#define G_IN2 3   // P3
 
 void lenganInit()
 {
@@ -26,11 +24,9 @@ void lenganInit()
 
     pcf.pinMode(L_IN1, OUTPUT);
     pcf.pinMode(L_IN2, OUTPUT);
-    pcf.pinMode(L_EN, OUTPUT);
 
     pcf.pinMode(G_IN1, OUTPUT);
     pcf.pinMode(G_IN2, OUTPUT);
-    pcf.pinMode(G_EN, OUTPUT);
 
     tanganStop();
 }
@@ -43,21 +39,18 @@ void lenganNaik()
 {
     pcf.digitalWrite(L_IN1, HIGH);
     pcf.digitalWrite(L_IN2, LOW);
-    pcf.digitalWrite(L_EN, HIGH);
 }
 
 void lenganTurun()
 {
     pcf.digitalWrite(L_IN1, LOW);
     pcf.digitalWrite(L_IN2, HIGH);
-    pcf.digitalWrite(L_EN, HIGH);
 }
 
 void lenganStop()
 {
     pcf.digitalWrite(L_IN1, LOW);
     pcf.digitalWrite(L_IN2, LOW);
-    pcf.digitalWrite(L_EN, LOW);
 }
 
 // ===============================
@@ -68,21 +61,18 @@ void griperBuka()
 {
     pcf.digitalWrite(G_IN1, HIGH);
     pcf.digitalWrite(G_IN2, LOW);
-    pcf.digitalWrite(G_EN, HIGH);
 }
 
 void griperTutup()
 {
     pcf.digitalWrite(G_IN1, LOW);
     pcf.digitalWrite(G_IN2, HIGH);
-    pcf.digitalWrite(G_EN, HIGH);
 }
 
 void griperStop()
 {
     pcf.digitalWrite(G_IN1, LOW);
     pcf.digitalWrite(G_IN2, LOW);
-    pcf.digitalWrite(G_EN, LOW);
 }
 
 // ===============================
