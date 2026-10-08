@@ -216,35 +216,60 @@ void cameraTask(void*){
     if(xSemaphoreTake(cameraMux,portMAX_DELAY)==pdTRUE){
       if(xSemaphoreTake(envMux,portMAX_DELAY)==pdTRUE){
         if(xSemaphoreTake(previewMux,portMAX_DELAY)==pdTRUE){
-          ok=I2SCamera::captureFrameData(cameraEnvironment,cameraPreview);
-          if(ok)previewReady=true;
+          ok=I2SCamera::captureFrameData(
+            cameraEnvironment,
+            cameraPreview
+          );
+          if(ok){
+            previewReady=true;
+          }else{
+            previewReady=false;
+            frameErrors++;
+            if(frameErrors==1||frameErrors%20==0)
+              Serial.printf(
+                "TARS: CAMERA CAPTURE FAILED count=%u\n",
+                frameErrors
+              );
+          }
           xSemaphoreGive(previewMux);
         }
         if(ok)
-          analyzed=envAnalyze(cameraEnvironment,I2SCamera::dominantColor(),I2SCamera::dominantColorConfidence(),environment);
+          analyzed=envAnalyze(
+            cameraEnvironment,
+            I2SCamera::dominantColor(),
+            I2SCamera::dominantColorConfidence(),
+            environment
+          );
         xSemaphoreGive(envMux);
       }
       xSemaphoreGive(cameraMux);
     }
-
     if(ok&&analyzed){
       autonomySetEnvironment(environment);
       uint8_t people=I2SCamera::peopleCount();
       tarsEmotionPeople(people);
       if(tarsMode==MODE_ONLINE){
-        if(environment.event==ENV_NONE)visionSceneLatched=false;
-        if(environment.event==ENV_SCENE_CHANGED&&!visionSceneLatched&&millis()-lastVisionEventAt>=VISION_EVENT_COOLDOWN_MS){
+        if(environment.event==ENV_NONE)
+          visionSceneLatched=false;
+        if(
+          environment.event==ENV_SCENE_CHANGED&&
+          !visionSceneLatched&&
+          millis()-lastVisionEventAt>=VISION_EVENT_COOLDOWN_MS
+        ){
           portENTER_CRITICAL(&visionEventMux);
           pendingVisionCheck=true;
           portEXIT_CRITICAL(&visionEventMux);
           visionSceneLatched=true;
           lastVisionEventAt=millis();
-          Serial.println("TARS: SIGNIFICANT SCENE CHANGE -> VISION");
+          Serial.println(
+            "TARS: SIGNIFICANT SCENE CHANGE -> VISION"
+          );
         }
       }
       frameErrors=0;
-    }else frameErrors++;
-    if(cameraLive&&!playing)autonomyUpdate(true,false);
+    }
+    if(cameraLive&&!playing)
+      autonomyUpdate(true,false);
     vTaskDelay(1);
   }
 }
