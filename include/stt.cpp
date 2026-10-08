@@ -185,25 +185,48 @@ String stopSTT(uint32_t samples,bool offline){
 }
 
 String recordSTT(bool offline){
-  if(!startSTT(offline))return "";
-
+  Serial.printf("TARS: RECORD STT START mode=%s\n",offline?"OFFLINE":"ONLINE");
+  if(!startSTT(offline)){
+    Serial.println("TARS: RECORD STT START FAILED");
+    return "";
+  }
+  Serial.println("TARS: RECORD STT MIC LOOP");
   if(offline)oledSetStatus("READY");
   else oledSetListening();
-
   size_t prePos=0,preCount=0;
   uint32_t voiceStart=0,lastVoice=0,samples=0,listenStart=millis();
   bool voice=false;
-
+  uint32_t diag=millis();
   for(;;){
     sttWS.loop();
-
-    if(sttError)break;
-
+    if(sttError){
+      Serial.println("TARS: RECORD STT ERROR BREAK");
+      break;
+    }
     size_t bytes=0;
-
-    if(i2s_read(MIC_PORT,rawBuf,sizeof(rawBuf),&bytes,pdMS_TO_TICKS(30))!=ESP_OK)
+    esp_err_t ir=i2s_read(
+      MIC_PORT,
+      rawBuf,
+      sizeof(rawBuf),
+      &bytes,
+      pdMS_TO_TICKS(30)
+    );
+    if(ir!=ESP_OK){
+      if(millis()-diag>=2000){
+        diag=millis();
+        Serial.printf("TARS: I2S READ ERROR=%d\n",(int)ir);
+      }
       continue;
-
+    }
+    if(millis()-diag>=2000){
+      diag=millis();
+      Serial.printf(
+        "TARS: STT LISTENING connected=%d ready=%d bytes=%u\n",
+        sttConnected,
+        sttReady,
+        (unsigned)bytes
+      );
+    }
     size_t count=bytes/4;
     int32_t peak=0;
     uint64_t sum=0;
