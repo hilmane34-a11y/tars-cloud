@@ -151,41 +151,20 @@ void drawSpecialOLED(uint8_t m) {
   oled.display();
 }
 
-void drawCameraOLED() {
+void drawCameraOLED(){
 
-  if(!oledOK || !previewMux)
+  if(!oledOK||!previewMux||!previewReady)
     return;
 
-  if(
-    xSemaphoreTake(
-      previewMux,
-      pdMS_TO_TICKS(100)
-    ) != pdTRUE
-  )
+  if(xSemaphoreTake(previewMux,pdMS_TO_TICKS(20))!=pdTRUE)
     return;
-
-  if(!previewReady){
-
-    xSemaphoreGive(previewMux);
-    return;
-  }
 
   oled.clearDisplay();
 
   for(int y=0;y<64;y++){
-
     for(int x=0;x<128;x++){
-
-      if(
-        cameraPreview[
-          y*128+x
-        ]
-      )
-        oled.drawPixel(
-          x,
-          y,
-          SSD1306_WHITE
-        );
+      if(cameraPreview[y*128+x])
+        oled.drawPixel(x,y,SSD1306_WHITE);
     }
   }
 
