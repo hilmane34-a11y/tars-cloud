@@ -1,23 +1,20 @@
 #include "hand_gesture.h"
 
-#define HAND_W 96
-#define HAND_H 32
-
 #define STABLE_COUNT 3
 
 static int lastRaw = HAND_NONE;
 static int stableGesture = HAND_NONE;
 static int stableCount = 0;
 
-int handGestureUpdate(const uint16_t *image)
+int handGestureUpdate(const uint16_t *image, int w, int h)
 {
-    if (!image)
+    if (!image || w <= 0 || h <= 0)
         return HAND_NONE;
 
-    int x0 = HAND_W / 4;
-    int x1 = (HAND_W * 3) / 4;
-    int y0 = HAND_H / 6;
-    int y1 = (HAND_H * 5) / 6;
+    int x0 = w / 4;
+    int x1 = (w * 3) / 4;
+    int y0 = h / 6;
+    int y1 = (h * 5) / 6;
 
     int pixels = 0;
     int area = 0;
@@ -26,7 +23,7 @@ int handGestureUpdate(const uint16_t *image)
     {
         for (int x = x0; x < x1; x++)
         {
-            uint16_t p = image[y * HAND_W + x];
+            uint16_t p = image[y * w + x];
 
             uint8_t r = ((p >> 11) & 0x1F) << 3;
             uint8_t g = ((p >> 5) & 0x3F) << 2;
@@ -49,21 +46,13 @@ int handGestureUpdate(const uint16_t *image)
 
     int raw = HAND_NONE;
 
-    // Telapak terbuka
     if (percent >= 28)
-    {
         raw = HAND_OPEN;
-    }
-    // Tangan mengepal
     else if (percent >= 4)
-    {
         raw = HAND_CLOSED;
-    }
 
     if (raw == lastRaw)
-    {
         stableCount++;
-    }
     else
     {
         lastRaw = raw;
