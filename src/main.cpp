@@ -970,7 +970,7 @@ void enterTarsDeepSleep(){
 }
 
 void loop(){
-  time_t now=time(nullptr);
+/*  time_t now=time(nullptr);
   struct tm t={};
 
   if(now>=1704067200){
@@ -990,8 +990,7 @@ void loop(){
       enterTarsDeepSleep();
       return;
     }
-  }
-
+  }*/
   ramMonitor();
 
   if(playing){
