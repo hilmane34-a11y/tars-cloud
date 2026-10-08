@@ -5,7 +5,7 @@
 #include <math.h>
 
 #include "config.h"
-#include "sleep_oled.h"
+#include <sleep_oled.h>
 
 extern bool cameraLive;
 extern bool playing;
