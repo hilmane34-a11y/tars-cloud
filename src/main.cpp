@@ -27,10 +27,10 @@
 #include "env.h"
 #include "deep_sleep.h"
 #include "sleep_oled.h"
-#include "tars_emotion.h"
-#include "stt.h"
-#include "tts.h"
-#include "oled.h"
+#include <tars_emotion.h>
+#include <stt.h>
+#include <tts.h>
+#include <oled.h>
 
 #define MIC_PORT I2S_NUM_1
 #define MIC_SCK 18
