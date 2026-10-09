@@ -1,7 +1,8 @@
+
 #pragma once
 #include <Arduino.h>
 
-enum EnvEvent:uint8_t{
+enum EnvEvent : uint8_t {
   ENV_NONE,
   ENV_MOTION_LEFT,
   ENV_MOTION_CENTER,
@@ -9,7 +10,7 @@ enum EnvEvent:uint8_t{
   ENV_SCENE_CHANGED
 };
 
-enum EnvColor:uint8_t{
+enum EnvColor : uint8_t {
   ENV_COLOR_UNKNOWN,
   ENV_COLOR_BLACK,
   ENV_COLOR_WHITE,
@@ -23,7 +24,15 @@ enum EnvColor:uint8_t{
   ENV_COLOR_PURPLE
 };
 
-struct EnvState{
+enum EnvSurface : uint8_t {
+  ENV_SURFACE_UNKNOWN,
+  ENV_SURFACE_FLOOR,
+  ENV_SURFACE_WALL,
+  ENV_SURFACE_SHADOW,
+  ENV_SURFACE_OBSTACLE
+};
+
+struct EnvState {
   bool valid;
   bool obstacle;
   bool leftClear;
@@ -49,15 +58,19 @@ struct EnvState{
   uint8_t leftColorConfidence;
   uint8_t centerColorConfidence;
   uint8_t rightColorConfidence;
+
+  // Indeks sektor: 0=kiri, 1=tengah, 2=kanan.
+  // Indeks zona: 0=atas, 1=tengah, 2=bawah.
+  EnvSurface surface[3][3];
+
+  bool shadow[3];
+  uint8_t obstacleConfidence[3];
 };
 
 void envBegin();
 void envResetMotion();
 
-bool envAnalyze(
-  const uint16_t *image,
-  EnvState &result
-);
+bool envAnalyze(const uint16_t *image, EnvState &result);
 
 bool envAnalyze(
   const uint16_t *image,
