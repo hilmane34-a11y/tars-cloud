@@ -69,6 +69,13 @@ uint32_t sleepPrepareAt=0;
 volatile bool pendingVisionCheck=false;
 uint32_t lastVisionEventAt=0;
 const uint32_t VISION_EVENT_COOLDOWN_MS=120000;
+static uint32_t armMotorStopAt = 0;
+static bool armMotorRunning = false;
+static int lastArmGesture = HAND_NONE;
+static uint32_t lastArmGestureAt = 0;
+
+#define ARM_MOVE_MS 300
+#define ARM_GESTURE_GAP_MS 500
 
 OV7670*camera=nullptr;
 SemaphoreHandle_t previewMux=nullptr,envMux=nullptr,cameraMux=nullptr;
@@ -367,39 +374,51 @@ void cameraTask(void*){
         if(xSemaphoreTake(previewMux,portMAX_DELAY)==pdTRUE){
           ok=I2SCamera::captureFrameData(
             cameraEnvironment,cameraPreview );
-          int gesture=handGestureUpdate(
-            cameraEnvironment,
-            96,
-            32
-          );
-          if(gesture==HAND_OPEN){
-            griperBuka();
-            delay(150);
-            griperStop();
-          }
-          else if(gesture==HAND_CLOSED){
-            griperTutup();
-            delay(150);
-            griperStop();
-          }
-          else if(gesture==HAND_ARM_UP){
-            lenganNaik();
-          }
-          else if(gesture==HAND_ARM_DOWN){
-            lenganTurun();
-          }
-          if(ok){
-            previewReady=true;
-          }else{
-            previewReady=false;
-            frameErrors++;
+if(ok){
+  int gesture = handGestureUpdate(cameraEnvironment, 96, 32);
+  uint32_t now = millis();
 
-            if(frameErrors==1||frameErrors%20==0)
-              Serial.printf(
-                "TARS: CAMERA CAPTURE FAILED count=%u\n",
-                frameErrors
-              );
-          }
+  // Matikan motor lengan setelah durasi gerak selesai.
+  if(armMotorRunning &&
+     (int32_t)(now - armMotorStopAt) >= 0){
+    lenganStop();
+    armMotorRunning = false;
+  }
+
+  // Griper bergerak singkat, lalu berhenti.
+  if(gesture == HAND_OPEN){
+    griperBuka();
+    delay(150);
+    griperStop();
+  }
+  else if(gesture == HAND_CLOSED){
+    griperTutup();
+    delay(150);
+    griperStop();
+  }
+
+  // Satu gestur hanya memicu satu gerakan.
+  if(gesture == HAND_ARM_UP ||
+     gesture == HAND_ARM_DOWN){
+
+    if(gesture != lastArmGesture ||
+       now - lastArmGestureAt >= ARM_GESTURE_GAP_MS){
+
+      if(gesture == HAND_ARM_UP)
+        lenganNaik();
+      else
+        lenganTurun();
+
+      armMotorRunning = true;
+      armMotorStopAt = now + ARM_MOVE_MS;
+      lastArmGesture = gesture;
+      lastArmGestureAt = now;
+    }
+  }
+  else if(gesture == HAND_NONE){
+    lastArmGesture = HAND_NONE;
+  }
+}
           xSemaphoreGive(previewMux);
         }
         if(ok){
