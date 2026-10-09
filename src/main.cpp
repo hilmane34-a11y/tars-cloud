@@ -228,145 +228,127 @@ bool startCamera(){
   camDiag("START-DONE");
   return true;
 }
-static uint8_t trackPrev[24*16]={0};
-static bool trackPrevReady=false;
-static uint32_t trackLastTarget=0;
-
-static inline uint8_t trackBrightness(uint16_t p){
-  uint8_t r=((p>>11)&31)*255/31;
-  uint8_t g=((p>>5)&63)*255/63;
-  uint8_t b=(p&31)*255/31;
-  return (77*r+150*g+29*b)>>8;
+static uint8_t trackPrev[24*16] = {0};
+static bool trackPrevReady = false;
+static uint32_t trackLastTarget = 0;
+static int16_t trackAcceptedX = 160;
+static int16_t trackCandidateX = 160;
+static uint8_t trackCandidateFrames = 0;
+static uint32_t trackCandidateAt = 0;
+static inline uint8_t trackBrightness(uint16_t p) {
+  uint8_t r = ((p >> 11) & 31) * 255 / 31;
+  uint8_t g = ((p >> 5) & 63) * 255 / 63;
+  uint8_t b = (p & 31) * 255 / 31;
+  return (77 * r + 150 * g + 29 * b) >> 8;
 }
-static bool detectVisualPersonTarget(int16_t &targetX){
-  const int W=24;
-  const int H=16;
-
-  uint8_t grid[W*H];
-  memset(grid,0,sizeof(grid));
-
-  for(int gy=0;gy<H;gy++){
-    int y0=gy*32/H;
-    int y1=(gy+1)*32/H;
-
-    for(int gx=0;gx<W;gx++){
-      int x0=gx*96/W;
-      int x1=(gx+1)*96/W;
-
-      uint32_t sum=0;
-      uint16_t n=0;
-
-      for(int y=y0;y<y1;y+=2){
-        for(int x=x0;x<x1;x+=2){
-          sum+=trackBrightness(cameraEnvironment[y*96+x]);
+static bool detectVisualPersonTarget(int16_t &targetX) {
+  const int W = 24;
+  const int H = 16;
+  uint8_t grid[W * H];
+  for (int gy = 0; gy < H; gy++) {
+    int y0 = gy * 32 / H;
+    int y1 = (gy + 1) * 32 / H;
+    for (int gx = 0; gx < W; gx++) {
+      int x0 = gx * 96 / W;
+      int x1 = (gx + 1) * 96 / W;
+      uint32_t sum = 0;
+      uint16_t n = 0;
+      for (int y = y0; y < y1; y += 2) {
+        for (int x = x0; x < x1; x += 2) {
+          sum += trackBrightness(cameraEnvironment[y * 96 + x]);
           n++;
         }
       }
-
-      grid[gy*W+gx]=n?(uint8_t)(sum/n):0;
+      grid[gy * W + gx] = n ? sum / n : 0;
     }
   }
-
-  if(!trackPrevReady){
-    memcpy(trackPrev,grid,sizeof(grid));
-    trackPrevReady=true;
+  if (!trackPrevReady) {
+    memcpy(trackPrev, grid, sizeof(grid));
+    trackPrevReady = true;
     return false;
   }
-
-  uint8_t motion[W*H];
-  memset(motion,0,sizeof(motion));
-
-  int motionCells=0;
-  int weightedX=0;
-  int weightedN=0;
-
-  for(int gy=0;gy<H;gy++){
-    for(int gx=0;gx<W;gx++){
-      int i=gy*W+gx;
-      int d=abs((int)grid[i]-(int)trackPrev[i]);
-
-      if(d>=18){
-        motion[i]=1;
-        motionCells++;
-        weightedX+=gx*4;
-        weightedN+=4;
-      }
+  uint8_t motion[W * H] = {0};
+  memcpy(trackPrev, grid, sizeof(grid));
+  int motionCells = 0;
+  int sumX = 0;
+  int sumWeight = 0;
+  int minX = W, maxX = -1;
+  int minY = H, maxY = -1;
+  int lowerCells = 0;
+  for (int gy = 0; gy < H; gy++) {
+    for (int gx = 0; gx < W; gx++) {
+      int i = gy * W + gx;
+      // Ambang lebih tinggi untuk mengurangi perubahan cahaya kecil.
+      int d = abs((int)grid[i] - (int)trackPrev[i]);
+      // Nilai sebelumnya disimpan sebelum perbandingan di atas,
+      // sehingga perbandingan dilakukan menggunakan buffer terpisah.
     }
   }
-
-  memcpy(trackPrev,grid,sizeof(grid));
-
-  if(motionCells<5){
-    if(millis()-trackLastTarget>1200)
-      return false;
-    return true;
+  // Hitung gerakan terhadap frame sebelumnya yang disimpan terpisah.
+  static uint8_t previousGrid[W * H] = {0};
+  static bool previousReady = false;
+  if (!previousReady) {
+    memcpy(previousGrid, grid, sizeof(grid));
+    previousReady = true;
+    return false;
   }
-
-  // Cari massa gerakan yang memanjang vertikal.
-  // Bagian bawah frame tetap dihitung agar kaki masih bisa menjadi target.
-  int bestX=-1;
-  int bestScore=0;
-
-  for(int gx=0;gx<W;gx++){
-    int vertical=0;
-    int score=0;
-
-    for(int gy=0;gy<H;gy++){
-      if(!motion[gy*W+gx])continue;
-
-      score++;
-
-      if(gy>=H/2)
-        vertical+=2;
-      else
-        vertical++;
-    }
-
-    if(vertical>bestScore){
-      bestScore=vertical;
-      bestX=gx;
+  for (int gy = 0; gy < H; gy++) {
+    for (int gx = 0; gx < W; gx++) {
+      int i = gy * W + gx;
+      int d = abs((int)grid[i] - (int)previousGrid[i]);
+      if (d < 22) continue;
+      motion[i] = 1;
+      motionCells++;
+      minX = min(minX, gx);
+      maxX = max(maxX, gx);
+      minY = min(minY, gy);
+      maxY = max(maxY, gy);
+      int weight = gy >= H / 2 ? 2 : 1;
+      sumX += gx * weight;
+      sumWeight += weight;
+      if (gy >= H / 2) lowerCells++;
     }
   }
-
-  if(bestX<0||bestScore<3){
-    if(millis()-trackLastTarget>1200)
-      return false;
-    return true;
-  }
-
-  // Cari pusat massa gerakan di sekitar kolom target.
-  int sumX=0;
-  int sumWeight=0;
-
-  for(int gx=max(0,bestX-3);gx<=min(W-1,bestX+3);gx++){
-    for(int gy=0;gy<H;gy++){
-      if(!motion[gy*W+gx])continue;
-
-      int weight=(gy>=H/2)?2:1;
-      sumX+=gx*weight;
-      sumWeight+=weight;
+  memcpy(previousGrid, grid, sizeof(grid));
+  // Harus ada gerakan yang cukup menyebar, bukan satu titik acak.
+  bool coherent =
+    motionCells >= 5 &&
+    maxX - minX >= 1 &&
+    maxY - minY >= 1 &&
+    (lowerCells >= 2 || motionCells >= 7);
+  if (!coherent || sumWeight == 0) {
+    trackCandidateFrames = 0;
+    // Tahan target sebentar saja saat gerakan terputus sesaat.
+    if (trackLastTarget && millis() - trackLastTarget <= 250) {
+      targetX = trackAcceptedX;
+      return true;
     }
+    return false;
   }
-
-  if(sumWeight<3){
-    if(millis()-trackLastTarget>1200)
-      return false;
-    return true;
+  int16_t x = constrain((sumX * 320) / (sumWeight * W), 0, 319);
+  uint32_t now = millis();
+  // Gerakan harus konsisten di sekitar posisi yang sama pada beberapa frame.
+  if (trackCandidateFrames == 0 ||
+      now - trackCandidateAt > 350 ||
+      abs(x - trackCandidateX) > 65) {
+    trackCandidateX = x;
+    trackCandidateFrames = 1;
+  } else {
+    trackCandidateX = (trackCandidateX * 2 + x) / 3;
+    if (trackCandidateFrames < 3) trackCandidateFrames++;
   }
-
-  targetX=(sumX*320)/(sumWeight*W);
-
-  targetX=constrain(targetX,0,319);
-
-  trackLastTarget=millis();
-
+  trackCandidateAt = now;
+  if (trackCandidateFrames < 3) {
+    if (trackLastTarget && now - trackLastTarget <= 250) {
+      targetX = trackAcceptedX;
+      return true;
+    }
+    return false;
+  }
+  trackAcceptedX = trackCandidateX;
+  trackLastTarget = now;
+  targetX = trackAcceptedX;
   return true;
-}
-
-static void resetVisualTrackingMemory(){
-  trackPrevReady=false;
-  trackLastTarget=0;
-  memset(trackPrev,0,sizeof(trackPrev));
 }
 void cameraTask(void*){
   uint8_t frameErrors=0;
