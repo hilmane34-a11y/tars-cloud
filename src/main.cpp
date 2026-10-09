@@ -1112,10 +1112,10 @@ void loop(){
   ramMonitor();
 
   if(playing){
-    wheelsStop();
-    autonomyStop();
-    delay(1);
-    return;
+  wheelsStop();
+  visualTrackingUpdate(false,true);
+  delay(1);
+  return;
   }
 
   if(tarsMode==MODE_ONLINE&&!wifiOK()){
@@ -1130,26 +1130,23 @@ void loop(){
     return;
   }
 
-  checkTimeGreeting();
-
-  if(playing){
-    wheelsStop();
-    autonomyStop();
-    return;
-  }
-
-  String q=tarsMode==MODE_ONLINE?recordRealtime():recordOffline();
-
-  if(q.length()){
-    wheelsStop();
-    autonomyStop();
-    processQuestion(q);
-  }else if(!oledSpecial){
-    oledSetStatus(tarsMode==MODE_ONLINE?"LISTENING":"READY");
-  }
-
-  if(!playing&&tarsMode==MODE_ONLINE&&!sttConnected)
-    autoSpeechUpdate(true,false,false);
-
+checkTimeGreeting();
+if(playing){
+  wheelsStop();
+  autonomyStop();
+  visualTrackingUpdate(false,true);
   delay(1);
+  return;
+}
+String q=tarsMode==MODE_ONLINE?recordRealtime():recordOffline();
+if(q.length()){
+  wheelsStop();
+  visualTrackingUpdate(false,true);
+  processQuestion(q);
+}else if(!oledSpecial){
+  oledSetStatus(tarsMode==MODE_ONLINE?"LISTENING":"READY");
+}
+if(!playing&&tarsMode==MODE_ONLINE&&!sttConnected)
+  autoSpeechUpdate(true,false,false);
+delay(1);
 }
