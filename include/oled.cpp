@@ -94,9 +94,19 @@ continue;
 }
 
 if(cameraLive&&!playing){
-drawCameraOLED();
-vTaskDelay(pdMS_TO_TICKS(200));
-continue;
+    drawCameraOLED();
+  }else{
+    oled.clearDisplay();
+    oled.setTextColor(SSD1306_WHITE);
+    oled.setTextSize(1);
+    oled.setCursor(0,0);
+    oled.print("TARS CAMERA");
+    oled.setCursor(0,16);
+    oled.print("Waiting for frame");
+    oled.display();
+  }
+  vTaskDelay(pdMS_TO_TICKS(200));
+  continue;
 }
 
 if(oledText.length()&&oledTypePos<oledText.length()&&now-oledLastType>=OLED_TYPE_MS){
