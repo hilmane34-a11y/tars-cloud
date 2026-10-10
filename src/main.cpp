@@ -362,7 +362,7 @@ void cameraTask(void*){
       if(xSemaphoreTake(envMux,portMAX_DELAY)==pdTRUE){
         if(xSemaphoreTake(previewMux,portMAX_DELAY)==pdTRUE){
 ok=I2SCamera::captureFrameData(cameraEnvironment,cameraPreview);
-if(ok) previewReady=true;
+if(ok){ previewReady=true;
   int gesture = handGestureUpdate(cameraEnvironment, 96, 32);
   uint32_t now = millis();
 
