@@ -30,7 +30,6 @@ static int16_t pcmBuf[BUF/4],preBuf[PREROLL_SAMPLES],sendBuf[256];
 static WebSocketsClient sttWS;
 static uint32_t sttRetryAt=0;
 static bool sttRetryShown=false;
-static bool sttConfigured = false;
 
 String sttFinal,sttPartial;
 bool micOK=false;
@@ -103,104 +102,92 @@ oledSetStatus("STT ERROR");
 }
 }
 void closeSTT(uint32_t cooldown){
-sttClosing = true;
-if(sttConfigured)
+sttClosing=true;
 sttWS.disconnect();
-sttConnected = false;
-sttReady = false;
-sttRetryAt = millis() + cooldown;
-sttRetryShown = false;
-sttClosing = false;
+sttConnected=false;
+sttReady=false;
+sttRetryAt=millis()+cooldown;
+sttRetryShown=false;
+sttClosing=false;
 }
 bool startSTT(bool offline){
-// Periksa cooldown terlebih dahulu agar loop tidak
-// terus memanggil WiFi dan mencetak START berulang.
-if((int32_t)(millis() - sttRetryAt) < 0){
-if(!sttRetryShown){
-Serial.printf(
-"TARS: STT COOLDOWN %lu ms RAM=%u MAX=%u\n",
-(unsigned long)(sttRetryAt - millis()),
-(unsigned)ESP.getFreeHeap(),
-(unsigned)ESP.getMaxAllocHeap()
-);
-sttRetryShown = true;
-}
-return false;
-}
+Serial.printf("TARS: STT START ENTER WIFI=%d MIC=%d RAM=%u MAX=%u\n",WiFi.status(),micOK?1:0,(unsigned)ESP.getFreeHeap(),(unsigned)ESP.getMaxAllocHeap());
+
 if(!wifiOK()){
-sttRetryAt = millis() + 2000;
-sttRetryShown = false;
-Serial.println("TARS: STT BLOCK WIFI");
+Serial.printf("TARS: STT BLOCK WIFI status=%d\n",WiFi.status());
 return false;
 }
+
 if(!micOK){
-sttRetryAt = millis() + 2000;
-sttRetryShown = false;
 Serial.println("TARS: STT BLOCK MIC=false");
 return false;
 }
-Serial.printf(
-"TARS: STT START RAM=%u MAX=%u\n",
-(unsigned)ESP.getFreeHeap(),
-(unsigned)ESP.getMaxAllocHeap()
-);
-sttDone = false;
-sttError = false;
-sttFinal = "";
-sttPartial = "";
-sttRetryShown = false;
-sttWS.onEvent(sttEvent);
-// Retry dikelola oleh cooldown aplikasi, bukan menunggu
-// interval reconnect 60 detik dari library.
-sttWS.setReconnectInterval(1000);
-sttWS.enableHeartbeat(15000, 5000, 2);
-// Konfigurasi SSL hanya sekali. Berikutnya gunakan lagi
-// objek WebSocket yang sama agar begin() tidak dipanggil
-// berulang kali untuk sesi yang sama.
-if(!sttConfigured){
-Serial.printf(
-"TARS: STT BEGIN SSL RAM=%u MAX=%u\n",
-(unsigned)ESP.getFreeHeap(),
-(unsigned)ESP.getMaxAllocHeap()
-);
-sttWS.beginSSL(STT_HOST_LOCAL, 443, "/stt");
-sttConfigured = true;
 
+if((int32_t)(millis()-sttRetryAt)<0){
+if(!sttRetryShown){
+Serial.printf("TARS: STT RETRY COOLDOWN %lu ms\n",(unsigned long)(sttRetryAt-millis()));
+sttRetryShown=true;
 }
-uint32_t st = millis();
-uint32_t lastLog = 0;
-while(!sttReady && !sttError &&
-millis() - st < 20000){
+return false;
+}
+
+Serial.printf("TARS: STT PREPARE WSS RAM=%u MAX=%u\n",(unsigned)ESP.getFreeHeap(),(unsigned)ESP.getMaxAllocHeap());
+
+sttClosing=true;
+sttWS.disconnect();
+sttConnected=false;
+sttReady=false;
+sttClosing=false;
+sttDone=false;
+sttError=false;
+sttFinal="";
+sttPartial="";
+sttRetryShown=false;
+
+sttWS.onEvent(sttEvent);
+sttWS.setReconnectInterval(60000);
+sttWS.enableHeartbeat(15000,5000,2);
+
+Serial.printf("TARS: STT BEGIN SSL RAM=%u MAX=%u\n",(unsigned)ESP.getFreeHeap(),(unsigned)ESP.getMaxAllocHeap());
+
+sttWS.beginSSL(STT_HOST_LOCAL,443,"/stt");
+
+Serial.printf("TARS: STT SSL STARTED RAM=%u MAX=%u\n",(unsigned)ESP.getFreeHeap(),(unsigned)ESP.getMaxAllocHeap());
+
+uint32_t st=millis();
+
+while(!sttReady&&!sttError&&millis()-st<20000){
 sttWS.loop();
-if(millis() - lastLog >= 1000){
-  lastLog = millis();
-  Serial.printf(
-    "TARS: STT WAIT CONNECTED=%d READY=%d ERROR=%d RAM=%u MAX=%u\n",
-    sttConnected ? 1 : 0,
-    sttReady ? 1 : 0,
-    sttError ? 1 : 0,
-    (unsigned)ESP.getFreeHeap(),
-    (unsigned)ESP.getMaxAllocHeap()
-  );
+
+if(((millis()-st)%1000)<5){
+Serial.printf("TARS: STT WAIT %lus CONNECTED=%d READY=%d ERROR=%d RAM=%u MAX=%u\n",
+(unsigned long)((millis()-st)/1000),
+sttConnected?1:0,
+sttReady?1:0,
+sttError?1:0,
+(unsigned)ESP.getFreeHeap(),
+(unsigned)ESP.getMaxAllocHeap());
 }
+
 delay(2);
 yield();
 }
+
 if(!sttReady){
-Serial.printf(
-"TARS: STT CONNECT FAILED RAM=%u MAX=%u\n",
+Serial.printf("TARS: STT CONNECT TIMEOUT connected=%d error=%d RAM=%u MAX=%u\n",
+sttConnected?1:0,
+sttError?1:0,
 (unsigned)ESP.getFreeHeap(),
-(unsigned)ESP.getMaxAllocHeap()
-);
+(unsigned)ESP.getMaxAllocHeap());
+
 closeSTT(STT_ERROR_COOLDOWN);
 return false;
 }
-sttRetryAt = millis();
-sttRetryShown = false;
-Serial.println(
-offline ? "TARS: OFFLINE STT READY"
-: "TARS: ONLINE STT READY"
-);
+
+sttRetryAt=millis();
+sttRetryShown=false;
+
+Serial.println(offline?"TARS: OFFLINE STT READY":"TARS: ONLINE STT READY");
 return true;
 }
 String stopSTT(uint32_t samples,bool offline){
