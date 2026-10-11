@@ -31,7 +31,10 @@ public:
   // Deteksi manusia lokal untuk sistem emosi.
   static uint8_t peopleCount();
   static bool localPersonDetection(uint8_t &count);
-
+  static bool localPersonBounds(
+  uint8_t &x1, uint8_t &y1,
+  uint8_t &x2, uint8_t &y2
+);
   static void dmaDiagnostic();
   static ImageFormat imageFormat;
 
