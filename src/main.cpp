@@ -73,8 +73,6 @@ static uint32_t armMotorStopAt = 0;
 static bool armMotorRunning = false;
 static int lastArmGesture = HAND_NONE;
 static uint32_t lastArmGestureAt = 0;
-static uint32_t sttNextRetryAt = 0;
-static const uint32_t STT_RETRY_GAP_MS = 6000;
 
 #define ARM_MOVE_MS 300
 #define ARM_GESTURE_GAP_MS 500
@@ -1194,16 +1192,7 @@ if(playing){
   delay(1);
   return;
 }
-String q;
-if(tarsMode==MODE_OFFLINE){
-  q=recordOffline();
-}
-else if(sttConnected ||
-        (int32_t)(millis()-sttNextRetryAt)>=0){
-  q=recordRealtime();
-  if(!sttConnected)
-    sttNextRetryAt=millis()+STT_RETRY_GAP_MS;
-}
+String q=tarsMode==MODE_ONLINE?recordRealtime():recordOffline();
 if(q.length()){
   wheelsStop();
   visualTrackingUpdate(false,true);
