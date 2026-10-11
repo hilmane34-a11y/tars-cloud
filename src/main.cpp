@@ -248,8 +248,8 @@ static inline uint8_t trackBrightness(uint16_t p) {
 }
   static bool detectVisualPersonTarget(int16_t &targetX) {
   const int W = 24, H = 16, N = W * H;
-  const int DIFF = 18;
-  const int MIN_CELLS = 8;
+  const int DIFF = 30;
+  const int MIN_CELLS = 18;
 
   static uint8_t background[N] = {};
   static bool bgReady = false;
@@ -351,14 +351,14 @@ static inline uint8_t trackBrightness(uint16_t p) {
 
     // Saring bentuk terlalu kecil, mendatar,
     // atau memenuhi hampir seluruh gambar.
-    bool personLike =
-      count >= MIN_CELLS &&
-      bh >= 5 &&
-      bw >= 2 &&
-      bw <= 14 &&
-      bh <= 15 &&
-      bw * 10 >= bh * 2 &&
-      bw * 10 <= bh * 12;
+bool personLike =
+  count >= MIN_CELLS &&
+  bh >= 7 &&
+  bw >= 3 &&
+  bw <= 10 &&
+  bh <= 14 &&
+  bw * 10 >= bh * 2 &&
+  bw * 10 <= bh * 8;
 
     if (personLike && count > bestCount) {
       bestCount = count;
