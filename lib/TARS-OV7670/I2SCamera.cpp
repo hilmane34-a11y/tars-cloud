@@ -41,7 +41,24 @@ static volatile uint8_t lastColorConfidence=0;
 // Tidak memakai wajah, JPEG, WiFi, atau cloud.
 // ============================================================
 static volatile uint8_t lastPeopleCount=0;
+static volatile bool lastPersonBoundsValid = false;
+static volatile uint8_t personX1 = 0;
+static volatile uint8_t personY1 = 0;
+static volatile uint8_t personX2 = 0;
+static volatile uint8_t personY2 = 0;
 
+bool I2SCamera::localPersonBounds(
+  uint8_t &x1, uint8_t &y1,
+  uint8_t &x2, uint8_t &y2
+){
+  if(!lastPersonBoundsValid) return false;
+
+  x1=personX1;
+  y1=personY1;
+  x2=personX2;
+  y2=personY2;
+  return true;
+}
 #define PEOPLE_GRID_W 24
 #define PEOPLE_GRID_H 16
 
@@ -64,7 +81,8 @@ static uint8_t detectPeopleLocal(
   uint16_t *image,
   int w,
   int h
-){
+){ 
+  lastPersonBoundsValid=false;
   if(!image)return 0;
   memset(peopleMask,0,sizeof(peopleMask));
   // Ambil brightness kasar tiap grid.
@@ -161,10 +179,37 @@ static uint8_t detectPeopleLocal(
       active=false;
     }
   }
-  // Maksimal dua orang yang dibutuhkan untuk cemburu.
-  if(groups>2)groups=2;
-  lastPeopleCount=groups;
-  return groups;
+// Maksimal dua kandidat siluet.
+if(groups>2) groups=2;
+lastPeopleCount=groups;
+
+if(groups>0){
+  int minX=PEOPLE_GRID_W;
+  int minY=PEOPLE_GRID_H;
+  int maxX=-1;
+  int maxY=-1;
+
+  for(int gy=0;gy<PEOPLE_GRID_H;gy++){
+    for(int gx=0;gx<PEOPLE_GRID_W;gx++){
+      if(!peopleMask[gy*PEOPLE_GRID_W+gx]) continue;
+
+      if(gx<minX) minX=gx;
+      if(gx>maxX) maxX=gx;
+      if(gy<minY) minY=gy;
+      if(gy>maxY) maxY=gy;
+    }
+  }
+
+  if(maxX>=minX && maxY>=minY){
+    // Koordinat langsung untuk preview OLED 128x64.
+    personX1=minX*128/PEOPLE_GRID_W;
+    personY1=minY*64/PEOPLE_GRID_H;
+    personX2=((maxX+1)*128/PEOPLE_GRID_W)-1;
+    personY2=((maxY+1)*64/PEOPLE_GRID_H)-1;
+    lastPersonBoundsValid=true;
+  }
+}
+return groups;
 }
 uint8_t I2SCamera::peopleCount(){
   return lastPeopleCount;
