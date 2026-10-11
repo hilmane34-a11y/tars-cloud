@@ -1142,27 +1142,23 @@ void enterTarsDeepSleep(){
 }
 
 void loop(){
-  time_t now=time(nullptr);
+  /*time_t now=time(nullptr);
   struct tm t={};
-
   if(now>=1704067200){
     localtime_r(&now,&t);
-
     bool prepare=(t.tm_hour==21&&t.tm_min>=58)||(t.tm_hour==22&&t.tm_min==0);
-
     if(prepare&&!sleepPreparing){
       sleepPreparing=true;
       sleepPrepareAt=millis();
       sleepOLEDStart();
       Serial.println("TARS: SLEEP ANIMATION START");
     }
-
     if(sleepPreparing&&t.tm_hour>=22){
       sleepOLEDStop();
       enterTarsDeepSleep();
       return;
     }
-  }
+  }*/
   ramMonitor();
 
   if(playing){
