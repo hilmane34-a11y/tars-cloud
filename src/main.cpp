@@ -543,34 +543,6 @@ bool isStatusQuery(const String&q){
   if(s=="status"||s=="tars status"||s=="status tars"||s=="cek status"||s=="tars cek status"||s=="cek status tars"||s=="status kamu"||s=="tars status kamu"||s=="kondisi kamu"||s=="kondisi tars")return true;
   return s.indexOf("cek status")>=0||s.indexOf("status tars")>=0||s.indexOf("tars status")>=0||s.indexOf("status kamu")>=0||s.indexOf("kondisi kamu")>=0||s.indexOf("kondisi tars")>=0;
 }
-
-bool needsCachedHumanVision(String q){
-  q=normCmd(q);
-  static const char*words[]={
-    "ada orang","ada manusia","ada seseorang","orang lewat",
-    "orang tadi","manusia tadi","seseorang tadi","tadi ada orang",
-    "tadi ada manusia","tadi ada seseorang","sempat ada orang",
-    "sempat ada manusia","kamu lihat orang","kamu melihat orang"
-  };
-  for(const char*w:words)
-    if(q.indexOf(w)>=0)return true;
-  return false;
-}
-
-String cachedVisionAnswer(const String&q){
-  if(!visionLiveHasValidResult(300000UL))
-    return "Saya tidak melihat tuan.";
-  VisionResult v=visionLiveGetLastResult();
-  if(!v.valid)return "Saya tidak melihat tuan.";
-  String s=normCmd(q);
-  if(s.indexOf("ada hewan")>=0||
-     s.indexOf("ada binatang")>=0||
-     s.indexOf("hewan tadi")>=0||
-     s.indexOf("binatang tadi")>=0)
-    return v.animal?"Ada, tuan.":"Nggak ada, tuan.";
-  return "";
-}
-
 String systemStatus(){
   String s="DATA STATUS TARS SAAT INI:\n";
   s+="RAM bebas "+String(ESP.getFreeHeap()/1024.0,1)+" KB, minimum "+String(ESP.getMinFreeHeap()/1024.0,1)+" KB, blok terbesar "+String(ESP.getMaxAllocHeap()/1024.0,1)+" KB.\n";
@@ -765,26 +737,6 @@ void processQuestion(const String&q){
 
   bool vision=needsVision(q);
   bool status=isStatusQuery(q);
-
-  if(vision){
-    String cached=cachedVisionAnswer(q);
-    if(cached.length()){
-      wheelsStop();
-      autonomyStop();
-      oledShowText(cached,"VISION");
-      delay(300);
-      bool ok=streamAudio(String(TARS_CLOUD_URL)+"/tts",cached);
-      audioStop();
-      wheelsStop();
-      autonomyStop();
-      if(ok)tarsEmotionSpeechDone();
-      closeSTT(STT_NORMAL_COOLDOWN);
-      sttDone=false;
-      sttError=false;
-      oledSetStatus(ok?"LISTENING":"AUDIO ERROR");
-      return;
-    }
-  }
 
   String request=q;
   switch(random(0,5)){
