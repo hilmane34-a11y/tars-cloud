@@ -1,16 +1,20 @@
+
 #include "vision_live.h"
+#include "config.h"
+#include "wheels.h"
+
 #include <Arduino.h>
-#include <I2SCamera.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
+#include <I2SCamera.h>
 #include <OV7670.h>
 #include <mbedtls/base64.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 #include <stdlib.h>
-#include "config.h"
+#include <string.h>
 
 #ifndef TARS_LIVE_TOKEN
 #error "Tambahkan TARS_LIVE_TOKEN di config.h"
@@ -18,10 +22,13 @@
 
 #define VISION_JPEG_MAX 20000
 #define VISION_JSON_MAX 28000
-#define VISION_LOCK_WAIT 15000
-
-// Hasil Vision dianggap masih berlaku selama 5 menit.
 #define VISION_RESULT_MAX_AGE 300000UL
+#define TRACK_INTERVAL 450UL
+#define TRACK_PULSE_MS 70
+#define TRACK_SPEED 100
+#define TRACK_CENTER_MIN 120
+#define TRACK_CENTER_MAX 200
+#define TRACK_MAX_AGE 1800UL
 
 extern OV7670 *camera;
 extern SemaphoreHandle_t cameraMux;
@@ -33,155 +40,32 @@ extern void startCamera();
 
 static uint8_t visionJpeg[VISION_JPEG_MAX];
 static char *visionJson = nullptr;
-static char questionJson[1024];
 
 static portMUX_TYPE visionLock = portMUX_INITIALIZER_UNLOCKED;
 static volatile bool visionBusy = false;
 static bool visionPaused = false;
 static bool cameraStoppedForVision = false;
 
-// ============================================================
-// CACHE HASIL VISION TERAKHIR
-// ============================================================
+static VisionResult lastVision = {false, false, false, 0};
+static VisionTrackResult trackResult = {false, false, -1, 0.5f, 0};
 
-static VisionResult lastVision = {
-    false,
-    false,
-    false,
-    0
-};
+static VisionAim aimState = AIM_STOP;
+static uint32_t lastTrackRequest = 0;
+static uint32_t lastSeenAt = 0;
 
-// Ambil informasi sederhana dari jawaban Vision.
-// Fokus utama saat ini: manusia/orang dan hewan.
-static void analyzeVisionAnswer(
-    const String &answer,
-    bool &human,
-    bool &animal
-) {
-    human = false;
-    animal = false;
+// Estimasi arah putaran:
+// negatif = pernah menoleh kiri; positif = pernah menoleh kanan.
+static int32_t turnDebt = 0;
 
-    String s = answer;
-    s.toLowerCase();
-    s.trim();
+// ------------------------------------------------------------
+// UTILITAS
+// ------------------------------------------------------------
 
-    // ----------------------------
-    // DETEKSI MANUSIA
-    // ----------------------------
-
-    bool humanNegative =
-        s.indexOf("tidak ada orang") >= 0 ||
-        s.indexOf("nggak ada orang") >= 0 ||
-        s.indexOf("gak ada orang") >= 0 ||
-        s.indexOf("tidak terlihat orang") >= 0 ||
-        s.indexOf("tidak melihat orang") >= 0 ||
-        s.indexOf("tidak ada manusia") >= 0 ||
-        s.indexOf("tidak terlihat manusia") >= 0;
-
-    if (!humanNegative) {
-        human =
-            s.indexOf("ada orang") >= 0 ||
-            s.indexOf("ada manusia") >= 0 ||
-            s.indexOf("seorang") >= 0 ||
-            s.indexOf("seseorang") >= 0 ||
-            s.indexOf("manusia terlihat") >= 0 ||
-            s.indexOf("orang terlihat") >= 0;
-    }
-
-    // ----------------------------
-    // DETEKSI HEWAN
-    // ----------------------------
-
-    bool animalNegative =
-        s.indexOf("tidak ada hewan") >= 0 ||
-        s.indexOf("nggak ada hewan") >= 0 ||
-        s.indexOf("gak ada hewan") >= 0 ||
-        s.indexOf("tidak terlihat hewan") >= 0;
-
-    if (!animalNegative) {
-        animal =
-            s.indexOf("ada hewan") >= 0 ||
-            s.indexOf("terlihat hewan") >= 0 ||
-            s.indexOf("seekor") >= 0 ||
-            s.indexOf("kucing") >= 0 ||
-            s.indexOf("anjing") >= 0 ||
-            s.indexOf("burung") >= 0 ||
-            s.indexOf("ayam") >= 0 ||
-            s.indexOf("sapi") >= 0 ||
-            s.indexOf("kambing") >= 0;
-    }
+static String cloudURL() {
+    String s = TARS_CLOUD_URL;
+    while (s.endsWith("/")) s.remove(s.length() - 1);
+    return s;
 }
-
-// Simpan hasil Vision terakhir.
-// Hanya dipanggil setelah request Vision berhasil.
-static void storeVisionResult(const String &answer) {
-    if (!answer.length()) {
-        return;
-    }
-
-    bool human = false;
-    bool animal = false;
-
-    analyzeVisionAnswer(
-        answer,
-        human,
-        animal
-    );
-
-    lastVision.valid = true;
-    lastVision.human = human;
-    lastVision.animal = animal;
-    lastVision.timestamp = millis();
-
-    Serial.printf(
-        "TARS: VISION CACHE human=%d animal=%d age=0\n",
-        human ? 1 : 0,
-        animal ? 1 : 0
-    );
-}
-
-// ============================================================
-// PUBLIC CACHE API
-// ============================================================
-
-VisionResult visionLiveGetLastResult() {
-    VisionResult result = lastVision;
-
-    if (!result.valid) {
-        return result;
-    }
-
-    if (millis() - result.timestamp > VISION_RESULT_MAX_AGE) {
-        result.valid = false;
-    }
-
-    return result;
-}
-
-bool visionLiveHasValidResult(uint32_t maxAgeMs) {
-    if (!lastVision.valid) {
-        return false;
-    }
-
-    if (maxAgeMs == 0) {
-        maxAgeMs = VISION_RESULT_MAX_AGE;
-    }
-
-    return (millis() - lastVision.timestamp) <= maxAgeMs;
-}
-
-void visionLiveClearLastResult() {
-    lastVision.valid = false;
-    lastVision.human = false;
-    lastVision.animal = false;
-    lastVision.timestamp = 0;
-
-    Serial.println("TARS: VISION CACHE CLEARED");
-}
-
-// ============================================================
-// MEMORY
-// ============================================================
 
 static void freeVisionJSON() {
     if (visionJson) {
@@ -190,500 +74,412 @@ static void freeVisionJSON() {
     }
 }
 
-// ============================================================
-// VISION LOCK
-// ============================================================
-
 static bool acquireVision() {
     bool ok = false;
-
     portENTER_CRITICAL(&visionLock);
-
-    if (!visionBusy)
-        visionBusy = ok = true;
-
+    if (!visionBusy) visionBusy = ok = true;
     portEXIT_CRITICAL(&visionLock);
-
     return ok;
-}
-
-static bool acquireVisionWait(uint32_t timeoutMs) {
-    uint32_t start = millis();
-
-    while (millis() - start < timeoutMs) {
-        if (acquireVision())
-            return true;
-
-        vTaskDelay(pdMS_TO_TICKS(20));
-    }
-
-    return false;
 }
 
 static void releaseVision() {
     portENTER_CRITICAL(&visionLock);
-
     visionBusy = false;
-
     portEXIT_CRITICAL(&visionLock);
 }
 
-// ============================================================
-// CLOUD URL
-// ============================================================
-
-static String cloudURL() {
-    String url = TARS_CLOUD_URL;
-
-    while (url.endsWith("/"))
-        url.remove(url.length() - 1);
-
-    return url;
+static bool acquireVisionWait(uint32_t ms) {
+    uint32_t start = millis();
+    while (millis() - start < ms) {
+        if (acquireVision()) return true;
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+    return false;
 }
-
-// ============================================================
-// CAPTURE JPEG SEBELUM KAMERA DIMATIKAN
-// ============================================================
 
 static bool captureFrame(size_t &length) {
     length = 0;
+    if (!cameraMux) return false;
 
-    if (!cameraMux)
+    if (xSemaphoreTake(cameraMux, pdMS_TO_TICKS(2500)) != pdTRUE)
         return false;
 
-    if (xSemaphoreTake(
-            cameraMux,
-            pdMS_TO_TICKS(3000)
-        ) != pdTRUE) {
-
-        Serial.println(
-            "TARS: VISION CAMERA LOCK FAILED"
-        );
-
-        return false;
-    }
-
-    bool ready =
-        camera &&
-        cameraLive &&
-        cameraOK &&
-        !playing;
-
-    bool ok = false;
-
-    if (ready) {
-        ok = I2SCamera::encodeFrameToJPEG(
-            visionJpeg,
-            &length,
-            55
-        );
-    }
+    bool ready = camera && cameraLive && cameraOK && !playing;
+    bool ok = ready && I2SCamera::encodeFrameToJPEG(
+        visionJpeg, &length, 45
+    );
 
     xSemaphoreGive(cameraMux);
 
-    if (!ok ||
-        !length ||
-        length > VISION_JPEG_MAX) {
-
+    if (!ok || !length || length > VISION_JPEG_MAX) {
         length = 0;
-
-        Serial.println(
-            "TARS: VISION JPEG FAILED"
-        );
-
         return false;
     }
-
-    Serial.printf(
-        "TARS: VISION JPEG READY SIZE=%u\n",
-        (unsigned)length
-    );
-
     return true;
 }
 
-// ============================================================
-// KAMERA OFF SEBELUM TLS
-// ============================================================
-
 static bool stopCameraForTLS() {
     cameraStoppedForVision = true;
-
     stopCamera();
-
-    bool stopped =
-        !camera &&
-        !cameraLive &&
-        !cameraOK;
-
-    Serial.printf(
-        "TARS: VISION CAMERA OFF=%d HEAP=%u LARGEST=%u\n",
-        stopped,
-        ESP.getFreeHeap(),
-        ESP.getMaxAllocHeap()
-    );
-
-    return stopped;
+    return !camera && !cameraLive && !cameraOK;
 }
 
-// ============================================================
-// JSON + BASE64
-// ============================================================
+static void restoreCamera() {
+    if (cameraStoppedForVision &&
+        visionLiveEnabled() &&
+        WiFi.status() == WL_CONNECTED &&
+        !playing) {
+        startCamera();
+    }
+    cameraStoppedForVision = false;
+}
 
-static bool buildVisionJSON(
-    const String &question,
+static bool buildJSON(
+    const char *prefixText,
     size_t jpegLength,
     size_t &bodyLength
 ) {
     bodyLength = 0;
-
-    if (!visionJson ||
-        jpegLength > VISION_JPEG_MAX)
-        return false;
-
-    JsonDocument questionDoc;
-
-    questionDoc["question"] = question;
-
-    size_t qlen = serializeJson(
-        questionDoc["question"],
-        questionJson,
-        sizeof(questionJson)
-    );
-
-    if (!qlen ||
-        qlen >= sizeof(questionJson))
-        return false;
+    if (!visionJson || jpegLength > VISION_JPEG_MAX) return false;
 
     int prefix = snprintf(
-        visionJson,
-        VISION_JSON_MAX,
-        "{\"question\":%s,\"format\":\"jpeg\",\"image\":\"",
-        questionJson
+        visionJson, VISION_JSON_MAX, "%s", prefixText
     );
-
-    if (prefix <= 0 ||
-        (size_t)prefix >= VISION_JSON_MAX)
+    if (prefix <= 0 || (size_t)prefix >= VISION_JSON_MAX)
         return false;
 
-    size_t encodedLength = 0;
-
-    int result = mbedtls_base64_encode(
+    size_t encLen = 0;
+    int rc = mbedtls_base64_encode(
         (unsigned char *)visionJson + prefix,
-        VISION_JSON_MAX - prefix,
-        &encodedLength,
-        visionJpeg,
-        jpegLength
+        VISION_JSON_MAX - (size_t)prefix - 4,
+        &encLen, visionJpeg, jpegLength
     );
+    if (rc != 0) return false;
 
-    if (result != 0) {
-        Serial.printf(
-            "TARS: VISION BASE64 ERROR=%d\n",
-            result
-        );
-
-        return false;
-    }
-
-    size_t end =
-        (size_t)prefix +
-        encodedLength;
-
-    if (end + 3 > VISION_JSON_MAX)
-        return false;
+    size_t end = (size_t)prefix + encLen;
+    if (end + 3 >= VISION_JSON_MAX) return false;
 
     visionJson[end++] = '"';
     visionJson[end++] = '}';
     visionJson[end] = '\0';
-
     bodyLength = end;
-
     return true;
 }
 
-// ============================================================
-// TLS + HTTP
-// ============================================================
-
-static String sendVisionJSON(
-    const String &question,
+// Membuat request, mematikan kamera selama TLS untuk menghemat RAM.
+static String postVision(
+    const String &prefixText,
     size_t jpegLength
 ) {
-    if (WiFi.status() != WL_CONNECTED) {
-        Serial.println(
-            "TARS: VISION WIFI DISCONNECTED"
-        );
+    if (WiFi.status() != WL_CONNECTED) return "";
 
-        return "";
-    }
-
-    Serial.printf(
-        "TARS: VISION TLS HEAP=%u LARGEST=%u\n",
-        ESP.getFreeHeap(),
-        ESP.getMaxAllocHeap()
-    );
-
-    // JSON DIALOKASIKAN SETELAH KAMERA OFF
-    visionJson = (char *)malloc(
-        VISION_JSON_MAX
-    );
-
-    if (!visionJson) {
-        Serial.printf(
-            "TARS: VISION JSON MALLOC FAILED HEAP=%u LARGEST=%u\n",
-            ESP.getFreeHeap(),
-            ESP.getMaxAllocHeap()
-        );
-
-        return "";
-    }
+    visionJson = (char *)malloc(VISION_JSON_MAX);
+    if (!visionJson) return "";
 
     size_t bodyLength = 0;
-
-    if (!buildVisionJSON(
-            question,
-            jpegLength,
-            bodyLength)) {
-
-        Serial.println(
-            "TARS: VISION JSON BUILD FAILED"
-        );
-
+    bool built = buildJSON(prefixText.c_str(), jpegLength, bodyLength);
+    if (!built) {
         freeVisionJSON();
-
         return "";
     }
 
     WiFiClientSecure client;
-
     client.setInsecure();
-    client.setTimeout(20000);
+    client.setTimeout(12000);
 
     HTTPClient http;
+    http.setTimeout(15000);
 
-    if (!http.begin(
-            client,
-            cloudURL() + "/vision")) {
-
-        Serial.println(
-            "TARS: VISION HTTP BEGIN FAILED"
+    String response;
+    if (http.begin(client, cloudURL() + "/vision")) {
+        http.addHeader("Content-Type", "application/json");
+        http.addHeader(
+            "Authorization", String("Bearer ") + TARS_LIVE_TOKEN
         );
 
-        freeVisionJSON();
+        int code = http.POST((uint8_t *)visionJson, bodyLength);
+        if (code >= 200 && code < 300)
+            response = http.getString();
 
-        return "";
+        Serial.printf("TARS VISION HTTP=%d\n", code);
+        http.end();
     }
 
-    http.setTimeout(45000);
-
-    http.addHeader(
-        "Content-Type",
-        "application/json"
-    );
-
-    http.addHeader(
-        "Authorization",
-        String("Bearer ") + TARS_LIVE_TOKEN
-    );
-
-    int code = http.POST(
-        (uint8_t *)visionJson,
-        bodyLength
-    );
-
-    Serial.printf(
-        "TARS: VISION HTTP=%d\n",
-        code
-    );
-
-    String answer;
-
-    if (code >= 200 && code < 300) {
-
-        String response =
-            http.getString();
-
-        JsonDocument doc;
-
-        if (!deserializeJson(
-                doc,
-                response)) {
-
-            answer =
-                doc["response"].as<String>();
-
-            answer.trim();
-
-            // =================================================
-            // SIMPAN HASIL VISION TERAKHIR
-            // =================================================
-
-            if (answer.length()) {
-                storeVisionResult(answer);
-            }
-
-        } else {
-            Serial.println(
-                "TARS: VISION RESPONSE JSON ERROR"
-            );
-        }
-
-    } else {
-
-        Serial.println(
-            "TARS: VISION HTTP ERROR " +
-            http.getString()
-        );
-    }
-
-    http.end();
-
-    // BEBASKAN JSON SETELAH HTTP SELESAI
     freeVisionJSON();
-
-    Serial.printf(
-        "TARS: VISION TLS DONE HEAP=%u LARGEST=%u\n",
-        ESP.getFreeHeap(),
-        ESP.getMaxAllocHeap()
-    );
-
-    return answer;
+    return response;
 }
 
-// ============================================================
-// BEGIN
-// ============================================================
+// ------------------------------------------------------------
+// CACHE JAWABAN VISION TEKS LAMA
+// ------------------------------------------------------------
+
+static void storeVisionResult(const String &answer) {
+    String s = answer;
+    s.toLowerCase();
+
+    bool negative =
+        s.indexOf("tidak ada orang") >= 0 ||
+        s.indexOf("tidak ada manusia") >= 0 ||
+        s.indexOf("tidak terlihat orang") >= 0 ||
+        s.indexOf("tidak terlihat manusia") >= 0;
+
+    lastVision.valid = true;
+    lastVision.human = !negative && (
+        s.indexOf("ada orang") >= 0 ||
+        s.indexOf("ada manusia") >= 0 ||
+        s.indexOf("seseorang") >= 0 ||
+        s.indexOf("seorang") >= 0
+    );
+
+    lastVision.animal =
+        s.indexOf("kucing") >= 0 ||
+        s.indexOf("anjing") >= 0 ||
+        s.indexOf("burung") >= 0;
+
+    lastVision.timestamp = millis();
+}
+
+VisionResult visionLiveGetLastResult() {
+    VisionResult r = lastVision;
+    if (r.valid &&
+        millis() - r.timestamp > VISION_RESULT_MAX_AGE)
+        r.valid = false;
+    return r;
+}
+
+bool visionLiveHasValidResult(uint32_t maxAgeMs) {
+    if (!lastVision.valid) return false;
+    if (!maxAgeMs) maxAgeMs = VISION_RESULT_MAX_AGE;
+    return millis() - lastVision.timestamp <= maxAgeMs;
+}
+
+void visionLiveClearLastResult() {
+    lastVision = {false, false, false, 0};
+}
+
+void visionLiveClearTrack() {
+    wheelsStop();
+    trackResult = {false, false, -1, 0.5f, 0};
+    aimState = AIM_STOP;
+    turnDebt = 0;
+    lastSeenAt = 0;
+}
+
+// ------------------------------------------------------------
+// API VISION LAMA
+// ------------------------------------------------------------
 
 void visionLiveBegin() {
     visionLiveClearLastResult();
-
-    Serial.println(
-        "TARS: ON-DEMAND VISION READY"
-    );
+    visionLiveClearTrack();
+    Serial.println("TARS: VISION READY");
 }
 
-// ============================================================
-// PAUSE
-// ============================================================
-
 bool visionLivePause() {
-    if (!visionLiveEnabled())
-        return false;
-
-    if (visionPaused)
-        return true;
-
-    if (!acquireVisionWait(
-            VISION_LOCK_WAIT)) {
-
-        Serial.println(
-            "TARS: VISION LOCK TIMEOUT"
-        );
-
-        return false;
-    }
+    if (!visionLiveEnabled()) return false;
+    if (visionPaused) return true;
+    if (!acquireVisionWait(15000)) return false;
 
     visionPaused = true;
     cameraStoppedForVision = false;
-
-    Serial.println(
-        "TARS: VISION CYCLE RESERVED"
-    );
-
     return true;
 }
 
-// ============================================================
-// RESUME SETELAH TTS DAN AUDIO SELESAI
-// ============================================================
-
 void visionLiveResume() {
-    if (!visionPaused)
-        return;
-
-    if (playing) {
-        Serial.println(
-            "TARS: VISION RESUME BLOCKED - AUDIO ACTIVE"
-        );
-
-        return;
-    }
-
-    if (cameraStoppedForVision &&
-        visionLiveEnabled() &&
-        WiFi.status() == WL_CONNECTED) {
-
-        startCamera();
-    }
-
-    cameraStoppedForVision = false;
+    if (!visionPaused || playing) return;
+    restoreCamera();
     visionPaused = false;
-
     releaseVision();
-
-    Serial.printf(
-        "TARS: VISION CYCLE END HEAP=%u LARGEST=%u\n",
-        ESP.getFreeHeap(),
-        ESP.getMaxAllocHeap()
-    );
 }
 
-// ============================================================
-// ASK
-// CAPTURE -> CAMERA OFF -> TLS -> FREE JSON
-// ============================================================
+String visionLiveAsk(const String &question) {
+    if (!visionLiveEnabled() || !visionPaused || !visionBusy ||
+        playing || !wifiOK()) return "";
 
-String visionLiveAsk(
-    const String &question
-) {
-    if (!visionLiveEnabled() ||
-        !visionPaused ||
-        !visionBusy)
-        return "";
+    size_t len = 0;
+    if (!captureFrame(len)) return "";
+    if (!stopCameraForTLS()) return "";
 
-    if (WiFi.status() != WL_CONNECTED &&
-        !wifiOK()) {
+    String prefix = "{\"question\":";
+    JsonDocument qdoc;
+    qdoc["q"] = question;
 
-        Serial.println(
-            "TARS: VISION WIFI ERROR"
-        );
+    String escaped;
+    serializeJson(qdoc["q"], escaped);
+    prefix += escaped;
+    prefix += ",\"format\":\"jpeg\",\"image\":\"";
 
-        return "";
+    String response = postVision(prefix, len);
+    memset(visionJpeg, 0, len);
+    restoreCamera();
+
+    JsonDocument doc;
+    if (deserializeJson(doc, response)) return "";
+
+    String answer = doc["response"] | "";
+    answer.trim();
+    if (answer.length()) storeVisionResult(answer);
+    return answer;
+}
+
+// ------------------------------------------------------------
+// AUTO-AIM TRACKING
+// Panggil visionLiveTrack() berkala dari task kamera.
+// ------------------------------------------------------------
+
+static void applyAim(VisionAim state) {
+    switch (state) {
+        case AIM_LEFT:
+            wheelsLeft(TRACK_SPEED);
+            delay(TRACK_PULSE_MS);
+            wheelsStop();
+            turnDebt -= TRACK_PULSE_MS;
+            break;
+
+        case AIM_RIGHT:
+            wheelsRight(TRACK_SPEED);
+            delay(TRACK_PULSE_MS);
+            wheelsStop();
+            turnDebt += TRACK_PULSE_MS;
+            break;
+
+        case AIM_RETURN_CENTER:
+            if (turnDebt < 0) {
+                wheelsRight(TRACK_SPEED);
+                delay(TRACK_PULSE_MS);
+                turnDebt += TRACK_PULSE_MS;
+            } else if (turnDebt > 0) {
+                wheelsLeft(TRACK_SPEED);
+                delay(TRACK_PULSE_MS);
+                turnDebt -= TRACK_PULSE_MS;
+            }
+            wheelsStop();
+            if (turnDebt == 0) aimState = AIM_STOP;
+            break;
+
+        default:
+            wheelsStop();
+            break;
+    }
+}
+
+VisionAim visionLiveGetAim() {
+    return aimState;
+}
+
+VisionTrackResult visionLiveTrack() {
+    if (!visionLiveEnabled() || playing ||
+        WiFi.status() != WL_CONNECTED) {
+        wheelsStop();
+        aimState = AIM_STOP;
+        trackResult.valid = false;
+        return trackResult;
     }
 
-    if (playing) {
-        Serial.println(
-            "TARS: VISION BLOCKED - AUDIO ACTIVE"
-        );
+    uint32_t now = millis();
 
-        return "";
+    if (now - lastTrackRequest < TRACK_INTERVAL) {
+        // Jangan biarkan hasil lama membuat roda terus berputar.
+        if (!trackResult.valid ||
+            now - trackResult.timestamp > TRACK_MAX_AGE) {
+            wheelsStop();
+            aimState = AIM_STOP;
+        }
+        return trackResult;
+    }
+    lastTrackRequest = now;
+
+    // Jangan mengirim request jika kamera sedang digunakan fitur lain.
+    if (visionBusy || visionPaused) {
+        wheelsStop();
+        aimState = AIM_STOP;
+        return trackResult;
     }
 
-    size_t jpegLength = 0;
+    if (!acquireVision()) {
+        wheelsStop();
+        aimState = AIM_STOP;
+        return trackResult;
+    }
 
-    if (!captureFrame(jpegLength))
-        return "";
+    size_t jpegLen = 0;
+    bool captured = captureFrame(jpegLen);
+
+    if (!captured || playing || !visionLiveEnabled()) {
+        wheelsStop();
+        aimState = AIM_STOP;
+        releaseVision();
+        return trackResult;
+    }
 
     if (!stopCameraForTLS()) {
-
-        Serial.println(
-            "TARS: VISION CAMERA STOP FAILED"
-        );
-
-        return "";
+        wheelsStop();
+        aimState = AIM_STOP;
+        memset(visionJpeg, 0, jpegLen);
+        restoreCamera();
+        releaseVision();
+        return trackResult;
     }
 
-    String answer =
-        sendVisionJSON(
-            question,
-            jpegLength
-        );
-
-    memset(
-        visionJpeg,
-        0,
-        jpegLength
+    String response = postVision(
+        "{\"mode\":\"track\",\"format\":\"jpeg\",\"image\":\"",
+        jpegLen
     );
 
-    return answer;
+    memset(visionJpeg, 0, jpegLen);
+    restoreCamera();
+    releaseVision();
+
+    // Gagal koneksi/JSON = berhenti, bukan memakai koordinat lama.
+    JsonDocument doc;
+    if (response.isEmpty() || deserializeJson(doc, response)) {
+        wheelsStop();
+        aimState = AIM_STOP;
+        trackResult.valid = false;
+        return trackResult;
+    }
+
+    bool found = doc["found"] | false;
+    int x = doc["targetX"] | -1;
+
+    if (!found || x < 0 || x > 319) {
+        trackResult.found = false;
+
+        if (lastSeenAt && millis() - lastSeenAt <= TRACK_MAX_AGE &&
+            turnDebt != 0) {
+            aimState = AIM_RETURN_CENTER;
+            applyAim(aimState);
+        } else {
+            wheelsStop();
+            aimState = AIM_STOP;
+            turnDebt = 0;
+            trackResult.valid = false;
+        }
+
+        return trackResult;
+    }
+
+    now = millis();
+    lastSeenAt = now;
+
+    trackResult.valid = true;
+    trackResult.found = true;
+    trackResult.targetX = x;
+    trackResult.centerX = x / 319.0f;
+    trackResult.timestamp = now;
+
+    if (x < TRACK_CENTER_MIN) {
+        aimState = AIM_LEFT;
+    } else if (x > TRACK_CENTER_MAX) {
+        aimState = AIM_RIGHT;
+    } else {
+        aimState = AIM_CENTER;
+    }
+
+    applyAim(aimState);
+
+    Serial.printf("TARS AUTO-AIM X=%d AIM=%d DEBT=%ld\n",
+        x, (int)aimState, (long)turnDebt);
+
+    return trackResult;
 }
