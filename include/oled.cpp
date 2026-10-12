@@ -61,7 +61,6 @@ void drawCameraOLED(){
     return;
   }
   oled.clearDisplay();
-  // Gambar preview asli, tanpa mengubah buffer kamera.
   for(int y=0;y<64;y++){
     for(int x=0;x<128;x++){
       if(cameraPreview[y*128+x])
@@ -71,7 +70,6 @@ void drawCameraOLED(){
   oled.display();
   xSemaphoreGive(previewMux);
 }
-
 void oledTask(void*){
 for(;;){
 if(!oledOK){vTaskDelay(pdMS_TO_TICKS(50));continue;}
