@@ -70,6 +70,7 @@ uint32_t sleepPrepareAt=0;
 volatile bool pendingVisionCheck=false;
 uint32_t lastVisionEventAt=0;
 const uint32_t VISION_EVENT_COOLDOWN_MS=120000;
+volatile bool tarsInteractionBusy = false;
 
 OV7670*camera=nullptr;
 SemaphoreHandle_t previewMux=nullptr,envMux=nullptr,cameraMux=nullptr;
@@ -294,8 +295,8 @@ else if (gesture == HAND_CLOSED)
       }
       frameErrors=0;
     }
-    if(cameraLive&&!playing)
-      autonomyUpdate(true,false);
+  autonomyUpdate(true, playing || sttConnected || tarsInteractionBusy ||alarmRunning ||
+  greetingPlaying);
     vTaskDelay(1);
   }
 }
@@ -433,7 +434,9 @@ bool playTimeGreeting(uint8_t p){
   return false;
 }
 
-bool processOnlineRequest(const String&q,bool vision,bool status,bool automatic=false){
+bool processOnlineRequest(const String&q,bool vision,bool status,bool automatic=false)
+bool wasBusy = tarsInteractionBusy;
+tarsInteractionBusy = true;{
   wheelsStop();
   autonomyStop();
   ramDiag("BEFORE-CAMERA-CYCLE");
@@ -1023,16 +1026,17 @@ void loop(){
 
   if(tarsMode==MODE_ONLINE&&!playing&&!sttConnected&&tarsEmotionHasEvent())
     if(processEmotionEvent())return;
-
   String q=tarsMode==MODE_ONLINE?recordRealtime():recordOffline();
-
   if(q.length()){
-    wheelsStop();
-    autonomyStop();
-    processQuestion(q);
-  }else if(!oledSpecial)
-    oledSetStatus(tarsMode==MODE_ONLINE?"LISTENING":"READY");
-
+  tarsInteractionBusy = true;
+  wheelsStop();
+  autonomyStop();
+  processQuestion(q);
+  tarsInteractionBusy = false;
+}else if(!oledSpecial){
+  oledSetStatus(
+    tarsMode==MODE_ONLINE ? "LISTENING" : "READY" );
+}
   if(!playing&&tarsMode==MODE_ONLINE&&!sttConnected){
     processVisionEvent();
     autoSpeechUpdate(true,false,false);
