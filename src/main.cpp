@@ -487,21 +487,12 @@ if(ok){ previewReady=true;
       xSemaphoreGive(cameraMux);
     }
     if(ok&&analyzed){
-      /*
-       * AUTONOMY EXPLORATION DIHAPUS.
-       * Kamera sekarang hanya menjadi mata untuk tracking lokal.
-       */
-      int16_t targetX=160;
-      bool target=detectVisualPersonTarget(targetX);
-      if(target){
-        visualTrackingTarget(targetX,true);
-        Serial.printf(
-          "TARS: VISUAL TARGET X=%d\n",
-          targetX
-        );
-      }else{
-        visualTrackingLost();
-      }
+    // AUTO-AIM CLOUD: hanya aktif dalam mode online.
+    if(tarsMode==MODE_ONLINE && !playing && !sttConnected){
+      visionLiveTrack();
+       }else{
+    wheelsStop();
+  }
       uint8_t people=I2SCamera::peopleCount();
       tarsEmotionPeople(people);
       /*
