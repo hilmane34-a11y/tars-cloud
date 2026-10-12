@@ -560,21 +560,14 @@ bool needsCachedHumanVision(String q){
 String cachedVisionAnswer(const String&q){
   if(!visionLiveHasValidResult(300000UL))
     return "Saya tidak melihat tuan.";
-
   VisionResult v=visionLiveGetLastResult();
   if(!v.valid)return "Saya tidak melihat tuan.";
-
   String s=normCmd(q);
-
-  if(needsCachedHumanVision(q))
-    return v.human?"Ada, tuan.":"Nggak ada, tuan.";
-
   if(s.indexOf("ada hewan")>=0||
      s.indexOf("ada binatang")>=0||
      s.indexOf("hewan tadi")>=0||
      s.indexOf("binatang tadi")>=0)
     return v.animal?"Ada, tuan.":"Nggak ada, tuan.";
-
   return "";
 }
 
