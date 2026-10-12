@@ -11,7 +11,6 @@ extern String sttFinal;
 extern String sttPartial;
 extern bool micOK;
 
-extern volatile bool sttVoiceActive;
 extern bool sttConnected;
 extern bool sttReady;
 extern bool sttDone;
