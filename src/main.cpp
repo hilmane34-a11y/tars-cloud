@@ -519,16 +519,10 @@ if(ok){ previewReady=true;
       }
       frameErrors=0;
     }
-    if(!playing){
-      visualTrackingUpdate(
-        cameraLive,
-        false
-      );
-    }else{
-      wheelsStop();
-      visualTrackingUpdate(false,true);
-    }
-    vTaskDelay(1);
+if(playing || tarsMode==MODE_OFFLINE || sttConnected){
+  wheelsStop();
+}
+vTaskDelay(pdMS_TO_TICKS(10));
   }
 }
 bool needsVision(String q){
