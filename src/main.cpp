@@ -859,7 +859,6 @@ void setup(){
   envBegin();
   visionLiveBegin();
   personalityBegin();
-  visualTrackingBegin();
   tarsEmotionBegin();
   autoSpeechBegin(autoSpeechCallback);
 
