@@ -67,7 +67,7 @@ bool sleepPreparing=false;
 uint32_t sleepPrepareAt=0;
 volatile bool pendingVisionCheck=false;
 uint32_t lastVisionEventAt=0;
-const uint32_t VISION_EVENT_COOLDOWN_MS=120000;
+const uint32_t VISION_EVENT_COOLDOWN_MS=45000;
 
 OV7670*camera=nullptr;
 SemaphoreHandle_t previewMux=nullptr,envMux=nullptr,cameraMux=nullptr;
