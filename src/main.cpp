@@ -93,7 +93,7 @@ MP3SYM(hari) MP3SYM(pagi) MP3SYM(siang)
 MP3SYM(sore) MP3SYM(malam)
 
 bool wifiOK();
-bool visionLiveEnabled(){return tarsMode==MODE_ONLINE;}
+bool visionLiveEnabled() {return WiFi.status() == WL_CONNECTED;}
 String normCmd(String);
 String systemStatus();
 String ask(const String&);
@@ -310,11 +310,13 @@ if(ok){ previewReady=true;
     }
     if(ok&&analyzed){
     // AUTO-AIM CLOUD: hanya aktif dalam mode online.
-    if(tarsMode==MODE_ONLINE && !playing && !sttConnected){
-      visionLiveTrack();
-       }else{
+if (!playing &&
+    !sttVoiceActive &&
+    WiFi.status() == WL_CONNECTED) {
+    visionLiveTrack();
+} else {
     wheelsStop();
-  }
+}
       /*
        * Vision cloud tetap hanya untuk event yang memang
        * sudah ada di sistem sebelumnya.
@@ -339,8 +341,8 @@ if(ok){ previewReady=true;
       }
       frameErrors=0;
     }
-if(playing || tarsMode==MODE_OFFLINE || sttConnected){
-  wheelsStop();
+if (playing || sttVoiceActive) {
+    wheelsStop();
 }
 vTaskDelay(pdMS_TO_TICKS(10));
   }
@@ -990,14 +992,23 @@ if(playing){
   delay(1);
   return;
 }
-String q=tarsMode==MODE_ONLINE?recordRealtime():recordOffline();
-if(q.length()){
-  wheelsStop();
-  processQuestion(q);
-}else if(!oledSpecial){
-  oledSetStatus(tarsMode==MODE_ONLINE?"LISTENING":"READY");
+String q = tarsMode == MODE_ONLINE
+    ? recordRealtime()
+    : recordOffline();
+if (q.length()) {
+    wheelsStop();
+    processQuestion(q);
 }
-if(!playing&&tarsMode==MODE_ONLINE&&!sttConnected)
-  autoSpeechUpdate(true,false,false);
+sttVoiceActive = false;
+if (!q.length() && !oledSpecial) {
+    oledSetStatus(
+        tarsMode == MODE_ONLINE ? "LISTENING" : "READY"
+    );
+}
+if (!playing &&
+    tarsMode == MODE_ONLINE &&
+    !sttConnected) {
+    autoSpeechUpdate(true, false, false);
+}
 delay(1);
 }
