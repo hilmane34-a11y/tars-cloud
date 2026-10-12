@@ -1,5 +1,4 @@
 #pragma once
-
 #include <Arduino.h>
 
 constexpr uint32_t STT_NORMAL_COOLDOWN = 1000;
@@ -12,14 +11,14 @@ extern String sttFinal;
 extern String sttPartial;
 extern bool micOK;
 
-bool wifiOK();
-
+extern volatile bool sttVoiceActive;
 extern bool sttConnected;
 extern bool sttReady;
 extern bool sttDone;
 extern bool sttError;
 extern bool sttClosing;
 
+bool wifiOK();
 bool sttCooling();
 void closeSTT(uint32_t cooldown = STT_NORMAL_COOLDOWN);
 bool startSTT(bool offline = false);
