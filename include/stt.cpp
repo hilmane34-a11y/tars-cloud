@@ -113,7 +113,6 @@ sttClosing=false;
 }
 
 bool startSTT(bool offline){
-Serial.printf("TARS: STT START ENTER WIFI=%d MIC=%d\n",WiFi.status(),micOK?1:0);
 if(!wifiOK()){
 Serial.printf("TARS: STT BLOCK WIFI status=%d\n",WiFi.status());
 return false;
@@ -142,10 +141,13 @@ sttFinal="";
 sttPartial="";
 sttRetryShown=false;
 sttWS.onEvent(sttEvent);
-sttWS.setReconnectInterval(60000);
+sttWS.setReconnectInterval(5000);
 sttWS.enableHeartbeat(15000,5000,2);
 Serial.println("TARS: STT BEGIN SSL");
-sttWS.beginSSL(STT_HOST_LOCAL,443,"/stt");
+Serial.printf(
+  "TARS: STT DIAG heap=%u maxBlock=%u RSSI=%d\n",
+  ESP.getFreeHeap(), ESP.getMaxAllocHeap(), WiFi.RSSI());
+ sttWS.beginSSL(STT_HOST_LOCAL,443,"/stt");
 Serial.println("TARS: STT SSL STARTED");
 uint32_t st=millis();
 while(!sttReady&&!sttError&&millis()-st<20000){
