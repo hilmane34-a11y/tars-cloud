@@ -17,14 +17,14 @@
 #define MIC_SILENCE 7000
 #define RECORD_MIN_MS 500
 #define SILENCE_MS 800
-#define PREROLL_MS 250
+#define PREROLL_MS 125
 #define STT_NORMAL_COOLDOWN 1000
 #define STT_ERROR_COOLDOWN 30000
 #define STT_QUOTA_COOLDOWN 60000
 #define STT_RECONNECT_GUARD 60000
 #define STT_IDLE_TIMEOUT_MS 10000
 
-static const size_t BUF=256,PREROLL_SAMPLES=MIC_RATE*PREROLL_MS/1000;
+static const size_t BUF=256, PREROLL_SAMPLES=MIC_RATE*PREROLL_MS/1000;
 static int32_t rawBuf[BUF/4];
 static int16_t pcmBuf[BUF/4],preBuf[PREROLL_SAMPLES],sendBuf[256];
 static WebSocketsClient sttWS;
