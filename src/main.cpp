@@ -318,16 +318,95 @@ void cameraTask(void*){
     vTaskDelay(1);
   }
 }
-bool needsVision(String q){
-  q=normCmd(q);
-  static const char*words[]={
-    "lihat","lihatkan","melihat","tunjukkan","perlihatkan","objek","benda","warna","foto","gambar","capture","potret","jepret","kamera","amati","mengamati","perhatikan","visual","vision","apa ini","ini apa","apa itu","itu apa","benda apa","objek apa","warna apa","lihat apa","terlihat apa","sedang melihat apa","kamu melihat","yang terlihat","di depan","ke depan","di sana","di situ","yang ada di","apa yang ada","lihat sekitar","amati sekitar","ambil gambar","ambil foto","ambil potret","foto sekarang","capture sekarang"
+static bool visionHasToken(const String &s, const char *word) {
+  int from = 0;
+  int n = strlen(word);
+  while (true) {
+    int p = s.indexOf(word, from);
+    if (p < 0) return false;
+
+    int e = p + n;
+    bool left = (p == 0 || s[p - 1] == ' ');
+    bool right = (e >= s.length() || s[e] == ' ');
+
+    if (left && right) return true;
+    from = p + 1;
+  }
+}
+static bool visionHasPhrase(const String &s, const char *phrase) {
+  int from = 0;
+  int n = strlen(phrase);
+  while (true) {
+    int p = s.indexOf(phrase, from);
+    if (p < 0) return false;
+    int e = p + n;
+    bool left = (p == 0 || s[p - 1] == ' ');
+    bool right = (e >= s.length() || s[e] == ' ');
+    if (left && right) return true;
+    from = p + 1;
+  }
+}
+static bool visionStartsWith(const String &s, const char *phrase) {
+  int n = strlen(phrase);
+  return s.startsWith(phrase) &&
+         (s.length() == n || s[n] == ' ');
+}
+bool needsVision(String q) {
+  String s = normCmd(q);
+  // Normalisasi bahasa sehari-hari dan hasil STT.
+  s = String(" ") + s + " ";
+  s.replace(" ngeliatin ", " melihat ");
+  s.replace(" ngeliat ", " melihat ");
+  s.replace(" liatin ", " lihat ");
+  s.replace(" liat ", " lihat ");
+
+  s.replace(" elu ", " kamu ");
+  s.replace(" lu ", " kamu ");
+  s.replace(" lo ", " kamu ");
+  s.replace(" sia ", " kamu ");
+
+  s.replace(" enggak ", " gak ");
+  s.replace(" nggak ", " gak ");
+  s.replace(" engga ", " gak ");
+  s.replace(" ngga ", " gak ");
+  s.replace(" ga ", " gak ");
+  s.trim();
+  // 1. Perintah langsung untuk melihat.
+  // Bentuk kalimat boleh bervariasi, termasuk dengan sapaan TARS.
+  static const char *commands[] = {
+    "lihat",    "coba lihat",    "tolong lihat",    "ayo lihat",    "tars lihat",    "tars coba lihat",    "tars tolong lihat",    "tars kamu lihat",    "amati",    "coba amati",    "tolong amati",    "tars amati",    "tars coba amati",    "perhatikan",    "coba perhatikan",    "tolong perhatikan",    "tars perhatikan",    "tars coba perhatikan",   "tengok",    "coba tengok",    "tars tengok",    "tars coba tengok",    "pantau",    "tars pantau",    "lihatkan",    "perlihatkan",    "ambil foto",    "ambil gambar",    "ambil potret",    "foto sekarang",    "jepret sekarang",   "capture sekarang"
   };
-  for(const char*w:words)
-    if(q.indexOf(w)>=0)return true;
+  for (const char *cmd : commands) {
+    if (visionStartsWith(s, cmd)) return true;
+  }
+  // 2. Perintah melihat dengan objek atau arah tertentu.
+  // Mendukung susunan kata yang tidak selalu diawali kata "lihat".
+  static const char *visualCommands[] = {
+    "tunjukkan ini",  "tunjukkan itu",    "tunjukkan benda",   "tunjukkan objek",  "tunjukkan warna",   "perlihatkan ini",    "perlihatkan itu",    "lihat ke depan",    "lihat ke belakang",    "lihat ke kiri",    "lihat ke kanan",    "lihat ke sana",    "lihat ke situ",    "lihat sekitar",    "lihat sekeliling",   "lihat keadaan sekitar",    "lihat kondisi sekitar",    "lihat apa yang ada",    "amati lingkungan",    "amati sekeliling",    "perhatikan sekitar", "tengok ke depan", "tengok ke belakang", "pantau keadaan sekitar", "coba cek keadaan sekitar"
+  };
+  for (const char *cmd : visualCommands) {
+    if (visionHasPhrase(s, cmd)) return true;
+  }
+   // 3. Pertanyaan langsung tentang kemampuan atau penglihatan TARS.
+  static const char *visionQuestions[] = {
+    "bisa lihat", "bisa melihat", "bisa melihatku", "bisa melihat kamu", "bisa lihat aku", "bisa lihat saya", "kamu bisa melihat", "kamu bisa lihat",  "kamu melihat apa",  "kamu lihat apa", "kamu sedang melihat", "kamu lagi melihat", "tars bisa melihat", "tars bisa lihat", "tars melihat apa", "tars lihat apa", "tars sedang melihat", "tars lagi melihat", "apa yang kamu lihat", "apa yang kamu sedang lihat",  "apa yang kamu lihat sekarang", "apa yang tars lihat", "apa yang tars sedang lihat", "apa yang tars bisa lihat", "apa yang terlihat", "apa yang sedang terlihat", "yang terlihat apa", "bisa melihat apa", "bisa lihat apa", "lihat apa sekarang", "kamu bisa melihatku", "kamu bisa melihat aku", "kamu bisa melihat saya", "kamu bisa melihat objek", "kamu bisa melihat benda","kamu bisa melihat sekeliling"
+  };
+  for (const char *phrase : visionQuestions) {
+    if (visionHasPhrase(s, phrase)) return true;
+  }
+   // 4. Pertanyaan tentang objek atau keadaan yang sedang ditunjuk.
+  static const char *objectQuestions[] = {
+    "apa ini", "ini apa", "apa itu",  "itu apa", "benda apa ini", "benda apa itu", "objek apa ini", "objek apa itu", "warna apa ini",
+    "apa warna ini", "apa warna benda ini", "apa warna objek ini", "apa yang ada di depan", "apa yang ada di depanmu", "apa yang ada di depan kamu", "ada apa di depan", "ada apa di depanmu",
+    "di depanmu ada apa", "apa yang ada di sekitar", "apa yang ada di sekitarmu", "apa yang ada di sekelilingmu", "apa yang ada di ruangan ini", "benda di depanmu apa", "objek di depanmu apa", "yang ada di depanmu apa", "apa yang sedang terlihat di depan", "apa yang kamu lihat di depan","apa yang terlihat di sekitar"
+  };
+  for (const char *phrase : objectQuestions) {
+    if (visionHasPhrase(s, phrase)) return true;
+  }
+  // 5. Kata visual saja tidak cukup untuk mengaktifkan Vision.
+  // Contoh: "dia melihatmu, TARS" bukan perintah untuk melihat.
   return false;
 }
-
 bool initMic(){
   i2s_config_t c={};
   c.mode=(i2s_mode_t)(I2S_MODE_MASTER|I2S_MODE_RX);
