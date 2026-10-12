@@ -33,7 +33,6 @@
 #include <oled.h>
 #include <lengan.h>
 #include <hand_gesture.h>
-#include <visual_tracking.h>
 
 #define MIC_PORT I2S_NUM_1
 #define MIC_SCK 18
@@ -228,152 +227,11 @@ bool startCamera(){
   camDiag("START-DONE");
   return true;
 }
-static uint8_t trackPrev[24*16]={0};
-static bool trackPrevReady=false;
-static uint32_t trackLastTarget=0;
-
-static inline uint8_t trackBrightness(uint16_t p){
-  uint8_t r=((p>>11)&31)*255/31;
-  uint8_t g=((p>>5)&63)*255/63;
-  uint8_t b=(p&31)*255/31;
-  return (77*r+150*g+29*b)>>8;
-}
-static bool detectVisualPersonTarget(int16_t &targetX){
-  const int W=24;
-  const int H=16;
-
-  uint8_t grid[W*H];
-  memset(grid,0,sizeof(grid));
-
-  for(int gy=0;gy<H;gy++){
-    int y0=gy*32/H;
-    int y1=(gy+1)*32/H;
-
-    for(int gx=0;gx<W;gx++){
-      int x0=gx*96/W;
-      int x1=(gx+1)*96/W;
-
-      uint32_t sum=0;
-      uint16_t n=0;
-
-      for(int y=y0;y<y1;y+=2){
-        for(int x=x0;x<x1;x+=2){
-          sum+=trackBrightness(cameraEnvironment[y*96+x]);
-          n++;
-        }
-      }
-
-      grid[gy*W+gx]=n?(uint8_t)(sum/n):0;
-    }
-  }
-
-  if(!trackPrevReady){
-    memcpy(trackPrev,grid,sizeof(grid));
-    trackPrevReady=true;
-    return false;
-  }
-
-  uint8_t motion[W*H];
-  memset(motion,0,sizeof(motion));
-
-  int motionCells=0;
-  int weightedX=0;
-  int weightedN=0;
-
-  for(int gy=0;gy<H;gy++){
-    for(int gx=0;gx<W;gx++){
-      int i=gy*W+gx;
-      int d=abs((int)grid[i]-(int)trackPrev[i]);
-
-      if(d>=18){
-        motion[i]=1;
-        motionCells++;
-        weightedX+=gx*4;
-        weightedN+=4;
-      }
-    }
-  }
-
-  memcpy(trackPrev,grid,sizeof(grid));
-
-  if(motionCells<5){
-    if(millis()-trackLastTarget>1200)
-      return false;
-    return true;
-  }
-
-  // Cari massa gerakan yang memanjang vertikal.
-  // Bagian bawah frame tetap dihitung agar kaki masih bisa menjadi target.
-  int bestX=-1;
-  int bestScore=0;
-
-  for(int gx=0;gx<W;gx++){
-    int vertical=0;
-    int score=0;
-
-    for(int gy=0;gy<H;gy++){
-      if(!motion[gy*W+gx])continue;
-
-      score++;
-
-      if(gy>=H/2)
-        vertical+=2;
-      else
-        vertical++;
-    }
-
-    if(vertical>bestScore){
-      bestScore=vertical;
-      bestX=gx;
-    }
-  }
-
-  if(bestX<0||bestScore<3){
-    if(millis()-trackLastTarget>1200)
-      return false;
-    return true;
-  }
-
-  // Cari pusat massa gerakan di sekitar kolom target.
-  int sumX=0;
-  int sumWeight=0;
-
-  for(int gx=max(0,bestX-3);gx<=min(W-1,bestX+3);gx++){
-    for(int gy=0;gy<H;gy++){
-      if(!motion[gy*W+gx])continue;
-
-      int weight=(gy>=H/2)?2:1;
-      sumX+=gx*weight;
-      sumWeight+=weight;
-    }
-  }
-
-  if(sumWeight<3){
-    if(millis()-trackLastTarget>1200)
-      return false;
-    return true;
-  }
-
-  targetX=(sumX*320)/(sumWeight*W);
-
-  targetX=constrain(targetX,0,319);
-
-  trackLastTarget=millis();
-
-  return true;
-}
-
-static void resetVisualTrackingMemory(){
-  trackPrevReady=false;
-  trackLastTarget=0;
-  memset(trackPrev,0,sizeof(trackPrev));
-}
 void cameraTask(void*){
   uint8_t frameErrors=0;
   for(;;){
     if(!cameraLive||!camera||!cameraOK||playing){
       wheelsStop();
-      visualTrackingUpdate(false,true);
       vTaskDelay(pdMS_TO_TICKS(20));
       continue;
     }
@@ -433,27 +291,6 @@ void cameraTask(void*){
       xSemaphoreGive(cameraMux);
     }
     if(ok&&analyzed){
-      /*
-       * AUTONOMY EXPLORATION DIHAPUS.
-       * Kamera sekarang hanya menjadi mata untuk tracking lokal.
-       */
-      int16_t targetX=160;
-      bool target=detectVisualPersonTarget(targetX);
-      if(target){
-        visualTrackingTarget(targetX,true);
-        Serial.printf(
-          "TARS: VISUAL TARGET X=%d\n",
-          targetX
-        );
-      }else{
-        visualTrackingLost();
-      }
-      uint8_t people=I2SCamera::peopleCount();
-      tarsEmotionPeople(people);
-      /*
-       * Vision cloud tetap hanya untuk event yang memang
-       * sudah ada di sistem sebelumnya.
-       */
       if(tarsMode==MODE_ONLINE){
         if(environment.event==ENV_NONE)
           visionSceneLatched=false;
@@ -475,13 +312,8 @@ void cameraTask(void*){
       frameErrors=0;
     }
     if(!playing){
-      visualTrackingUpdate(
-        cameraLive,
-        false
-      );
     }else{
       wheelsStop();
-      visualTrackingUpdate(false,true);
     }
     vTaskDelay(1);
   }
@@ -1088,7 +920,7 @@ void enterTarsDeepSleep(){
 }
 
 void loop(){
-  time_t now=time(nullptr);
+  /*time_t now=time(nullptr);
   struct tm t={};
 
   if(now>=1704067200){
@@ -1108,12 +940,11 @@ void loop(){
       enterTarsDeepSleep();
       return;
     }
-  }
+  }*/
   ramMonitor();
 
   if(playing){
   wheelsStop();
-  visualTrackingUpdate(false,true);
   delay(1);
   return;
   }
@@ -1134,14 +965,12 @@ checkTimeGreeting();
 if(playing){
   wheelsStop();
   autonomyStop();
-  visualTrackingUpdate(false,true);
   delay(1);
   return;
 }
 String q=tarsMode==MODE_ONLINE?recordRealtime():recordOffline();
 if(q.length()){
   wheelsStop();
-  visualTrackingUpdate(false,true);
   processQuestion(q);
 }else if(!oledSpecial){
   oledSetStatus(tarsMode==MODE_ONLINE?"LISTENING":"READY");
