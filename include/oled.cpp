@@ -54,17 +54,13 @@ oled.display();
 }
 void drawCameraOLED(){
   if(!oledOK||!previewMux)return;
-
   if(xSemaphoreTake(previewMux,pdMS_TO_TICKS(100))!=pdTRUE)
     return;
-
   if(!previewReady){
     xSemaphoreGive(previewMux);
     return;
   }
-
   oled.clearDisplay();
-
   // Gambar preview asli, tanpa mengubah buffer kamera.
   for(int y=0;y<64;y++){
     for(int x=0;x<128;x++){
@@ -72,19 +68,6 @@ void drawCameraOLED(){
         oled.drawPixel(x,y,SSD1306_WHITE);
     }
   }
-
-  // Overlay kotak hanya pada layar OLED.
-  uint8_t x1,y1,x2,y2;
-
-  if(I2SCamera::localPersonBounds(x1,y1,x2,y2)){
-    oled.drawRect(
-      x1,y1,
-      x2-x1+1,
-      y2-y1+1,
-      SSD1306_WHITE
-    );
-  }
-
   oled.display();
   xSemaphoreGive(previewMux);
 }
