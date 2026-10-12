@@ -30,6 +30,7 @@ static int16_t pcmBuf[BUF/4],preBuf[PREROLL_SAMPLES],sendBuf[256];
 static WebSocketsClient sttWS;
 static uint32_t sttRetryAt=0;
 static bool sttRetryShown=false;
+volatile bool sttVoiceActive = false;
 
 String sttFinal,sttPartial;
 bool micOK=false;
@@ -220,10 +221,11 @@ closeSTT(STT_NORMAL_COOLDOWN);
 
 return r;
 }
-String recordSTT(bool offline){
- if(!startSTT(offline))return "";
- if(offline)oledSetStatus("READY");else oledSetListening();
-  size_t prePos=0,preCount=0;
+String recordSTT(bool offline) {
+    sttVoiceActive = false;
+    if (!startSTT(offline)) return "";
+    if (offline) oledSetStatus("READY");
+    else oledSetListening();  size_t prePos=0,preCount=0;
  uint32_t voiceStart=0,lastVoice=0,samples=0;
  uint32_t listenStart=millis();
  bool voice=false;
@@ -244,9 +246,10 @@ String recordSTT(bool offline){
     return "";
    }
    for(size_t i=0;i<count;i++){preBuf[prePos]=pcmBuf[i];prePos=(prePos+1)%PREROLL_SAMPLES;if(preCount<PREROLL_SAMPLES)preCount++;}
-   if(peak>=MIC_THRESHOLD||rms>=3000){
-  voice=true; voiceStart=lastVoice=millis();
-    tarsEmotionSpeechPeak(
+   if (peak >= MIC_THRESHOLD || rms >= 3000) {
+    voice = true;
+    sttVoiceActive = true;
+    voiceStart = lastVoice = millis();   tarsEmotionSpeechPeak(
     (uint16_t)(peak>32767?32767:peak),
     true);
     size_t start=preCount==PREROLL_SAMPLES?prePos:0,nsend=0;
