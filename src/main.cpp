@@ -905,7 +905,7 @@ void setup(){
   }
 
   startCamera();
-  xTaskCreatePinnedToCore(cameraTask,"TARS_EYE",4096,nullptr,2,nullptr,1);
+  xTaskCreatePinnedToCore(cameraTask,"TARS_EYE",8192,nullptr,2,nullptr,1);
 
   ramDiag("READY");
   wheelsStop();
