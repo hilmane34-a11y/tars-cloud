@@ -33,7 +33,6 @@
 #include <oled.h>
 #include <lengan.h>
 #include <hand_gesture.h>
-#include <visual_tracking.h>
 
 #define MIC_PORT I2S_NUM_1
 #define MIC_SCK 18
@@ -894,7 +893,6 @@ void setup(){
   envBegin();
   visionLiveBegin();
   personalityBegin();
-  visualTrackingBegin();
   tarsEmotionBegin();
   autoSpeechBegin(autoSpeechCallback);
 
@@ -969,7 +967,6 @@ void loop(){
 
   if(playing){
   wheelsStop();
-  visualTrackingUpdate(false,true);
   delay(1);
   return;
   }
@@ -990,14 +987,12 @@ checkTimeGreeting();
 if(playing){
   wheelsStop();
   autonomyStop();
-  visualTrackingUpdate(false,true);
   delay(1);
   return;
 }
 String q=tarsMode==MODE_ONLINE?recordRealtime():recordOffline();
 if(q.length()){
   wheelsStop();
-  visualTrackingUpdate(false,true);
   processQuestion(q);
 }else if(!oledSpecial){
   oledSetStatus(tarsMode==MODE_ONLINE?"LISTENING":"READY");
