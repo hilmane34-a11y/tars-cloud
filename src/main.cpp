@@ -270,10 +270,6 @@ else if (gesture == HAND_CLOSED)
       }
       xSemaphoreGive(cameraMux);
     }
-    if(ok&&analyzed){
-      autonomySetEnvironment(environment);
-      uint8_t people=I2SCamera::peopleCount();
-      tarsEmotionPeople(people);
       if(tarsMode==MODE_ONLINE){
         if(environment.event==ENV_NONE)
           visionSceneLatched=false;
@@ -294,8 +290,6 @@ else if (gesture == HAND_CLOSED)
       }
       frameErrors=0;
     }
-    if(cameraLive&&!playing)
-      autonomyUpdate(true,false);
     vTaskDelay(1);
   }
 }
@@ -913,7 +907,6 @@ void setup(){
   visionLiveBegin();
   personalityBegin();
   tarsEmotionBegin();
-  autonomyBegin();
 
   if(!personalityTaskHandle){
     BaseType_t result=xTaskCreate(personalityTask,"TARS_Personality",2048,nullptr,1,&personalityTaskHandle);
@@ -923,8 +916,6 @@ void setup(){
       Serial.println("TARS: PERSONALITY TASK FAILED");
     }else Serial.println("TARS: PERSONALITY TASK READY");
   }
-
-  autoSpeechBegin(autoSpeechCallback);
   startCamera();
 
   xTaskCreatePinnedToCore(cameraTask,"TARS_EYE",4096,nullptr,2,nullptr,1);
@@ -943,7 +934,6 @@ void enterTarsDeepSleep(){
 
   sleepOLEDStop();
   wheelsStop();
-  autonomyStop();
   closeSTT();
   audioStop();
   playing=false;
@@ -990,7 +980,6 @@ void loop(){
   ramMonitor();
   if(playing){
     wheelsStop();
-    autonomyStop();
     delay(1);
     return;
   }
@@ -1000,14 +989,12 @@ void loop(){
     return;
   }
   if(alarmDue()){
-    autonomyStop();
     runAlarm();
     return;
   }
   checkTimeGreeting();
   if(playing){
     wheelsStop();
-    autonomyStop();
     return;
   }
   if(tarsMode==MODE_ONLINE&&!playing&&!sttConnected&&tarsEmotionHasEvent())
@@ -1015,13 +1002,11 @@ void loop(){
   String q=tarsMode==MODE_ONLINE?recordRealtime():recordOffline();
   if(q.length()){
     wheelsStop();
-    autonomyStop();
     processQuestion(q);
   }else if(!oledSpecial)
     oledSetStatus(tarsMode==MODE_ONLINE?"LISTENING":"READY");
   if(!playing&&tarsMode==MODE_ONLINE&&!sttConnected){
     processVisionEvent();
-    autoSpeechUpdate(true,false,false);
   }
   delay(1);
 }
