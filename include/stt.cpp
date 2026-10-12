@@ -195,146 +195,57 @@ return r;
 }
 
 String recordSTT(bool offline){
-Serial.printf("TARS: RECORD STT START mode=%s\n",offline?"OFFLINE":"ONLINE");
-
-if(!startSTT(offline)){
-Serial.println("TARS: RECORD STT START FAILED");
-return "";
+ if(!startSTT(offline))return "";
+ if(offline)oledSetStatus("READY");else oledSetListening();
+  size_t prePos=0,preCount=0;
+ uint32_t voiceStart=0,lastVoice=0,samples=0;
+ uint32_t listenStart=millis();
+ bool voice=false;
+ for(;;){
+  sttWS.loop();if(sttError)break;
+  size_t bytes=0;
+  if(i2s_read(MIC_PORT,rawBuf,sizeof(rawBuf),&bytes,pdMS_TO_TICKS(30))!=ESP_OK)continue;
+  size_t count=bytes/4;int32_t peak=0;uint64_t sum=0;
+  for(size_t i=0;i<count;i++){
+   int32_t v=constrain(rawBuf[i]>>16,-32768,32767);pcmBuf[i]=(int16_t)v;
+   int32_t a=abs(v);if(a>peak)peak=a;sum+=(uint64_t)a*a;
+  }
+  uint32_t rms=count?(uint32_t)sqrt((double)sum/count):0;
+  if(!voice){
+   if(!offline&&millis()-listenStart>=STT_IDLE_TIMEOUT_MS){
+    Serial.println("TARS: STT IDLE TIMEOUT - CLOSE NORMAL");
+    closeSTT();
+    return "";
+   }
+   for(size_t i=0;i<count;i++){preBuf[prePos]=pcmBuf[i];prePos=(prePos+1)%PREROLL_SAMPLES;if(preCount<PREROLL_SAMPLES)preCount++;}
+   if(peak>=MIC_THRESHOLD||rms>=3000){
+  voice=true; voiceStart=lastVoice=millis();
+    tarsEmotionSpeechPeak(
+    (uint16_t)(peak>32767?32767:peak),
+    true);
+    size_t start=preCount==PREROLL_SAMPLES?prePos:0,nsend=0;
+    for(size_t i=0;i<preCount;i++){
+     sendBuf[nsend++]=preBuf[(start+i)%PREROLL_SAMPLES];
+     if(nsend==256){if(!sttWS.sendBIN((uint8_t*)sendBuf,nsend*2)){sttError=true;break;}nsend=0;}
+    }
+    if(nsend&&!sttError&&!sttWS.sendBIN((uint8_t*)sendBuf,nsend*2))sttError=true;
+    samples+=preCount;
+    Serial.printf("TARS: %s VOICE PEAK=%ld RMS=%lu\n",offline?"OFFLINE":"ONLINE",(long)peak,(unsigned long)rms);
+   }
+  }else{
+   if(!sttWS.sendBIN((uint8_t*)pcmBuf,count*2)){
+    Serial.println(offline?"TARS: OFFLINE STT PCM SEND FAILED":"TARS: STT PCM SEND FAILED");sttError=true;break;
+   }
+   samples+=count;if(peak>=MIC_SILENCE||rms>=1800)lastVoice=millis();
+   if(millis()-voiceStart>=RECORD_MIN_MS&&millis()-lastVoice>=SILENCE_MS)break;
+  }
+  yield();
+ }
+ if(!voice||sttError){
+  closeSTT();if(!voice)Serial.println(offline?"TARS: OFFLINE MIC AUDIO TOO LOW":"TARS: MIC AUDIO TOO LOW");return "";
+ }
+ return stopSTT(samples,offline);
 }
 
-if(offline)oledSetStatus("READY");
-else oledSetListening();
-
-size_t prePos=0,preCount=0;
-uint32_t voiceStart=0,lastVoice=0,samples=0,listenStart=millis();
-bool voice=false;
-
-for(;;){
-sttWS.loop();
-
-if(sttError)break;
-
-size_t bytes=0;
-
-if(i2s_read(MIC_PORT,rawBuf,sizeof(rawBuf),&bytes,pdMS_TO_TICKS(30))!=ESP_OK)
-continue;
-
-size_t count=bytes/4;
-int32_t peak=0;
-uint64_t sum=0;
-
-for(size_t i=0;i<count;i++){
-int32_t v=constrain(rawBuf[i]>>16,-32768,32767);
-pcmBuf[i]=(int16_t)v;
-
-int32_t a=abs(v);
-
-if(a>peak)peak=a;
-
-sum+=(uint64_t)a*a;
-}
-
-uint32_t rms=count?(uint32_t)sqrt((double)sum/count):0;
-
-if(!voice){
-if(!offline&&millis()-listenStart>=STT_IDLE_TIMEOUT_MS){
-Serial.println("TARS: STT IDLE TIMEOUT - CLOSE NORMAL");
-closeSTT(STT_NORMAL_COOLDOWN);
-return "";
-}
-
-for(size_t i=0;i<count;i++){
-preBuf[prePos]=pcmBuf[i];
-prePos=(prePos+1)%PREROLL_SAMPLES;
-
-if(preCount<PREROLL_SAMPLES)
-preCount++;
-}
-
-if(peak>=MIC_THRESHOLD||rms>=3000){
-voice=true;
-voiceStart=lastVoice=millis();
-
-tarsEmotionSpeechPeak((uint16_t)min(peak,32767),true);
-
-size_t start=preCount==PREROLL_SAMPLES?prePos:0;
-size_t nsend=0;
-
-for(size_t i=0;i<preCount;i++){
-sendBuf[nsend++]=preBuf[(start+i)%PREROLL_SAMPLES];
-
-if(nsend==256){
-if(!sttWS.sendBIN((uint8_t*)sendBuf,nsend*2)){
-sttError=true;
-break;
-}
-nsend=0;
-}
-}
-
-if(nsend&&!sttError&&!sttWS.sendBIN((uint8_t*)sendBuf,nsend*2))
-sttError=true;
-
-samples+=preCount;
-
-Serial.printf(
-"TARS: %s VOICE PEAK=%ld RMS=%lu\n",
-offline?"OFFLINE":"ONLINE",
-(long)peak,
-(unsigned long)rms
-);
-}
-}else{
-if(!sttWS.sendBIN((uint8_t*)pcmBuf,count*2)){
-Serial.println(
-offline?
-"TARS: OFFLINE STT PCM SEND FAILED":
-"TARS: STT PCM SEND FAILED"
-);
-
-sttError=true;
-break;
-}
-
-samples+=count;
-
-if(peak>=MIC_SILENCE||rms>=1800)
-lastVoice=millis();
-
-if(
-millis()-voiceStart>=RECORD_MIN_MS&&
-millis()-lastVoice>=SILENCE_MS
-)
-break;
-}
-
-yield();
-}
-
-if(!voice||sttError){
-closeSTT(
-sttError?
-STT_ERROR_COOLDOWN:
-STT_NORMAL_COOLDOWN
-);
-
-if(!voice)
-Serial.println(
-offline?
-"TARS: OFFLINE MIC AUDIO TOO LOW":
-"TARS: MIC AUDIO TOO LOW"
-);
-
-return "";
-}
-
-return stopSTT(samples,offline);
-}
-
-String recordRealtime(){
-return recordSTT(false);
-}
-
-String recordOffline(){
-return recordSTT(true);
-}
+String recordRealtime(){return recordSTT(false);}
+String recordOffline(){return recordSTT(true);}
