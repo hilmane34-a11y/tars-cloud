@@ -1,4 +1,3 @@
-
 #include "vision_live.h"
 #include "config.h"
 #include "wheels.h"
@@ -36,7 +35,7 @@ extern bool cameraLive, cameraOK, playing;
 extern bool wifiOK();
 extern bool visionLiveEnabled();
 extern void stopCamera();
-extern void startCamera();
+extern bool startCamera();
 
 static uint8_t visionJpeg[VISION_JPEG_MAX];
 static char *visionJson = nullptr;
