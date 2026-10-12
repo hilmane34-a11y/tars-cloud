@@ -117,7 +117,6 @@ if(!wifiOK()){
 Serial.printf("TARS: STT BLOCK WIFI status=%d\n",WiFi.status());
 return false;
 }
-Serial.println("TARS: STT WIFI OK");
 if(!micOK){
 Serial.println("TARS: STT BLOCK MIC=false");
 return false;
