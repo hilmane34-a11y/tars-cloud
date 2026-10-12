@@ -21,7 +21,6 @@
 #include "wifi_manager.h"
 #include "Log.h"
 #include "personality.h"
-#include "autonomy.h"
 #include "auto_speech.h"
 #include "wheels.h"
 #include "env.h"
