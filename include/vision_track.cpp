@@ -105,7 +105,7 @@ private:
     size_t emitted = 0;
 
     // 192 byte input menghasilkan maksimal 256 byte Base64.
-    uint8_t encoded[256];
+    uint8_t encoded[320];
 
     bool prepare() {
         if (emitted >= totalLength) {
