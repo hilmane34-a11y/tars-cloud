@@ -414,46 +414,50 @@ bool visionLivePause() {
     Serial.println("TARS: VISION USER PRIORITY RESERVED");
     return true;
 }
-
 void visionLiveResume() {
-    if (!ownerIs(VISION_OWNER_USER)) {
-        return;
-    }
-    if (playing || cameraTransition) {
+if (!ownerIs(VISION_OWNER_USER)) {
+return;
+}
+
+if (playing || cameraTransition) {
+    Serial.println("TARS: VISION RESUME DEFERRED");
+    return;
+}
+
+if (cameraStoppedForVision &&
+    visionLiveEnabled() &&
+    WiFi.status() == WL_CONNECTED) {
+
+    startCamera();
+
+    if (!camera ||
+        !cameraOK ||
+        !cameraLive) {
         Serial.println(
-            "TARS: VISION RESUME DEFERRED"
+            "TARS: VISION CAMERA NOT READY"
         );
         return;
     }
-    if (cameraStoppedForVision &&
-        visionLiveEnabled() &&
-        WiFi.status() == WL_CONNECTED) {
-        startCamera();
-            Serial.println(
-                "TARS: VISION CAMERA RESTART FAILED"
-            );
-            return;
-        }
-        if (!camera ||
-            !cameraOK ||
-            !cameraLive) {
-            Serial.println(
-                "TARS: VISION CAMERA NOT READY"
-            );
-            return;
-        }
-    }
-    if (sharedJpegLength > 0) {
-        memset(visionJpeg, 0, sharedJpegLength);
-    }
-    sharedJpegLength = 0;
-    cameraStoppedForVision = false;
-    releaseVision(VISION_OWNER_USER);
-    Serial.printf(
-        "TARS: VISION CYCLE END HEAP=%u LARGEST=%u\n",
-        ESP.getFreeHeap(),
-        ESP.getMaxAllocHeap()
+
+    Serial.println(
+        "TARS: VISION CAMERA RESTART OK"
     );
+}
+
+if (sharedJpegLength > 0) {
+    memset(visionJpeg, 0, sharedJpegLength);
+}
+
+sharedJpegLength = 0;
+cameraStoppedForVision = false;
+
+releaseVision(VISION_OWNER_USER);
+
+Serial.printf(
+    "TARS: VISION CYCLE END HEAP=%u LARGEST=%u\n",
+    ESP.getFreeHeap(),
+    ESP.getMaxAllocHeap()
+ );
 }
 bool visionLiveTrackPause() {
     if (!visionLiveEnabled() ||
