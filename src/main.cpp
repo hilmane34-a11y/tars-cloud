@@ -33,6 +33,7 @@
 #include <oled.h>
 #include <lengan.h>
 #include <hand_gesture.h>
+#include <vision_track.h>
 
 #define MIC_PORT I2S_NUM_1
 #define MIC_SCK 18
@@ -895,6 +896,7 @@ void setup(){
   oledSetStatus("READY");
   envBegin();
   visionLiveBegin();
+  visionTrackBegin();
   personalityBegin();
   tarsEmotionBegin();
   autoSpeechBegin(autoSpeechCallback);
