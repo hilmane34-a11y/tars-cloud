@@ -47,7 +47,7 @@ enum VisionOwner : uint8_t {
 static portMUX_TYPE visionLock = portMUX_INITIALIZER_UNLOCKED;
 static volatile VisionOwner visionOwner = VISION_OWNER_NONE;
 static volatile bool visionUserWaiting = false;
-
+extern volatile bool cameraTransition;
 static bool cameraStoppedForVision = false;
 static size_t sharedJpegLength = 0;
 
@@ -147,24 +147,27 @@ static void releaseVision(VisionOwner owner) {
 
     portEXIT_CRITICAL(&visionLock);
 }
-
 static bool captureFrame(size_t &length) {
     length = 0;
-
-    if (!cameraMux) {
+    if (cameraTransition || playing || !cameraMux) {
         return false;
     }
-
     if (xSemaphoreTake(
             cameraMux,
             pdMS_TO_TICKS(3000)) != pdTRUE) {
-        Serial.println("TARS: VISION CAMERA LOCK FAILED");
+        if (!cameraTransition) {
+            Serial.println("TARS: VISION CAMERA LOCK FAILED");
+        }
         return false;
     }
-
-    bool ready = camera && cameraLive && cameraOK && !playing;
+    // Periksa ulang setelah memperoleh kunci kamera.
+    bool ready =
+        !cameraTransition &&
+        !playing &&
+        camera != nullptr &&
+        cameraLive &&
+        cameraOK;
     bool ok = false;
-
     if (ready) {
         ok = I2SCamera::encodeFrameToJPEG(
             visionJpeg,
@@ -172,28 +175,26 @@ static bool captureFrame(size_t &length) {
             55
         );
     }
-
     xSemaphoreGive(cameraMux);
-
-    if (!ok || length == 0 || length > VISION_JPEG_MAX) {
+    // Siklus kamera mungkin berubah ketika capture berlangsung.
+    if (cameraTransition ||
+        !ok ||
+        length == 0 ||
+        length > VISION_JPEG_MAX) {
         if (length > 0 && length <= VISION_JPEG_MAX) {
             memset(visionJpeg, 0, length);
         }
-
         length = 0;
-
-        Serial.println("TARS: VISION JPEG FAILED");
+        if (!cameraTransition) {Serial.println("TARS: VISION JPEG FAILED");
+        }
         return false;
     }
-
     Serial.printf(
         "TARS: VISION JPEG READY SIZE=%u\n",
         (unsigned)length
     );
-
     return true;
 }
-
 static bool stopCameraForTLS() {
     stopCamera();
 
@@ -418,36 +419,42 @@ void visionLiveResume() {
     if (!ownerIs(VISION_OWNER_USER)) {
         return;
     }
-
-    if (playing) {
+    if (playing || cameraTransition) {
         Serial.println(
-            "TARS: VISION RESUME BLOCKED - AUDIO ACTIVE"
+            "TARS: VISION RESUME DEFERRED"
         );
         return;
     }
-
     if (cameraStoppedForVision &&
         visionLiveEnabled() &&
         WiFi.status() == WL_CONNECTED) {
-        startCamera();
+        if (!startCamera()) {
+            Serial.println(
+                "TARS: VISION CAMERA RESTART FAILED"
+            );
+            return;
+        }
+        if (!camera ||
+            !cameraOK ||
+            !cameraLive) {
+            Serial.println(
+                "TARS: VISION CAMERA NOT READY"
+            );
+            return;
+        }
     }
-
     if (sharedJpegLength > 0) {
         memset(visionJpeg, 0, sharedJpegLength);
     }
-
     sharedJpegLength = 0;
     cameraStoppedForVision = false;
-
     releaseVision(VISION_OWNER_USER);
-
     Serial.printf(
         "TARS: VISION CYCLE END HEAP=%u LARGEST=%u\n",
         ESP.getFreeHeap(),
         ESP.getMaxAllocHeap()
     );
 }
-
 bool visionLiveTrackPause() {
     if (!visionLiveEnabled() ||
         playing ||
