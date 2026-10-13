@@ -123,7 +123,21 @@ static void failTrackRequest() {
 
     portEXIT_CRITICAL(&trackMux);
 }
+static void cancelTrackRequest() {
+    portENTER_CRITICAL(&trackMux);
 
+    if (trackActive) {
+        trackPending = false;
+        trackResponseReady = true;
+        trackResultValid = false;
+    } else {
+        trackPending = false;
+        trackJpeg = nullptr;
+        trackJpegLength = 0;
+    }
+
+    portEXIT_CRITICAL(&trackMux);
+}
 static void serviceTrackRequest() {
     const uint8_t *jpeg = nullptr;
     size_t length = 0;
