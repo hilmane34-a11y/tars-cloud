@@ -17,6 +17,7 @@ paths = [
     os.path.join(framework, "variants", "esp32"),
 
     # Arduino framework libraries
+    os.path.join(framework, "libraries", "FS", "src"),
     os.path.join(framework, "libraries", "Wire", "src"),
     os.path.join(framework, "libraries", "SPI", "src"),
     os.path.join(framework, "libraries", "WiFi", "src"),
