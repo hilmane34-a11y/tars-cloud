@@ -103,7 +103,24 @@ static void serviceTrackRequest() {
         // Penting: kirim kontrol lalu JPEG langsung sesudahnya.
         // Jangan menyisipkan frame PCM di antara kedua pengiriman.
         bool controlSent = sttWS.sendTXT(control);
-
+        Serial.printf(
+    "TARS TRACK DIAG: CONNECTED=%d READY=%d CONTROL_SENT=%d JPEG=%u\n",
+    sttConnected,
+    sttReady,
+    controlSent,
+    (unsigned)length
+);
+if (controlSent) {
+    sent = sttWS.sendBIN(
+        const_cast<uint8_t *>(jpeg),
+        length
+    );
+    Serial.printf(
+        "TARS TRACK DIAG: BINARY_SENT=%d SIZE=%u\n",
+        sent,
+        (unsigned)length
+    );
+}
         if (controlSent) {
             sent = sttWS.sendBIN(
                 const_cast<uint8_t *>(jpeg),
