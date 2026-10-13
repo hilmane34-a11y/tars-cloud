@@ -230,6 +230,28 @@ bool startCamera(){
   camDiag("START-DONE");
   return true;
 }
+bool playLocalMP3WithCameraOff(
+    const uint8_t *start,
+    const uint8_t *end,
+    const String &text
+) {
+  bool restoreCamera =
+      camera != nullptr && cameraOK && cameraLive;
+  if (restoreCamera) {
+    stopCamera();
+    if (camera != nullptr || cameraOK || cameraLive) {
+      Serial.println("TARS: CAMERA STOP FAILED");
+      return false;
+    }
+  }
+  bool ok = playLocalMP3(start, end, text);
+  if (restoreCamera) {
+    if (!startCamera()) {
+      Serial.println("TARS: CAMERA RESTART FAILED");
+    }
+  }
+  return ok;
+}
 void cameraTask(void*){
   uint8_t frameErrors=0;
   for(;;){
@@ -522,10 +544,10 @@ const char*greetingText(uint8_t p){
 
 bool playTimeGreeting(uint8_t p){
   switch(p){
-    case 0:return playLocalMP3(pagi_start,pagi_end,greetingText(p));
-    case 1:return playLocalMP3(siang_start,siang_end,greetingText(p));
-    case 2:return playLocalMP3(sore_start,sore_end,greetingText(p));
-    case 3:return playLocalMP3(malam_start,malam_end,greetingText(p));
+    case 0:return playLocalMP3WithCameraOff().(pagi_start,pagi_end,greetingText(p));
+    case 1:return playLocalMP3WithCameraOff().(siang_start,siang_end,greetingText(p));
+    case 2:return playLocalMP3WithCameraOff().(sore_start,sore_end,greetingText(p));
+    case 3:return playLocalMP3WithCameraOff().(malam_start,malam_end,greetingText(p));
   }
   return false;
 }
@@ -704,6 +726,10 @@ void runAlarm(){
   wheelsStop();
   uint32_t st=millis();
   bool played=false;
+ bool restoreCamera =
+    camera != nullptr && cameraOK && cameraLive;
+if (restoreCamera) {
+  stopCamera();}
   while(millis()-st<ALARM_DURATION_MS){
     if(!playLocalAlarm())break;
     played=true;
@@ -713,6 +739,8 @@ void runAlarm(){
   audioStop();
   alarmRunning=false;
   wheelsStop();
+  if (restoreCamera) {
+  startCamera();}
   oledSetStatus(tarsMode==MODE_ONLINE?"LISTENING":"READY");
 }
 
@@ -768,7 +796,7 @@ bool processOffline(const String&q){
 
   if(cmdMatch(s,hari,sizeof(hari)/sizeof(*hari))){
     oledShowText("HARI INI","OFFLINE");
-    playLocalMP3(hari_start,hari_end,"Kata-kata hari ini, Ooo celeng Celeng itu ga tau ilmu huruf.");
+    playLocalMP3WithCameraOff( hari_start, hari_end, "Kata-kata hari ini, Ooo celeng Celeng itu ga tau ilmu huruf.");
     oledSetStatus("READY");
     return true;
   }
@@ -783,7 +811,7 @@ bool processOffline(const String&q){
     portENTER_CRITICAL(&visionEventMux);
     pendingVisionCheck=false;
     portEXIT_CRITICAL(&visionEventMux);
-    playLocalMP3(online_start,online_end,"Mode online aktif, tuan");
+    playLocalMP3WithCameraOff( online_start, online_end, "Mode online aktif, tuan");
     Serial.println("TARS: MODE ONLINE");
     return true;
   }
@@ -810,7 +838,7 @@ void processQuestion(const String&q){
     sttDone=false;
     sttError=false;
     oledShowText("OFFLINE","ONLINE");
-    playLocalMP3(offline_start,offline_end,"Mode offline aktif, tuan");
+    playLocalMP3WithCameraOff(offline_start, offline_end, "Mode offline aktif, tuan");
     oledSetStatus("READY");
     Serial.println("TARS: MODE OFFLINE");
     return;
