@@ -528,20 +528,17 @@ bool playTimeGreeting(uint8_t p){
   }
   return false;
 }
-
 bool autoSpeechCallback(const String&prompt){
-  if(tarsMode!=MODE_ONLINE||playing||sttConnected||WiFi.status()!=WL_CONNECTED)
-    return false;
-  if(!prompt.startsWith("[AUTO_CHAT]"))
-    return false;
+if(tarsMode!=MODE_ONLINE||playing||sttSessionActive||WiFi.status()!=WL_CONNECTED)
+return false;
+if(!prompt.startsWith("[AUTO_CHAT]"))
+return false;
+String q=prompt.substring(11);
+q.trim();
+if(!q.length())return false;
 
-  String q=prompt.substring(11);
-  q.trim();
-  if(!q.length())return false;
-
-  return processOnlineRequest(q,false,false,true);
+return processOnlineRequest(q,false,false,true);
 }
-
 bool processOnlineRequest(const String&q,bool vision,bool status,bool automatic){
   wheelsStop();
   autonomyStop();
@@ -649,7 +646,8 @@ String systemStatus(){
      ", kamera "+String(cameraLive?"aktif":"off")+
      ", audio "+String(playing?"sedang berjalan":"idle")+
      ", sistem roda siap (tanpa sensor umpan balik gerak), STT "+
-     String(sttReady?"ready":sttConnected?"connected":"idle")+".";
+      String(sttSessionActive?(sttReady?"aktif dan ready":"sesi aktif"):
+       (sttConnected?"WSS terhubung, STT idle":"WSS terputus"))+".";
   return s;
 }
 
@@ -918,7 +916,7 @@ void setup(){
   Serial.println("TARS: AUDIO MP3/WAV -> 22050Hz/16bit");
   Serial.println("TARS: INMP441 SCK=18 WS=2 SD=15");
   Serial.println("TARS: L9110S A=23/16 B=17/19");
-  Serial.println("TARS: MIC PEAK=14000/8000 RMS=3000/1800 PREROLL=250 ms BUF=256");
+  Serial.println("TARS: MIC PEAK=10000/8000 RMS=3000/1800 PREROLL=250 ms BUF=256");
   Serial.println("TARS: STT ONLINE REALTIME PCM");
   Serial.println("TARS: STT OFFLINE REALTIME PCM");
   Serial.println("TARS: VISION ONLINE ONLY");
@@ -996,6 +994,7 @@ void enterTarsDeepSleep(){
 }
 
 void loop(){
+ sttService();
   /*time_t now=time(nullptr);
   struct tm t={};
 
@@ -1051,7 +1050,7 @@ if(q.length()){
 }else if(!oledSpecial){
   oledSetStatus(tarsMode==MODE_ONLINE?"LISTENING":"READY");
 }
-if(!playing&&tarsMode==MODE_ONLINE&&!sttConnected)
+if(!playing&&tarsMode==MODE_ONLINE&&!sttSessionActive)
   autoSpeechUpdate(true,false,false);
 delay(1);
 }
