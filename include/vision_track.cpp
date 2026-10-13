@@ -14,6 +14,7 @@
 
 #include "config.h"
 #include <vision_live.h>
+#include <OV7670.h>
 
 #ifndef TARS_LIVE_TOKEN
 #error "Tambahkan TARS_LIVE_TOKEN di config.h"
@@ -196,7 +197,8 @@ static bool sendTrackRequest(
     return false;
   }
 
-  if (String((const char *)doc["mode"] | "") != "track") {
+  String responseMode = doc["mode"].as<String>();
+if (responseMode != "track") {
     Serial.println("TARS TRACK: WRONG RESPONSE MODE");
     return false;
   }
