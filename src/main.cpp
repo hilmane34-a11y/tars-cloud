@@ -69,7 +69,6 @@ uint32_t sleepPrepareAt=0;
 volatile bool pendingVisionCheck=false;
 uint32_t lastVisionEventAt=0;
 const uint32_t VISION_EVENT_COOLDOWN_MS=45000;
-SemaphoreHandle_t visionRequestMux = nullptr;
 volatile bool visionAimMoving = false;
 
 OV7670*camera=nullptr;
@@ -839,8 +838,9 @@ void processQuestion(const String&q){
   request+=" Jangan mengulang kalimat atau sapaan yang sama jika tidak diperlukan.";
   processOnlineRequest(request,vision,status,false);
 }
+
 void visionAimTask(void *parameter) {
-  VisionTrackResult target;
+  VisionTrackResult target = {};
   for (;;) {
     if (tarsMode != MODE_ONLINE || playing) {
       wheelsStop();
@@ -848,18 +848,16 @@ void visionAimTask(void *parameter) {
       vTaskDelay(pdMS_TO_TICKS(200));
       continue;
     }
-    if (xSemaphoreTake(
-          visionRequestMux,
-          pdMS_TO_TICKS(100)
-        ) != pdTRUE) {
-      vTaskDelay(pdMS_TO_TICKS(100));
-      continue;
-    }
     wheelsStop();
     visionAimMoving = false;
     bool ok = visionTrackPerson(target);
-    if (tarsMode == MODE_ONLINE && !playing &&
-        ok && target.found) {
+    // Selalu berhenti jika mode berubah atau audio dimulai.
+    if (tarsMode != MODE_ONLINE || playing) {
+      wheelsStop();
+      vTaskDelay(pdMS_TO_TICKS(200));
+      continue;
+    }
+    if (ok && target.found) {
       if (target.targetX < 135) {
         // Manusia di kiri: roda kanan maju.
         wheelsDrive(0, 65);
@@ -871,7 +869,7 @@ void visionAimTask(void *parameter) {
         visionAimMoving = true;
       }
       else {
-        // Manusia di tengah: diam dan amati.
+        // Manusia di tengah: berhenti.
         wheelsStop();
       }
     }
@@ -879,7 +877,6 @@ void visionAimTask(void *parameter) {
       // Tidak terdeteksi atau permintaan gagal.
       wheelsStop();
     }
-    xSemaphoreGive(visionRequestMux);
     vTaskDelay(pdMS_TO_TICKS(500));
   }
 }
@@ -909,7 +906,6 @@ void setup(){
   previewMux=xSemaphoreCreateMutex();
   envMux=xSemaphoreCreateMutex();
   cameraMux=xSemaphoreCreateMutex();
-  visionRequestMux = xSemaphoreCreateMutex();
 
   micOK=initMic();
 
@@ -959,7 +955,6 @@ void setup(){
 
   startCamera();
   xTaskCreatePinnedToCore(cameraTask,"TARS_EYE",4096,nullptr,2,nullptr,1);
-  xTaskCreatePinnedToCore(visionAimTask, "TARS_VisionAim", 6144, nullptr,1, nullptr, 0);
   ramDiag("READY");
   wheelsStop();
 
