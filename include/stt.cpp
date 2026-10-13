@@ -1,5 +1,6 @@
 #include "stt.h"
 #include "vision_track.h"
+
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <Arduino.h>
@@ -7,9 +8,9 @@
 #include <WebSocketsClient.h>
 #include <ArduinoJson.h>
 #include <driver/i2s.h>
-#include <LittleFS.h>
 #include <math.h>
 #include <string.h>
+
 #include "config.h"
 #include "tars_emotion.h"
 
@@ -23,805 +24,1059 @@
 #define RECORD_MIN_MS 500
 #define SILENCE_MS 800
 #define PREROLL_MS 150
+
 #define STT_CONNECT_TIMEOUT_MS 10000
 #define STT_READY_TIMEOUT_MS 8000
 #define STT_STOP_TIMEOUT_MS 6000
 
-static const size_t BUF=256;
-static const size_t RAW_SAMPLES=BUF/4;
-static const size_t PREROLL_SAMPLES=MIC_RATE*PREROLL_MS/1000;
-static const char *PENDING_PATH="/stt_pending.pcm";
-static bool pendingFSReady=false;
+static const size_t BUF = 256;
+static const size_t RAW_SAMPLES = BUF / 4;
+static const size_t PREROLL_SAMPLES =
+    MIC_RATE * PREROLL_MS / 1000;
+
+// Buffer pending diperkecil agar DRAM statis tidak overflow.
+static const size_t PENDING_SAMPLES = 512;
+
 static int32_t rawBuf[RAW_SAMPLES];
 static int16_t pcmBuf[RAW_SAMPLES];
 static int16_t preBuf[PREROLL_SAMPLES];
 static int16_t sendBuf[256];
+static int16_t pendingBuf[PENDING_SAMPLES];
 
 static WebSocketsClient sttWS;
-static bool wsStarted=false;
-static uint32_t sttRetryAt=0;
-static bool sttRetryShown=false;
-static bool sttStopped=false;
+static bool wsStarted = false;
 
-static portMUX_TYPE trackMux=portMUX_INITIALIZER_UNLOCKED;
-static bool trackPending=false;
-static bool trackActive=false;
-static bool trackResponseReady=false;
-static bool trackResultValid=false;
-static const uint8_t *trackJpeg=nullptr;
-static size_t trackJpegLength=0;
-static uint32_t trackIdCounter=0;
-static uint32_t trackCurrentId=0;
-static bool trackFound=false;
-static float trackScore=0.0f;
-static float trackCenterX=0.0f;
-static int trackTargetX=-1;
+static uint32_t sttRetryAt = 0;
+static bool sttRetryShown = false;
+static bool sttStopped = false;
+
+static portMUX_TYPE trackMux =
+    portMUX_INITIALIZER_UNLOCKED;
+
+static bool trackPending = false;
+static bool trackActive = false;
+static bool trackResponseReady = false;
+static bool trackResultValid = false;
+
+static const uint8_t *trackJpeg = nullptr;
+static size_t trackJpegLength = 0;
+
+static uint32_t trackIdCounter = 0;
+static uint32_t trackCurrentId = 0;
+
+static bool trackFound = false;
+static float trackScore = 0.0f;
+static float trackCenterX = 0.0f;
+static int trackTargetX = -1;
 
 String sttFinal;
 String sttPartial;
-bool micOK=false;
-bool sttConnected=false;
-bool sttReady=false;
-bool sttDone=false;
-bool sttError=false;
-bool sttClosing=false;
-volatile bool sttSessionActive=false;
 
-static const char *STT_HOST_LOCAL="tars-cloud-v1.hilmane34.workers.dev";
+bool micOK = false;
+
+bool sttConnected = false;
+bool sttReady = false;
+bool sttDone = false;
+bool sttError = false;
+bool sttClosing = false;
+volatile bool sttSessionActive = false;
+
+static const char *STT_HOST_LOCAL =
+    "tars-cloud-v1.hilmane34.workers.dev";
+
 extern bool wifiOK();
 extern void oledSetStatus(const String &);
 extern void oledSetListening();
 
-// Mount LittleFS satu kali saat diperlukan; tidak memformat filesystem.
-extern bool littleFSOK;
-static bool ensurePendingFS() {
-  if (!littleFSOK) {
-    Serial.println("TARS: STT PENDING FILESYSTEM NOT READY");
-    return false;
-  }
+static bool wsSendTXT(const String &message) {
+    if (!sttConnected) return false;
 
-  return true;
-}
-
-// Kirim pesan teks melalui WSS persisten.
-static bool wsSendTXT(const String &message){
-    if(!sttConnected)return false;
-    String payload=message;
+    String payload = message;
     return sttWS.sendTXT(payload);
 }
-
-// Kirim data biner melalui WSS persisten.
-static bool wsSendBIN(const uint8_t *data,size_t length){
-    if(!sttConnected||!data||!length)return false;
-    return sttWS.sendBIN(const_cast<uint8_t *>(data),length);
-}
-
-bool sttCooling(){
-    return (int32_t)(millis()-sttRetryAt)<0;
-}
-
-// Tandai permintaan DETR gagal.
-static void failTrackRequest(){
-    portENTER_CRITICAL(&trackMux);
-    if(trackActive){
-        trackPending=false;
-        trackResponseReady=true;
-        trackResultValid=false;
+static bool wsSendBIN(
+    const uint8_t *data,
+    size_t length
+) {
+    if (!sttConnected || !data || !length) {
+        return false;
     }
+
+    return sttWS.sendBIN(
+        const_cast<uint8_t *>(data),
+        length
+    );
+}
+
+bool sttCooling() {
+    return (int32_t)(millis() - sttRetryAt) < 0;
+}
+
+static void failTrackRequest() {
+    portENTER_CRITICAL(&trackMux);
+
+    if (trackActive) {
+        trackPending = false;
+        trackResponseReady = true;
+        trackResultValid = false;
+    }
+
     portEXIT_CRITICAL(&trackMux);
 }
-
-// Batalkan permintaan DETR yang sedang menunggu.
-static void cancelTrackRequest(){
+static void cancelTrackRequest() {
     portENTER_CRITICAL(&trackMux);
-    if(trackActive){
-        trackPending=false;
-        trackResponseReady=true;
-        trackResultValid=false;
-    }else{
-        trackPending=false;
-        trackJpeg=nullptr;
-        trackJpegLength=0;
+
+    if (trackActive) {
+        trackPending = false;
+        trackResponseReady = true;
+        trackResultValid = false;
+    } else {
+        trackPending = false;
+        trackJpeg = nullptr;
+        trackJpegLength = 0;
     }
+
     portEXIT_CRITICAL(&trackMux);
 }
+static void serviceTrackRequest() {
+    const uint8_t *jpeg = nullptr;
+    size_t length = 0;
+    uint32_t id = 0;
+    bool sendRequest = false;
 
-// Kirim satu permintaan DETR melalui koneksi WSS yang sama.
-static void serviceTrackRequest(){
-    const uint8_t *jpeg=nullptr;
-    size_t length=0;
-    uint32_t id=0;
-    bool sendRequest=false;
-
-    if(!sttConnected||sttSessionActive||sttClosing)return;
+    if (!sttConnected ||
+        sttSessionActive ||
+        sttClosing) {
+        return;
+    }
 
     portENTER_CRITICAL(&trackMux);
-    if(trackPending&&trackActive){
-        jpeg=trackJpeg;
-        length=trackJpegLength;
-        id=trackCurrentId;
-        trackPending=false;
-        sendRequest=true;
+
+    if (trackPending && trackActive) {
+        jpeg = trackJpeg;
+        length = trackJpegLength;
+        id = trackCurrentId;
+        trackPending = false;
+        sendRequest = true;
     }
+
     portEXIT_CRITICAL(&trackMux);
 
-    if(!sendRequest)return;
-    if(!jpeg||length==0){
+    if (!sendRequest) return;
+
+    if (!jpeg || length == 0) {
         failTrackRequest();
         return;
     }
 
     String control;
     control.reserve(48);
-    control="{\"type\":\"track_begin\",\"id\":";
-    control+=String(id);
-    control+="}";
+    control = "{\"type\":\"track_begin\",\"id\":";
+    control += String(id);
+    control += "}";
 
-    bool controlSent=wsSendTXT(control);
-    bool imageSent=false;
-    if(controlSent)imageSent=wsSendBIN(jpeg,length);
+    // Tidak ada pengiriman PCM di antara kontrol dan JPEG.
+    bool controlSent = wsSendTXT(control);
+    bool imageSent = false;
 
-    Serial.printf("TARS TRACK: ID=%lu CONTROL=%d JPEG=%d SIZE=%u\n",
-        (unsigned long)id,controlSent,imageSent,(unsigned)length);
+    if (controlSent) {
+        // JPEG dikirim tepat satu kali.
+        imageSent = wsSendBIN(jpeg, length);
+    }
 
-    if(!controlSent||!imageSent){
+    Serial.printf(
+        "TARS TRACK: ID=%lu CONTROL=%d JPEG=%d SIZE=%u\n",
+        (unsigned long)id,
+        controlSent,
+        imageSent,
+        (unsigned)length
+    );
+
+    if (!controlSent || !imageSent) {
         portENTER_CRITICAL(&trackMux);
-        if(trackActive&&trackCurrentId==id){
-            trackResponseReady=true;
-            trackResultValid=false;
+
+        if (trackActive && trackCurrentId == id) {
+            trackResponseReady = true;
+            trackResultValid = false;
         }
+
         portEXIT_CRITICAL(&trackMux);
+        return;
     }
 }
 
-// Kirim JPEG dan tunggu hasil deteksi dari server.
-bool sttTrackDetect(const uint8_t *jpeg,size_t length,
-    VisionTrackResult &result,uint32_t timeoutMs){
-    result.found=false;
-    result.score=0.0f;
-    result.centerX=0.0f;
-    result.targetX=-1;
+bool sttTrackDetect(
+    const uint8_t *jpeg,
+    size_t length,
+    VisionTrackResult &result,
+    uint32_t timeoutMs
+) {
+    result.found = false;
+    result.score = 0.0f;
+    result.centerX = 0.0f;
+    result.targetX = -1;
 
-    if(!jpeg||length==0||!sttConnected||
-       sttSessionActive||sttClosing)return false;
+    if (!jpeg ||
+        length == 0 ||
+        !sttConnected ||
+        sttSessionActive ||
+        sttClosing) {
+        return false;
+    }
 
     uint32_t id;
+
     portENTER_CRITICAL(&trackMux);
-    if(trackActive||trackPending){
+
+    if (trackActive || trackPending) {
         portEXIT_CRITICAL(&trackMux);
         return false;
     }
 
-    id=++trackIdCounter;
-    if(id==0)id=++trackIdCounter;
-    trackCurrentId=id;
-    trackJpeg=jpeg;
-    trackJpegLength=length;
-    trackFound=false;
-    trackScore=0.0f;
-    trackCenterX=0.0f;
-    trackTargetX=-1;
-    trackResultValid=false;
-    trackResponseReady=false;
-    trackActive=true;
-    trackPending=true;
+    id = ++trackIdCounter;
+    if (id == 0) id = ++trackIdCounter;
+
+    trackCurrentId = id;
+    trackJpeg = jpeg;
+    trackJpegLength = length;
+
+    trackFound = false;
+    trackScore = 0.0f;
+    trackCenterX = 0.0f;
+    trackTargetX = -1;
+
+    trackResultValid = false;
+    trackResponseReady = false;
+    trackActive = true;
+    trackPending = true;
+
     portEXIT_CRITICAL(&trackMux);
 
-    Serial.printf("TARS TRACK: REQUEST ID=%lu SIZE=%u\n",
-        (unsigned long)id,(unsigned)length);
+    Serial.printf(
+        "TARS TRACK: REQUEST ID=%lu SIZE=%u\n",
+        (unsigned long)id,
+        (unsigned)length
+    );
 
-    uint32_t started=millis();
-    while(millis()-started<timeoutMs){
-        bool ready=false;
-        bool valid=false;
+    uint32_t started = millis();
+
+    while (millis() - started < timeoutMs) {
+        bool ready = false;
+        bool valid = false;
 
         portENTER_CRITICAL(&trackMux);
-        ready=trackResponseReady;
-        if(ready&&trackCurrentId==id){
-            valid=trackResultValid;
-            if(valid){
-                result.found=trackFound;
-                result.score=trackScore;
-                result.centerX=trackCenterX;
-                result.targetX=trackTargetX;
+
+        ready = trackResponseReady;
+
+        if (ready && trackCurrentId == id) {
+            valid = trackResultValid;
+
+            if (valid) {
+                result.found = trackFound;
+                result.score = trackScore;
+                result.centerX = trackCenterX;
+                result.targetX = trackTargetX;
             }
-            trackPending=false;
-            trackActive=false;
-            trackResponseReady=false;
-            trackResultValid=false;
-            trackJpeg=nullptr;
-            trackJpegLength=0;
+
+            trackPending = false;
+            trackActive = false;
+            trackResponseReady = false;
+            trackResultValid = false;
+            trackJpeg = nullptr;
+            trackJpegLength = 0;
         }
+
         portEXIT_CRITICAL(&trackMux);
 
-        if(ready){
-            if(valid){
-                Serial.printf("TARS TRACK: RESULT FOUND=%d X=%d SCORE=%.2f\n",
-                    result.found,result.targetX,result.score);
-            }else{
-                Serial.println("TARS TRACK: REQUEST FAILED");
+        if (ready) {
+            if (valid) {
+                Serial.printf(
+                    "TARS TRACK: RESULT FOUND=%d X=%d SCORE=%.2f\n",
+                    result.found,
+                    result.targetX,
+                    result.score
+                );
+            } else {
+                Serial.println(
+                    "TARS TRACK: REQUEST FAILED"
+                );
             }
+
             return valid;
         }
 
-        if(!sttConnected||sttSessionActive||sttClosing)break;
+        if (!sttConnected ||
+            sttSessionActive ||
+            sttClosing) {
+            break;
+        }
+
         vTaskDelay(pdMS_TO_TICKS(10));
     }
 
     portENTER_CRITICAL(&trackMux);
-    if(trackCurrentId==id){
-        trackPending=false;
-        trackActive=false;
-        trackResponseReady=false;
-        trackResultValid=false;
-        trackJpeg=nullptr;
-        trackJpegLength=0;
+
+    if (trackCurrentId == id) {
+        trackPending = false;
+        trackActive = false;
+        trackResponseReady = false;
+        trackResultValid = false;
+        trackJpeg = nullptr;
+        trackJpegLength = 0;
     }
+
     portEXIT_CRITICAL(&trackMux);
 
-    Serial.printf("TARS TRACK: TIMEOUT ID=%lu\n",(unsigned long)id);
+    Serial.printf(
+        "TARS TRACK: TIMEOUT ID=%lu\n",
+        (unsigned long)id
+    );
+
     return false;
 }
 
-// Tangani koneksi WSS dan pesan STT/DETR dari server.
-static void sttEvent(WStype_t type,uint8_t *payload,size_t length){
-    if(type==WStype_CONNECTED){
-        sttConnected=true;
-        Serial.println("TARS: PERSISTENT WSS CONNECTED");
+static void sttEvent(
+    WStype_t type,
+    uint8_t *payload,
+    size_t length
+) {
+    if (type == WStype_CONNECTED) {
+        sttConnected = true;
+
+        Serial.println(
+            "TARS: PERSISTENT WSS CONNECTED"
+        );
+
         oledSetStatus("WSS CONNECTED");
         return;
     }
 
-    if(type==WStype_DISCONNECTED){
-        bool wasActive=sttSessionActive;
-        sttConnected=false;
-        sttReady=false;
-        sttSessionActive=false;
-        sttStopped=true;
-        if(!sttClosing&&wasActive)sttError=true;
+    if (type == WStype_DISCONNECTED) {
+        bool wasActive = sttSessionActive;
+
+        sttConnected = false;
+        sttReady = false;
+        sttSessionActive = false;
+        sttStopped = true;
+
+        if (!sttClosing && wasActive) {
+            sttError = true;
+        }
+
         failTrackRequest();
-        Serial.println(sttClosing?
-            "TARS: WSS DISCONNECTED (NORMAL)":
-            "TARS: WSS DISCONNECTED");
+
+        Serial.println(
+            sttClosing
+                ? "TARS: WSS DISCONNECTED (NORMAL)"
+                : "TARS: WSS DISCONNECTED"
+        );
+
         return;
     }
 
-    if(type==WStype_ERROR){
-        if(sttSessionActive&&!sttClosing)sttError=true;
+    if (type == WStype_ERROR) {
+        if (sttSessionActive && !sttClosing) {
+            sttError = true;
+        }
+
         Serial.println("TARS: WSS ERROR");
         return;
     }
 
-    if(type!=WStype_TEXT||!payload||!length)return;
-
-    String msg;
-    if(!msg.reserve(length+1)){
-        Serial.println("TARS: STT JSON ALLOC FAILED");
-        if(sttSessionActive)sttError=true;
+    if (type != WStype_TEXT ||
+        !payload ||
+        !length) {
         return;
     }
-    for(size_t i=0;i<length;i++)msg+=(char)payload[i];
+
+    String msg;
+    if (!msg.reserve(length + 1)) {
+        Serial.println("TARS: STT JSON ALLOC FAILED");
+        if (sttSessionActive) sttError = true;
+        return;
+    }
+
+    for (size_t i = 0; i < length; i++) {
+        msg += (char)payload[i];
+    }
 
     JsonDocument j;
-    if(deserializeJson(j,msg)){
+
+    if (deserializeJson(j, msg)) {
         Serial.println("TARS: STT JSON PARSE FAILED");
         return;
     }
 
-    const char *t=j["type"]|"";
-    if(strcmp(t,"pong")==0)return;
+    const char *t = j["type"] | "";
 
-    if(strcmp(t,"track_result")==0){
-        uint32_t id=j["id"]|0U;
-        bool found=j["found"]|false;
-        float score=j["score"]|0.0f;
-        float centerX=j["centerX"]|0.0f;
-        int targetX=j["targetX"]|-1;
+    if (strcmp(t, "pong") == 0) {
+        return;
+    }
 
-        if(found&&(targetX<0||targetX>319||score<0.60f||score>1.0f)){
-            found=false;
-            targetX=-1;
+    if (strcmp(t, "track_result") == 0) {
+        uint32_t id = j["id"] | 0U;
+        bool found = j["found"] | false;
+        float score = j["score"] | 0.0f;
+        float centerX = j["centerX"] | 0.0f;
+        int targetX = j["targetX"] | -1;
+
+        if (found &&
+            (targetX < 0 ||
+             targetX > 319 ||
+             score < 0.60f ||
+             score > 1.0f)) {
+            found = false;
+            targetX = -1;
         }
-        if(centerX<0.0f||centerX>1.0f)centerX=0.0f;
+
+        if (centerX < 0.0f || centerX > 1.0f) {
+            centerX = 0.0f;
+        }
 
         portENTER_CRITICAL(&trackMux);
-        if(trackActive&&id==trackCurrentId){
-            trackFound=found;
-            trackScore=score;
-            trackCenterX=centerX;
-            trackTargetX=found?targetX:-1;
-            trackResultValid=true;
-            trackResponseReady=true;
+
+        if (trackActive && id == trackCurrentId) {
+            trackFound = found;
+            trackScore = score;
+            trackCenterX = centerX;
+            trackTargetX = found ? targetX : -1;
+            trackResultValid = true;
+            trackResponseReady = true;
         }
+
         portEXIT_CRITICAL(&trackMux);
         return;
     }
 
-    if(strcmp(t,"ready")==0){
-        sttReady=true;
-        sttError=false;
-        sttRetryShown=false;
+    if (strcmp(t, "ready") == 0) {
+        sttReady = true;
+        sttError = false;
+        sttRetryShown = false;
+
         Serial.println("TARS: STT SESSION READY");
         oledSetStatus("STT READY");
         return;
     }
 
-    if(strcmp(t,"partial")==0){
-        sttPartial=j["text"]|"";
+    if (strcmp(t, "partial") == 0) {
+        sttPartial = j["text"] | "";
         sttPartial.trim();
-        if(sttPartial.length())
-            Serial.printf("TARS: STT PARTIAL = %s\n",sttPartial.c_str());
+
+        if (sttPartial.length()) {
+            Serial.printf(
+                "TARS: STT PARTIAL = %s\n",
+                sttPartial.c_str()
+            );
+        }
+
         return;
     }
 
-    if(strcmp(t,"final")==0){
-        sttFinal=j["text"]|"";
+    if (strcmp(t, "final") == 0) {
+        sttFinal = j["text"] | "";
         sttFinal.trim();
-        sttDone=true;
-        Serial.printf("TARS: YOU SAID = %s\n",sttFinal.c_str());
+        sttDone = true;
+
+        Serial.printf(
+            "TARS: YOU SAID = %s\n",
+            sttFinal.c_str()
+        );
+
         return;
     }
 
-    if(strcmp(t,"stt_stopped")==0){
-        sttStopped=true;
-        sttReady=false;
-        sttSessionActive=false;
+    if (strcmp(t, "stt_stopped") == 0) {
+        sttStopped = true;
+        sttReady = false;
+        sttSessionActive = false;
+
         Serial.println("TARS: STT SESSION STOPPED");
         return;
     }
 
-    if(strcmp(t,"error")==0){
-        const char *e=j["error"]|"unknown";
-        bool trackBusy=strstr(e,"DETR_BUSY")!=nullptr||
-                       strstr(e,"STT_OR_DETR_BUSY")!=nullptr;
+    if (strcmp(t, "error") == 0) {
+        const char *e = j["error"] | "unknown";
 
-        if(trackBusy){
-            Serial.printf("TARS TRACK: BUSY, WILL RETRY (%s)\n",e);
+        // DETR yang ditolak karena STT aktif bukan kegagalan STT.
+        bool trackBusy =
+            strstr(e, "DETR_BUSY") != nullptr ||
+            strstr(e, "STT_OR_DETR_BUSY") != nullptr;
+
+        if (trackBusy) {
+            Serial.printf(
+                "TARS TRACK: BUSY, WILL RETRY (%s)\n",
+                e
+            );
+
             failTrackRequest();
             return;
         }
 
-        sttError=true;
-        sttDone=true;
-        Serial.printf("TARS: STT ERROR = %s\n",e);
+        sttError = true;
+        sttDone = true;
+
+        Serial.printf("TARS: STT ERROR = %s\n", e);
         oledSetStatus("STT ERROR");
         failTrackRequest();
         return;
     }
 }
 
-// Jalankan WSS persisten dan layani antrean DETR.
-void sttService(){
-    if(!wsStarted&&WiFi.status()==WL_CONNECTED){
+void sttService() {
+    if (!wsStarted && WiFi.status() == WL_CONNECTED) {
         sttWS.onEvent(sttEvent);
         sttWS.setReconnectInterval(5000);
-        sttWS.enableHeartbeat(15000,5000,2);
+        sttWS.enableHeartbeat(15000, 5000, 2);
+
         Serial.println("TARS: START PERSISTENT WSS");
-        sttWS.beginSSL(STT_HOST_LOCAL,443,"/stt");
-        wsStarted=true;
+
+        sttWS.beginSSL(
+            STT_HOST_LOCAL,
+            443,
+            "/stt"
+        );
+
+        wsStarted = true;
     }
-    if(wsStarted)sttWS.loop();
+
+    if (wsStarted) {
+        sttWS.loop();
+    }
+
     serviceTrackRequest();
 }
 
-// Akhiri sesi STT tanpa memutus WSS persisten.
-void closeSTT(uint32_t cooldown){
-    sttClosing=true;
+void closeSTT(uint32_t cooldown) {
+    sttClosing = true;
+
     cancelTrackRequest();
 
-    if(sttConnected&&sttSessionActive){
+    if (sttConnected && sttSessionActive) {
         JsonDocument j;
-        j["type"]="end";
+        j["type"] = "end";
+
         String message;
-        serializeJson(j,message);
+        serializeJson(j, message);
         wsSendTXT(message);
     }
 
-    sttSessionActive=false;
-    sttReady=false;
-    sttStopped=true;
-    sttRetryAt=millis()+cooldown;
-    sttRetryShown=false;
-    sttClosing=false;
+    sttSessionActive = false;
+    sttReady = false;
+    sttStopped = true;
+
+    sttRetryAt = millis() + cooldown;
+    sttRetryShown = false;
+
+    // Jangan disconnect WSS di sini.
+    sttClosing = false;
 }
 
-// Pastikan Wi-Fi, mikrofon, cooldown, dan WSS siap.
-bool startSTT(bool offline){
+bool startSTT(bool offline) {
     (void)offline;
-    if(!wifiOK()){
-        Serial.printf("TARS: STT BLOCK WIFI status=%d\n",WiFi.status());
+
+    if (!wifiOK()) {
+        Serial.printf(
+            "TARS: STT BLOCK WIFI status=%d\n",
+            WiFi.status()
+        );
         return false;
     }
-    if(!micOK){
+
+    if (!micOK) {
         Serial.println("TARS: STT BLOCK MIC=false");
         return false;
     }
-    if(sttCooling()){
-        if(!sttRetryShown){
+
+    if (sttCooling()) {
+        if (!sttRetryShown) {
             Serial.println("TARS: STT RETRY COOLDOWN");
-            sttRetryShown=true;
+            sttRetryShown = true;
         }
+
         return false;
     }
 
-    uint32_t started=millis();
-    while(!sttConnected&&millis()-started<STT_CONNECT_TIMEOUT_MS){
+    uint32_t started = millis();
+
+    while (!sttConnected &&
+           millis() - started < STT_CONNECT_TIMEOUT_MS) {
         sttService();
         delay(2);
         yield();
-        if(WiFi.status()!=WL_CONNECTED)break;
+
+        if (WiFi.status() != WL_CONNECTED) {
+            break;
+        }
     }
 
-    if(!sttConnected){
+    if (!sttConnected) {
         Serial.println("TARS: WSS CONNECT TIMEOUT");
-        sttRetryAt=millis()+STT_ERROR_COOLDOWN;
-        sttRetryShown=false;
+
+        sttRetryAt = millis() + STT_ERROR_COOLDOWN;
+        sttRetryShown = false;
         return false;
     }
 
-    sttFinal="";
-    sttPartial="";
-    sttDone=false;
-    sttError=false;
-    sttReady=false;
-    sttStopped=false;
-    sttSessionActive=false;
-    sttRetryShown=false;
+    sttFinal = "";
+    sttPartial = "";
+    sttDone = false;
+    sttError = false;
+    sttReady = false;
+    sttStopped = false;
+    sttSessionActive = false;
+    sttRetryShown = false;
+
     Serial.println("TARS: WSS READY FOR STT/DETR");
+
     return true;
 }
 
-// Kirim akhir ucapan dan tunggu hasil final STT.
-String stopSTT(uint32_t samples,bool offline){
+String stopSTT(uint32_t samples, bool offline) {
     (void)offline;
-    if(!sttConnected||!sttSessionActive)return sttFinal;
+
+    if (!sttConnected || !sttSessionActive) {
+        return sttFinal;
+    }
 
     JsonDocument j;
-    j["type"]="end";
-    j["timestamp"]=(double)samples/MIC_RATE;
+    j["type"] = "end";
+    j["timestamp"] = (double)samples / MIC_RATE;
+
     String msg;
 
-    if(serializeJson(j,msg)==0){
+    if (serializeJson(j, msg) == 0) {
         Serial.println("TARS: STT END JSON FAILED");
         closeSTT(STT_ERROR_COOLDOWN);
         return "";
     }
-    if(!wsSendTXT(msg)){
+
+    if (!wsSendTXT(msg)) {
         Serial.println("TARS: STT END SEND FAILED");
         closeSTT(STT_ERROR_COOLDOWN);
         return "";
     }
 
-    uint32_t started=millis();
-    while(!sttStopped&&!sttError&&millis()-started<STT_STOP_TIMEOUT_MS){
+    uint32_t started = millis();
+
+    while (!sttStopped &&
+           !sttError &&
+           millis() - started < STT_STOP_TIMEOUT_MS) {
         sttService();
         delay(2);
         yield();
     }
 
-    String result=sttFinal;
-    sttSessionActive=false;
-    sttReady=false;
-    sttRetryAt=millis()+(sttError?STT_ERROR_COOLDOWN:STT_NORMAL_COOLDOWN);
-    sttRetryShown=false;
+    String result = sttFinal;
+
+    sttSessionActive = false;
+    sttReady = false;
+
+    if (sttError) {
+        sttRetryAt = millis() + STT_ERROR_COOLDOWN;
+    } else {
+        sttRetryAt = millis() + STT_NORMAL_COOLDOWN;
+    }
+
+    sttRetryShown = false;
+
     return result;
 }
 
-// Kirim PCM 16-bit sebagai data biner.
-static bool sendPCM(const int16_t *data,size_t count){
-    if(!data||count==0)return true;
-    return wsSendBIN(reinterpret_cast<const uint8_t *>(data),
-                     count*sizeof(int16_t));
+static bool sendPCM(
+    const int16_t *data,
+    size_t count
+) {
+    if (!data || count == 0) return true;
+
+    return wsSendBIN(
+        reinterpret_cast<const uint8_t *>(data),
+        count * sizeof(int16_t)
+    );
 }
 
-// Kirim PCM dalam potongan kecil.
-static bool sendSamples(const int16_t *data,size_t count){
-    size_t offset=0;
-    while(offset<count){
-        size_t n=count-offset;
-        if(n>256)n=256;
-        if(!sendPCM(data+offset,n))return false;
-        offset+=n;
-    }
-    return true;
-}
+static bool sendSamples(
+    const int16_t *data,
+    size_t count
+) {
+    size_t offset = 0;
 
-// Tulis audio pending ke LittleFS dalam blok kecil untuk mengurangi operasi flash.
-static bool writePending(File &file,const int16_t *data,size_t count){
-    if(!file||(!data&&count))return false;
-    size_t bytes=count*sizeof(int16_t);
-    const uint8_t *src=reinterpret_cast<const uint8_t *>(data);
-    size_t written=0;
+    while (offset < count) {
+        size_t n = count - offset;
 
-    while(written<bytes){
-        size_t n=file.write(src+written,bytes-written);
-        if(n==0){
-            Serial.println("TARS: LITTLEFS WRITE FAILED");
+        if (n > 256) n = 256;
+
+        if (!sendPCM(data + offset, n)) {
             return false;
         }
-        written+=n;
+
+        offset += n;
     }
+
     return true;
 }
 
-// Kumpulkan audio ke sendBuf sebelum menulis ke LittleFS.
-static bool appendPending(File &file,const int16_t *data,size_t count,size_t &staged){
-    for(size_t i=0;i<count;i++){
-        sendBuf[staged++]=data[i];
-        if(staged==256){
-            if(!writePending(file,sendBuf,staged))return false;
-            staged=0;
+static void appendPending(
+    size_t &position,
+    size_t &stored,
+    const int16_t *data,
+    size_t count
+) {
+    for (size_t i = 0; i < count; i++) {
+        pendingBuf[position] = data[i];
+
+        position++;
+        if (position >= PENDING_SAMPLES) {
+            position = 0;
+        }
+
+        if (stored < PENDING_SAMPLES) {
+            stored++;
         }
     }
-    return true;
 }
 
-// Tulis sisa audio yang belum memenuhi satu blok.
-static bool flushPendingWrite(File &file,size_t &staged){
-    if(!staged)return true;
-    bool ok=writePending(file,sendBuf,staged);
-    staged=0;
-    return ok;
-}
+static bool flushPending(
+    size_t position,
+    size_t stored
+) {
+    if (!stored) return true;
 
-// Baca file pending dan kirim PCM setelah sesi STT siap.
-static bool flushPending(File &file){
-    if(!file)return false;
-    while(file.available()){
-        size_t bytes=file.read(reinterpret_cast<uint8_t *>(sendBuf),sizeof(sendBuf));
-        if(bytes==0)break;
-        if(bytes%sizeof(int16_t)!=0){
-            Serial.println("TARS: PENDING AUDIO ALIGNMENT ERROR");
+    size_t start =
+        stored == PENDING_SAMPLES ? position : 0;
+
+    size_t sent = 0;
+
+    while (sent < stored) {
+        size_t n = stored - sent;
+
+        if (n > 256) n = 256;
+
+        for (size_t i = 0; i < n; i++) {
+            sendBuf[i] =
+                pendingBuf[(start + sent + i) %
+                           PENDING_SAMPLES];
+        }
+
+        if (!sendPCM(sendBuf, n)) {
             return false;
         }
-        if(!sendPCM(sendBuf,bytes/sizeof(int16_t)))return false;
+
+        sent += n;
     }
+
     return true;
 }
 
-// Baca mikrofon I2S, konversi PCM, dan hitung peak serta RMS.
-static bool readMic(size_t &count,int32_t &peak,uint32_t &rms){
-    size_t bytes=0;
-    if(i2s_read(MIC_PORT,rawBuf,sizeof(rawBuf),&bytes,pdMS_TO_TICKS(30))!=ESP_OK){
-        count=0;
+static bool readMic(
+    size_t &count,
+    int32_t &peak,
+    uint32_t &rms
+) {
+    size_t bytes = 0;
+
+    if (i2s_read(
+            MIC_PORT,
+            rawBuf,
+            sizeof(rawBuf),
+            &bytes,
+            pdMS_TO_TICKS(30)
+        ) != ESP_OK) {
+        count = 0;
         return false;
     }
 
-    count=bytes/sizeof(int32_t);
-    peak=0;
-    uint64_t sum=0;
+    count = bytes / sizeof(int32_t);
+    peak = 0;
 
-    for(size_t i=0;i<count;i++){
-        int32_t v=constrain(rawBuf[i]>>16,-32768,32767);
-        pcmBuf[i]=(int16_t)v;
-        int32_t a=abs(v);
-        if(a>peak)peak=a;
-        sum+=(uint64_t)a*a;
+    uint64_t sum = 0;
+
+    for (size_t i = 0; i < count; i++) {
+        int32_t v = constrain(
+            rawBuf[i] >> 16,
+            -32768,
+            32767
+        );
+
+        pcmBuf[i] = (int16_t)v;
+
+        int32_t a = abs(v);
+
+        if (a > peak) peak = a;
+
+        sum += (uint64_t)a * a;
     }
 
-    rms=count?(uint32_t)sqrt((double)sum/count):0;
+    rms = count
+        ? (uint32_t)sqrt((double)sum / count)
+        : 0;
+
     return true;
 }
 
-// Rekam audio, deteksi ucapan, buffer ke LittleFS saat menunggu ready,
-// lalu kirim preroll, audio pending, dan audio realtime secara berurutan.
-String recordSTT(bool offline){
-    if(!startSTT(offline))return "";
+String recordSTT(bool offline) {
+    if (!startSTT(offline)) {
+        return "";
+    }
 
-    if(offline)oledSetStatus("READY");
-    else oledSetListening();
+    if (offline) {
+        oledSetStatus("READY");
+    } else {
+        oledSetListening();
+    }
 
-    size_t prePos=0;
-    size_t preCount=0;
-    uint32_t voiceStart=0;
-    uint32_t lastVoice=0;
-    uint32_t samples=0;
-    uint32_t listenStart=millis();
-    bool voice=false;
+    size_t prePos = 0;
+    size_t preCount = 0;
 
-    for(;;){
+    uint32_t voiceStart = 0;
+    uint32_t lastVoice = 0;
+    uint32_t samples = 0;
+    uint32_t listenStart = millis();
+
+    bool voice = false;
+
+    for (;;) {
         sttService();
-        if(sttError)break;
 
-        size_t count=0;
-        int32_t peak=0;
-        uint32_t rms=0;
-        if(!readMic(count,peak,rms)||count==0)continue;
+        if (sttError) break;
 
-        if(!voice){
-            if(!offline&&millis()-listenStart>=STT_IDLE_TIMEOUT_MS){
-                Serial.println("TARS: STT IDLE TIMEOUT");
-                sttRetryAt=millis()+STT_NORMAL_COOLDOWN;
+        size_t count = 0;
+        int32_t peak = 0;
+        uint32_t rms = 0;
+
+        if (!readMic(count, peak, rms) || count == 0) {
+            continue;
+        }
+
+        if (!voice) {
+            if (!offline &&
+                millis() - listenStart >=
+                    STT_IDLE_TIMEOUT_MS) {
+                Serial.println(
+                    "TARS: STT IDLE TIMEOUT"
+                );
+
+                sttRetryAt =
+                    millis() + STT_NORMAL_COOLDOWN;
+
                 return "";
             }
 
-            for(size_t i=0;i<count;i++){
-                preBuf[prePos]=pcmBuf[i];
+            for (size_t i = 0; i < count; i++) {
+                preBuf[prePos] = pcmBuf[i];
+
                 prePos++;
-                if(prePos>=PREROLL_SAMPLES)prePos=0;
-                if(preCount<PREROLL_SAMPLES)preCount++;
+                if (prePos >= PREROLL_SAMPLES) {
+                    prePos = 0;
+                }
+
+                if (preCount < PREROLL_SAMPLES) {
+                    preCount++;
+                }
             }
 
-            if(peak>=MIC_THRESHOLD||rms>=3000){
-                voice=true;
-                voiceStart=millis();
-                lastVoice=voiceStart;
-                sttSessionActive=true;
-                sttReady=false;
-                sttDone=false;
-                sttError=false;
-                sttStopped=false;
+            if (peak >= MIC_THRESHOLD || rms >= 3000) {
+                voice = true;
+                voiceStart = millis();
+                lastVoice = voiceStart;
+
+                sttSessionActive = true;
+                sttReady = false;
+                sttDone = false;
+                sttError = false;
+                sttStopped = false;
 
                 JsonDocument startMessage;
-                startMessage["type"]="stt_start";
+                startMessage["type"] = "stt_start";
+
                 String startJSON;
-                serializeJson(startMessage,startJSON);
+                serializeJson(startMessage, startJSON);
 
-                if(!wsSendTXT(startJSON)){
-                    Serial.println("TARS: STT START SEND FAILED");
+                if (!wsSendTXT(startJSON)) {
+                    Serial.println(
+                        "TARS: STT START SEND FAILED"
+                    );
+
                     closeSTT(STT_ERROR_COOLDOWN);
                     return "";
                 }
 
-                tarsEmotionSpeechPeak((uint16_t)(peak>32767?32767:peak),true);
-                Serial.printf("TARS: %s VOICE PEAK=%ld RMS=%lu\n",
-                    offline?"OFFLINE":"ONLINE",(long)peak,(unsigned long)rms);
+                tarsEmotionSpeechPeak(
+                    (uint16_t)(
+                        peak > 32767 ? 32767 : peak
+                    ),
+                    true
+                );
 
-                // Siapkan file sementara tanpa buffer audio besar di DRAM.
-                if(!ensurePendingFS()){
-                    closeSTT(STT_ERROR_COOLDOWN);
-                    return "";
-                }
+                Serial.printf(
+                    "TARS: %s VOICE PEAK=%ld RMS=%lu\n",
+                    offline ? "OFFLINE" : "ONLINE",
+                    (long)peak,
+                    (unsigned long)rms
+                );
 
-                LittleFS.remove(PENDING_PATH);
-                File pendingFile=LittleFS.open(PENDING_PATH,"w");
-                if(!pendingFile){
-                    Serial.println("TARS: PENDING FILE OPEN FAILED");
-                    closeSTT(STT_ERROR_COOLDOWN);
-                    return "";
-                }
+                // Tunggu upstream siap sambil tetap menangkap
+                // audio agar awal ucapan tidak langsung hilang.
+                size_t pendingPosition = 0;
+                size_t pendingCount = 0;
 
-                size_t staged=0;
-                bool pendingOK=true;
-                uint32_t waitStart=millis();
+                uint32_t waitStart = millis();
 
-                // Tangkap audio sambil menunggu server mengirim ready.
-                while(!sttReady&&!sttError&&
-                      millis()-waitStart<STT_READY_TIMEOUT_MS){
+                while (!sttReady &&
+                       !sttError &&
+                       millis() - waitStart <
+                           STT_READY_TIMEOUT_MS) {
                     sttService();
 
-                    size_t pendingRead=0;
-                    int32_t pendingPeak=0;
-                    uint32_t pendingRms=0;
+                    size_t pendingRead = 0;
+                    int32_t pendingPeak = 0;
+                    uint32_t pendingRms = 0;
 
-                    if(readMic(pendingRead,pendingPeak,pendingRms)&&pendingRead){
-                        if(!appendPending(pendingFile,pcmBuf,pendingRead,staged)){
-                            pendingOK=false;
-                            break;
+                    if (readMic(
+                            pendingRead,
+                            pendingPeak,
+                            pendingRms
+                        ) && pendingRead) {
+                        appendPending(
+                            pendingPosition,
+                            pendingCount,
+                            pcmBuf,
+                            pendingRead
+                        );
+
+                        if (pendingPeak >= MIC_SILENCE ||
+                            pendingRms >= 1800) {
+                            lastVoice = millis();
                         }
-                        if(pendingPeak>=MIC_SILENCE||pendingRms>=1800)
-                            lastVoice=millis();
                     }
+
                     delay(1);
                     yield();
                 }
 
-                // Pastikan seluruh audio tertulis sebelum file ditutup.
-                if(pendingOK&&!flushPendingWrite(pendingFile,staged))
-                    pendingOK=false;
-                pendingFile.flush();
-                pendingFile.close();
+                if (!sttReady || sttError) {
+                    Serial.println(
+                        "TARS: STT SESSION READY TIMEOUT"
+                    );
 
-                if(!pendingOK||!sttReady||sttError){
-                    Serial.println(pendingOK?
-                        "TARS: STT SESSION READY TIMEOUT":
-                        "TARS: PENDING AUDIO WRITE FAILED");
-                    LittleFS.remove(PENDING_PATH);
                     closeSTT(STT_ERROR_COOLDOWN);
                     return "";
                 }
 
-                // Buka ulang file dalam mode baca setelah penulisan selesai.
-                File pendingReadFile=LittleFS.open(PENDING_PATH,"r");
-                if(!pendingReadFile){
-                    Serial.println("TARS: PENDING FILE READ OPEN FAILED");
-                    LittleFS.remove(PENDING_PATH);
-                    closeSTT(STT_ERROR_COOLDOWN);
-                    return "";
-                }
+                // Kirim preroll dalam urutan waktu.
+                size_t preStart =
+                    preCount == PREROLL_SAMPLES
+                        ? prePos
+                        : 0;
 
-                size_t pendingBytes=pendingReadFile.size();
-                if(pendingBytes%sizeof(int16_t)!=0){
-                    Serial.println("TARS: INVALID PENDING FILE SIZE");
-                    pendingReadFile.close();
-                    LittleFS.remove(PENDING_PATH);
-                    closeSTT(STT_ERROR_COOLDOWN);
-                    return "";
-                }
-                size_t pendingSamples=pendingBytes/sizeof(int16_t);
+                for (size_t i = 0; i < preCount; ) {
+                    size_t n = preCount - i;
+                    if (n > 256) n = 256;
 
-                // Kirim preroll 150 ms lebih dahulu, dalam urutan waktu.
-                size_t preStart=preCount==PREROLL_SAMPLES?prePos:0;
-                for(size_t i=0;i<preCount;){
-                    size_t n=preCount-i;
-                    if(n>256)n=256;
-                    for(size_t k=0;k<n;k++)
-                        sendBuf[k]=preBuf[(preStart+i+k)%PREROLL_SAMPLES];
-                    if(!sendPCM(sendBuf,n)){
-                        sttError=true;
+                    for (size_t k = 0; k < n; k++) {
+                        sendBuf[k] =
+                            preBuf[
+                                (preStart + i + k) %
+                                PREROLL_SAMPLES
+                            ];
+                    }
+
+                    if (!sendPCM(sendBuf, n)) {
+                        sttError = true;
                         break;
                     }
-                    i+=n;
+
+                    i += n;
                 }
 
-                if(sttError){
-                    pendingReadFile.close();
-                    LittleFS.remove(PENDING_PATH);
+                if (sttError) break;
+
+                samples += preCount;
+
+                // Kirim audio yang terkumpul selama menunggu ready.
+                if (!flushPending(
+                        pendingPosition,
+                        pendingCount
+                    )) {
+                    sttError = true;
                     break;
                 }
-                samples+=preCount;
 
-                // Kirim audio pending setelah preroll.
-                if(!flushPending(pendingReadFile))sttError=true;
-                else samples+=pendingSamples;
+                samples += pendingCount;
 
-                pendingReadFile.close();
-                LittleFS.remove(PENDING_PATH);
-                if(sttError)break;
-
-                // Lanjutkan pengiriman audio realtime sampai jeda ucapan.
-                while(!sttError){
+                // Lanjutkan rekaman realtime sampai jeda ucapan.
+                while (!sttError) {
                     sttService();
-                    if(sttError)break;
 
-                    size_t liveCount=0;
-                    int32_t livePeak=0;
-                    uint32_t liveRms=0;
-                    if(!readMic(liveCount,livePeak,liveRms)||liveCount==0)
+                    if (sttError) break;
+
+                    size_t liveCount = 0;
+                    int32_t livePeak = 0;
+                    uint32_t liveRms = 0;
+
+                    if (!readMic(
+                            liveCount,
+                            livePeak,
+                            liveRms
+                        ) || liveCount == 0) {
                         continue;
+                    }
 
-                    if(!sendPCM(pcmBuf,liveCount)){
-                        Serial.println("TARS: STT PCM SEND FAILED");
-                        sttError=true;
+                    if (!sendPCM(pcmBuf, liveCount)) {
+                        Serial.println(
+                            "TARS: STT PCM SEND FAILED"
+                        );
+
+                        sttError = true;
                         break;
                     }
 
-                    samples+=liveCount;
-                    if(livePeak>=MIC_SILENCE||liveRms>=1800)
-                        lastVoice=millis();
+                    samples += liveCount;
 
-                    if(millis()-voiceStart>=RECORD_MIN_MS&&
-                       millis()-lastVoice>=SILENCE_MS)break;
+                    if (livePeak >= MIC_SILENCE ||
+                        liveRms >= 1800) {
+                        lastVoice = millis();
+                    }
+
+                    if (millis() - voiceStart >=
+                            RECORD_MIN_MS &&
+                        millis() - lastVoice >= SILENCE_MS) {
+                        break;
+                    }
+
                     yield();
                 }
+
                 break;
             }
         }
+
         yield();
     }
 
-    if(!voice||sttError){
-        if(sttError){
-            LittleFS.remove(PENDING_PATH);
+    if (!voice || sttError) {
+        if (sttError) {
             closeSTT(STT_ERROR_COOLDOWN);
-        }else{
-            sttRetryAt=millis()+STT_NORMAL_COOLDOWN;
-            Serial.println(offline?
-                "TARS: OFFLINE MIC AUDIO TOO LOW":
-                "TARS: MIC AUDIO TOO LOW");
+        } else {
+            sttRetryAt =
+                millis() + STT_NORMAL_COOLDOWN;
+
+            Serial.println(
+                offline
+                    ? "TARS: OFFLINE MIC AUDIO TOO LOW"
+                    : "TARS: MIC AUDIO TOO LOW"
+            );
         }
+
         return "";
     }
 
-    return stopSTT(samples,offline);
+    return stopSTT(samples, offline);
 }
 
-// Rekam STT mode online.
-String recordRealtime(){
+String recordRealtime() {
     return recordSTT(false);
 }
 
-// Rekam STT mode offline.
-String recordOffline(){
+String recordOffline() {
     return recordSTT(true);
 }
