@@ -1,6 +1,8 @@
 #pragma once
 #include <Arduino.h>
 
+struct VisionTrackResult;
+
 constexpr uint32_t STT_NORMAL_COOLDOWN = 1000;
 constexpr uint32_t STT_ERROR_COOLDOWN = 30000;
 constexpr uint32_t STT_QUOTA_COOLDOWN = 60000;
@@ -25,3 +27,11 @@ String stopSTT(uint32_t samples, bool offline = false);
 String recordSTT(bool offline);
 String recordRealtime();
 String recordOffline();
+
+// Meminta DETR melalui koneksi WSS STT yang sedang aktif.
+bool sttTrackDetect(
+    const uint8_t *jpeg,
+    size_t length,
+    VisionTrackResult &result,
+    uint32_t timeoutMs = 8000
+);
