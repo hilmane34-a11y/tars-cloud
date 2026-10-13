@@ -1,4 +1,7 @@
 #include "stt.h"
+#include "vision_track.h"
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WebSocketsClient.h>
@@ -316,15 +319,31 @@ static void sttEvent(
   if (type != WStype_TEXT || !payload || !length) {
     return;
   }
-String type = doc["type"] | "";
+  String msg;
+  if (!msg.reserve(length + 1)) {
+    Serial.println("TARS: STT JSON ALLOC FAILED");
+    sttError = true;
+    return;
+  }
 
-if (type == "track_result") {
-    uint32_t id = doc["id"] | 0U;
+  for (size_t i = 0; i < length; i++) {
+    msg += (char)payload[i];
+  }
 
-    bool found = doc["found"] | false;
-    float score = doc["score"] | 0.0f;
-    float centerX = doc["centerX"] | 0.0f;
-    int targetX = doc["targetX"] | -1;
+  JsonDocument j;
+
+  if (deserializeJson(j, msg)) {
+    Serial.println("TARS: STT JSON PARSE FAILED");
+    return;
+  }
+  const char *t = j["type"] | "";
+
+if (strcmp(t, "track_result") == 0) {
+    uint32_t id = j["id"] | 0U;
+    bool found = j["found"] | false;
+    float score = j["score"] | 0.0f;
+    float centerX = j["centerX"] | 0.0f;
+    int targetX = j["targetX"] | -1;
 
     if (found &&
         (targetX < 0 || targetX > 319 ||
@@ -344,35 +363,13 @@ if (type == "track_result") {
         trackScore = score;
         trackCenterX = centerX;
         trackTargetX = found ? targetX : -1;
-
         trackResultValid = true;
         trackResponseReady = true;
     }
 
     portEXIT_CRITICAL(&trackMux);
-
     return;
 }
-  String msg;
-  if (!msg.reserve(length + 1)) {
-    Serial.println("TARS: STT JSON ALLOC FAILED");
-    sttError = true;
-    return;
-  }
-
-  for (size_t i = 0; i < length; i++) {
-    msg += (char)payload[i];
-  }
-
-  JsonDocument j;
-
-  if (deserializeJson(j, msg)) {
-    Serial.println("TARS: STT JSON PARSE FAILED");
-    return;
-  }
-
-  const char *t = j["type"] | "";
-
   if (strcmp(t, "ready") == 0) {
     sttReady = true;
     sttError = false;
