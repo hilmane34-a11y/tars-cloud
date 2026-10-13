@@ -545,10 +545,10 @@ const char*greetingText(uint8_t p){
 
 bool playTimeGreeting(uint8_t p){
   switch(p){
-    case 0:return playLocalMP3WithCameraOff().(pagi_start,pagi_end,greetingText(p));
-    case 1:return playLocalMP3WithCameraOff().(siang_start,siang_end,greetingText(p));
-    case 2:return playLocalMP3WithCameraOff().(sore_start,sore_end,greetingText(p));
-    case 3:return playLocalMP3WithCameraOff().(malam_start,malam_end,greetingText(p));
+    case 0:return playLocalMP3WithCameraOff(pagi_start,pagi_end,greetingText(p));
+    case 1:return playLocalMP3WithCameraOff(siang_start,siang_end,greetingText(p));
+    case 2:return playLocalMP3WithCameraOff(sore_start,sore_end,greetingText(p));
+    case 3:return playLocalMP3WithCameraOff(malam_start,malam_end,greetingText(p));
   }
   return false;
 }
