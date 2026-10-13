@@ -209,32 +209,25 @@ static bool stopCameraForTLS() {
 
     return cameraStoppedForVision;
 }
-
 static bool prepareSharedTrackFrame(size_t &length) {
     length = 0;
-
     if (!ownerIs(VISION_OWNER_TRACK) ||
         playing ||
         !visionLiveEnabled()) {
         return false;
     }
-
+    // Ambil JPEG dengan cameraMux.
+    // Kamera tetap menyala selama dan setelah capture.
     if (!captureFrame(length)) {
         return false;
     }
-
     sharedJpegLength = length;
-
-    if (!stopCameraForTLS()) {
-        memset(visionJpeg, 0, sharedJpegLength);
-        sharedJpegLength = 0;
-        length = 0;
-        return false;
-    }
-
+    Serial.printf(
+        "TARS TRACK: JPEG READY SIZE=%u CAMERA KEPT ON\n",
+        (unsigned)length
+    );
     return true;
 }
-
 static bool buildVisionJSON(
     const String &question,
     size_t jpegLength,
@@ -468,37 +461,29 @@ bool visionLiveTrackPause() {
 bool visionLiveTrackCapture(size_t &length) {
     return prepareSharedTrackFrame(length);
 }
-
 uint8_t *visionLiveSharedJpeg() {
     if (!ownerIs(VISION_OWNER_TRACK) ||
-        !cameraStoppedForVision ||
         sharedJpegLength == 0) {
         return nullptr;
     }
-
     return visionJpeg;
 }
-
-
 void visionLiveTrackResume() {
     if (!ownerIs(VISION_OWNER_TRACK)) {
         return;
     }
-
     if (sharedJpegLength > 0) {
         memset(visionJpeg, 0, sharedJpegLength);
     }
-
     sharedJpegLength = 0;
-
+    // Kamera hanya dinyalakan kembali jika memang
+    // sebelumnya dihentikan oleh jalur Vision ini.
     if (cameraStoppedForVision &&
         visionLiveEnabled() &&
         WiFi.status() == WL_CONNECTED) {
         startCamera();
     }
-
     cameraStoppedForVision = false;
-
     releaseVision(VISION_OWNER_TRACK);
 }
 String visionLiveAsk(const String &question) {
