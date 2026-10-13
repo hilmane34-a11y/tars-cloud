@@ -91,9 +91,10 @@ extern void oledSetListening();
 
 static bool wsSendTXT(const String &message) {
     if (!sttConnected) return false;
-    return sttWS.sendTXT(message);
-}
 
+    String payload = message;
+    return sttWS.sendTXT(payload);
+}
 static bool wsSendBIN(
     const uint8_t *data,
     size_t length
