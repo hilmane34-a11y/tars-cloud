@@ -15,7 +15,7 @@
 #error "Tambahkan TARS_LIVE_TOKEN di config.h"
 #endif
 
-#define TRACK_TIMEOUT 45000
+#define TRACK_TIMEOUT 10000
 
 extern bool wifiOK();
 extern bool visionLiveEnabled();
@@ -188,7 +188,7 @@ static bool sendTrackRequest(
         client.stop();
         return false;
     }
-
+    http.setConnectTimeout(5000);
     http.setTimeout(TRACK_TIMEOUT);
     http.addHeader("Content-Type", "application/json");
     http.addHeader(
