@@ -1,4 +1,3 @@
-
 #include "env.h"
 #include <Arduino.h>
 #include <string.h>
@@ -6,19 +5,31 @@
 
 #define ENV_WIDTH 96
 #define ENV_HEIGHT 32
+
 #define GRID_W 16
 #define GRID_H 8
+#define GRID_CELLS (GRID_W * GRID_H)
 
+// Deteksi perubahan antarb ingkai.
 #define MOTION_THRESHOLD 30
 #define MIN_MOTION_CELLS 10
 #define GLOBAL_CHANGE_CELLS 50
 
+// Deteksi perubahan pencahayaan global.
+#define LIGHT_DIFF_THRESHOLD 12
+#define LIGHT_MIN_CELLS 64
+#define LIGHT_DIRECTION_PERCENT 78
+#define LIGHT_MEAN_DELTA 12
+
+// Histeresis estimasi sektor yang relatif terbuka.
 #define CLEAR_CONFIRM_FRAMES 3
 #define CLEAR_LOST_FRAMES 2
 
 static EnvState state = {};
-static uint8_t previousGrid[GRID_W * GRID_H] = {};
+
+static uint8_t previousGrid[GRID_CELLS] = {};
 static bool previousValid = false;
+
 static uint8_t clearStable[3] = {};
 static uint8_t blockedStable[3] = {};
 
@@ -41,6 +52,7 @@ static uint8_t getBrightness(uint16_t p) {
   uint8_t r = ((p >> 11) & 31) * 255 / 31;
   uint8_t g = ((p >> 5) & 63) * 255 / 63;
   uint8_t b = (p & 31) * 255 / 31;
+
   return (77 * r + 150 * g + 29 * b) >> 8;
 }
 
@@ -58,11 +70,16 @@ static EnvColor getColor(uint16_t p) {
   if (d < 25) return ENV_COLOR_GRAY;
 
   float h;
-  if (mx == r) h = 60.0f * ((float)g - b) / d;
-  else if (mx == g) h = 60.0f * ((float)b - r) / d + 120;
-  else h = 60.0f * ((float)r - g) / d + 240;
 
-  if (h < 0) h += 360;
+  if (mx == r) {
+    h = 60.0f * ((float)g - b) / d;
+  } else if (mx == g) {
+    h = 60.0f * ((float)b - r) / d + 120.0f;
+  } else {
+    h = 60.0f * ((float)r - g) / d + 240.0f;
+  }
+
+  if (h < 0) h += 360.0f;
 
   if (h < 15 || h >= 345) return ENV_COLOR_RED;
   if (h < 40) return ENV_COLOR_ORANGE;
@@ -70,19 +87,27 @@ static EnvColor getColor(uint16_t p) {
   if (h < 165) return ENV_COLOR_GREEN;
   if (h < 200) return ENV_COLOR_CYAN;
   if (h < 255) return ENV_COLOR_BLUE;
+
   return ENV_COLOR_PURPLE;
 }
 
 static void addPixel(ColorInfo &info, uint16_t p) {
   EnvColor c = getColor(p);
+
   info.count[c]++;
   info.samples++;
   info.brightness += getBrightness(p);
 }
 
-static EnvColor bestColor(const ColorInfo &info, uint8_t &confidence) {
+static EnvColor bestColor(
+  const ColorInfo &info,
+  uint8_t &confidence
+) {
   confidence = 0;
-  if (!info.samples) return ENV_COLOR_UNKNOWN;
+
+  if (!info.samples) {
+    return ENV_COLOR_UNKNOWN;
+  }
 
   uint8_t best = ENV_COLOR_UNKNOWN;
   uint32_t count = 0;
@@ -95,6 +120,7 @@ static EnvColor bestColor(const ColorInfo &info, uint8_t &confidence) {
   }
 
   confidence = (uint32_t)count * 100 / info.samples;
+
   return (EnvColor)best;
 }
 
@@ -107,7 +133,10 @@ static void addVisual(
   int b = getBrightness(p);
   int br = getBrightness(right);
   int bd = getBrightness(down);
-  int diff = max(abs(b - br), abs(b - bd));
+
+  int diffRight = abs(b - br);
+  int diffDown = abs(b - bd);
+  int diff = max(diffRight, diffDown);
 
   v.brightness += b;
   v.contrast += diff;
@@ -115,28 +144,38 @@ static void addVisual(
 
   if (diff >= 22) v.edges++;
   if (diff >= 10) v.texture++;
-  if (getColor(p) != getColor(right)) v.colorChanges++;
+
+  if (getColor(p) != getColor(right)) {
+    v.colorChanges++;
+  }
 }
 
 static uint8_t obstacleScore(const VisualInfo &v) {
   if (!v.samples) return 0;
 
-  uint32_t edgeRate = (uint32_t)v.edges * 100 / v.samples;
-  uint32_t textureRate = (uint32_t)v.texture * 100 / v.samples;
-  uint32_t contrast = v.contrast / v.samples;
+  uint32_t edgeRate =
+    (uint32_t)v.edges * 100 / v.samples;
+
+  uint32_t textureRate =
+    (uint32_t)v.texture * 100 / v.samples;
+
+  uint32_t contrast =
+    v.contrast / v.samples;
 
   uint32_t score =
     edgeRate * 2 +
     textureRate / 3 +
     contrast / 2;
 
-  return score > 100 ? 100 : score;
+  return score > 100 ? 100 : (uint8_t)score;
 }
 
 void envBegin() {
   state = {};
+
   memset(previousGrid, 0, sizeof(previousGrid));
   previousValid = false;
+
   memset(clearStable, 0, sizeof(clearStable));
   memset(blockedStable, 0, sizeof(blockedStable));
 }
@@ -146,8 +185,16 @@ void envResetMotion() {
   previousValid = false;
 }
 
-bool envAnalyze(const uint16_t *image, EnvState &result) {
-  return envAnalyze(image, ENV_COLOR_UNKNOWN, 0, result);
+bool envAnalyze(
+  const uint16_t *image,
+  EnvState &result
+) {
+  return envAnalyze(
+    image,
+    ENV_COLOR_UNKNOWN,
+    0,
+    result
+  );
 }
 
 bool envAnalyze(
@@ -161,8 +208,10 @@ bool envAnalyze(
   if (!image) {
     state = result;
     previousValid = false;
+
     memset(clearStable, 0, sizeof(clearStable));
     memset(blockedStable, 0, sizeof(blockedStable));
+
     return false;
   }
 
@@ -170,17 +219,21 @@ bool envAnalyze(
   ColorInfo global = {};
   VisualInfo zone[3][3] = {};
 
-  uint8_t currentGrid[GRID_W * GRID_H] = {};
+  uint8_t currentGrid[GRID_CELLS] = {};
   uint8_t changedRegion[3] = {};
-  uint8_t changedCells = 0;
 
-  // Bagi gambar menjadi 3 sektor horizontal dan 3 zona vertikal.
-  // Zona 0=atas, 1=tengah, 2=bawah.
+  uint16_t changedCells = 0;
+
+  // --------------------------------------------------
+  // 1. Warna, kecerahan, kontras, dan tekstur visual.
+  // --------------------------------------------------
+
   for (int y = 0; y < ENV_HEIGHT; y += 2) {
     int band = y < 10 ? 0 : (y < 21 ? 1 : 2);
 
     for (int x = 0; x < ENV_WIDTH; x += 2) {
       int s = x < 32 ? 0 : (x < 64 ? 1 : 2);
+
       uint16_t p = image[y * ENV_WIDTH + x];
 
       addPixel(sector[s], p);
@@ -202,49 +255,75 @@ bool envAnalyze(
     if (!sector[s].samples) {
       state = result;
       previousValid = false;
+
+      memset(clearStable, 0, sizeof(clearStable));
+      memset(blockedStable, 0, sizeof(blockedStable));
+
       return false;
     }
   }
 
   result.leftBright =
     sector[0].brightness / sector[0].samples;
+
   result.centerBright =
     sector[1].brightness / sector[1].samples;
+
   result.rightBright =
     sector[2].brightness / sector[2].samples;
 
   result.leftColor =
     bestColor(sector[0], result.leftColorConfidence);
+
   result.centerColor =
     bestColor(sector[1], result.centerColorConfidence);
+
   result.rightColor =
     bestColor(sector[2], result.rightColorConfidence);
 
   uint8_t globalBrightness =
-    global.brightness / max((uint32_t)1, global.samples);
+    global.brightness /
+    max((uint32_t)1, global.samples);
 
-  // Analisis ciri setiap zona.
+  // --------------------------------------------------
+  // 2. Ciri visual setiap zona.
+  // --------------------------------------------------
+
   uint8_t brightness[3][3] = {};
   uint8_t scores[3][3] = {};
 
   for (int s = 0; s < 3; s++) {
     for (int b = 0; b < 3; b++) {
       VisualInfo &v = zone[s][b];
+
       if (!v.samples) continue;
 
-      brightness[s][b] = v.brightness / v.samples;
+      brightness[s][b] =
+        v.brightness / v.samples;
+
       scores[s][b] = obstacleScore(v);
     }
   }
 
+  // --------------------------------------------------
+  // 3. Perkiraan permukaan dan bayangan.
+  //
+  // Posisi zona hanya menjadi petunjuk:
+  // atas = kandidat dinding,
+  // bawah = kandidat lantai.
+  // Bukan pengenalan geometri yang pasti.
+  // --------------------------------------------------
+
   for (int s = 0; s < 3; s++) {
     for (int b = 0; b < 3; b++) {
-      if (!zone[s][b].samples) continue;
+      if (!zone[s][b].samples) {
+        result.surface[s][b] = ENV_SURFACE_UNKNOWN;
+        continue;
+      }
 
       uint8_t bright = brightness[s][b];
       uint8_t score = scores[s][b];
 
-      // Bandingkan kecerahan dengan zona sekitar.
       uint16_t neighborSum = 0;
       uint8_t neighborCount = 0;
 
@@ -252,14 +331,17 @@ bool envAnalyze(
         neighborSum += brightness[s - 1][b];
         neighborCount++;
       }
+
       if (s < 2) {
         neighborSum += brightness[s + 1][b];
         neighborCount++;
       }
+
       if (b > 0) {
         neighborSum += brightness[s][b - 1];
         neighborCount++;
       }
+
       if (b < 2) {
         neighborSum += brightness[s][b + 1];
         neighborCount++;
@@ -275,9 +357,8 @@ bool envAnalyze(
       bool darkerThanScene =
         (uint16_t)bright + 25 < globalBrightness;
 
-      // Bayangan hanya dugaan visual:
-      // lebih gelap daripada sekitar dan memiliki
-      // ciri tepi relatif rendah.
+      // Daerah gelap dan relatif halus hanya kandidat bayangan.
+      // Tepi yang kuat mengurangi kemungkinan klasifikasi bayangan.
       bool likelyShadow =
         (darkerThanNeighbors || darkerThanScene) &&
         score < 48;
@@ -288,14 +369,10 @@ bool envAnalyze(
         surface = ENV_SURFACE_SHADOW;
         result.shadow[s] = true;
       } else if (b == 2 && score < 68) {
-        // Bagian bawah gambar diperkirakan sebagai lantai.
         surface = ENV_SURFACE_FLOOR;
       } else if (b == 0 && score < 55) {
-        // Bagian atas yang relatif seragam bisa berupa dinding.
         surface = ENV_SURFACE_WALL;
       } else if (score >= 68) {
-        // Tepi/tekstur tinggi bisa berasal dari objek,
-        // tetapi juga bisa dari pola lantai atau permukaan lain.
         surface = ENV_SURFACE_OBSTACLE;
       }
 
@@ -303,7 +380,13 @@ bool envAnalyze(
     }
   }
 
-  // Estimasi penghalang per sektor.
+  // --------------------------------------------------
+  // 4. Estimasi sektor relatif terbuka.
+  //
+  // Tidak boleh dianggap sebagai jaminan bahwa jalur
+  // benar-benar kosong atau aman untuk dilalui.
+  // --------------------------------------------------
+
   for (int s = 0; s < 3; s++) {
     uint16_t combined =
       (scores[s][1] * 2 + scores[s][2]) / 3;
@@ -316,10 +399,12 @@ bool envAnalyze(
       combined = max(combined, (uint16_t)75);
     }
 
-    // Bayangan saja tidak boleh otomatis menjadi penghalang.
-    if (result.shadow[s] &&
-        result.surface[s][1] != ENV_SURFACE_OBSTACLE &&
-        result.surface[s][2] != ENV_SURFACE_OBSTACLE) {
+    // Bayangan saja tidak langsung dianggap penghalang.
+    if (
+      result.shadow[s] &&
+      result.surface[s][1] != ENV_SURFACE_OBSTACLE &&
+      result.surface[s][2] != ENV_SURFACE_OBSTACLE
+    ) {
       combined = min(combined, (uint16_t)40);
     }
 
@@ -339,11 +424,13 @@ bool envAnalyze(
       if (clearStable[s] < CLEAR_CONFIRM_FRAMES) {
         clearStable[s]++;
       }
+
       blockedStable[s] = 0;
     } else {
       if (blockedStable[s] < CLEAR_LOST_FRAMES) {
         blockedStable[s]++;
       }
+
       clearStable[s] = 0;
     }
 
@@ -359,11 +446,16 @@ bool envAnalyze(
     if (s == 2) result.rightClear = isClear;
   }
 
-  // Deteksi perubahan gambar antar-frame.
+  // --------------------------------------------------
+  // 5. Ringkasan kecerahan per sel untuk dibandingkan
+  //    dengan bingkai sebelumnya.
+  // --------------------------------------------------
+
   for (int gy = 0; gy < GRID_H; gy++) {
     for (int gx = 0; gx < GRID_W; gx++) {
       int x0 = gx * ENV_WIDTH / GRID_W;
       int x1 = (gx + 1) * ENV_WIDTH / GRID_W;
+
       int y0 = gy * ENV_HEIGHT / GRID_H;
       int y1 = (gy + 1) * ENV_HEIGHT / GRID_H;
 
@@ -382,18 +474,51 @@ bool envAnalyze(
     }
   }
 
+  // --------------------------------------------------
+  // 6. Bedakan perubahan cahaya global dari gerakan lokal.
+  //
+  // Perubahan cahaya biasanya menggeser kecerahan sebagian
+  // besar sel ke arah yang sama.
+  //
+  // Gerakan objek biasanya menghasilkan perubahan yang
+  // lebih lokal atau tidak seragam.
+  // --------------------------------------------------
+
+  bool lightingChanged = false;
+
+  uint16_t significantCells = 0;
+  uint16_t positiveCells = 0;
+  uint16_t negativeCells = 0;
+
+  int32_t signedDeltaSum = 0;
+
   if (previousValid) {
     for (int gy = 0; gy < GRID_H; gy++) {
       for (int gx = 0; gx < GRID_W; gx++) {
         int index = gy * GRID_W + gx;
 
-        int diff = abs(
-          (int)currentGrid[index] -
-          (int)previousGrid[index]
-        );
+        int current = currentGrid[index];
+        int previous = previousGrid[index];
+
+        int delta = current - previous;
+        int diff = abs(delta);
+
+        signedDeltaSum += delta;
+
+        if (diff >= LIGHT_DIFF_THRESHOLD) {
+          significantCells++;
+
+          if (delta > 0) {
+            positiveCells++;
+          } else if (delta < 0) {
+            negativeCells++;
+          }
+        }
 
         if (diff >= MOTION_THRESHOLD) {
-          if (changedCells < 255) changedCells++;
+          if (changedCells < 65535) {
+            changedCells++;
+          }
 
           int cx =
             gx * ENV_WIDTH / GRID_W +
@@ -407,12 +532,40 @@ bool envAnalyze(
         }
       }
     }
+
+    int32_t meanDelta = signedDeltaSum / GRID_CELLS;
+
+    uint16_t dominantDirection =
+      max(positiveCells, negativeCells);
+
+    bool enoughCellsChanged =
+      significantCells >= LIGHT_MIN_CELLS;
+
+    bool sameDirection =
+      significantCells > 0 &&
+      (uint32_t)dominantDirection * 100 >=
+      (uint32_t)significantCells * LIGHT_DIRECTION_PERCENT;
+
+    bool enoughGlobalShift =
+      abs((int)meanDelta) >= LIGHT_MEAN_DELTA;
+
+    lightingChanged =
+      enoughCellsChanged &&
+      sameDirection &&
+      enoughGlobalShift;
   }
 
+  // Simpan bingkai saat ini sebagai pembanding berikutnya.
   memcpy(previousGrid, currentGrid, sizeof(previousGrid));
   previousValid = true;
 
+  // --------------------------------------------------
+  // 7. Hasil akhir dan klasifikasi event.
+  // --------------------------------------------------
+
   result.valid = true;
+  result.lightingChanged = lightingChanged;
+
   result.obstacle = !result.centerClear;
 
   uint8_t clearCount =
@@ -421,18 +574,33 @@ bool envAnalyze(
     result.rightClear;
 
   result.confidence = clearCount * 100 / 3;
-  result.motion = changedCells >= MIN_MOTION_CELLS;
-  result.motionLevel = changedCells;
 
-  if (changedCells >= GLOBAL_CHANGE_CELLS) {
+  // Perubahan pencahayaan tidak dianggap sebagai gerakan objek.
+  result.motion =
+    !lightingChanged &&
+    changedCells >= MIN_MOTION_CELLS;
+
+  result.motionLevel =
+    lightingChanged ? 0 :
+    changedCells > 255 ? 255 :
+    (uint8_t)changedCells;
+
+  if (lightingChanged) {
+    // Event terpisah agar main.cpp tidak menganggap lampu
+    // mati sebagai perubahan adegan yang harus memanggil Vision.
+    result.event = ENV_LIGHTING_CHANGED;
+  } else if (changedCells >= GLOBAL_CHANGE_CELLS) {
     result.event = ENV_SCENE_CHANGED;
   } else if (result.motion) {
-    if (changedRegion[0] >= changedRegion[1] &&
-        changedRegion[0] >= changedRegion[2]) {
+    if (
+      changedRegion[0] >= changedRegion[1] &&
+      changedRegion[0] >= changedRegion[2]
+    ) {
       result.event = ENV_MOTION_LEFT;
     } else if (
       changedRegion[1] >= changedRegion[0] &&
-      changedRegion[1] >= changedRegion[2]) {
+      changedRegion[1] >= changedRegion[2]
+    ) {
       result.event = ENV_MOTION_CENTER;
     } else {
       result.event = ENV_MOTION_RIGHT;
@@ -444,13 +612,18 @@ bool envAnalyze(
   result.dominantColor =
     bestColor(global, result.colorConfidence);
 
-  if (dominantColor > ENV_COLOR_UNKNOWN &&
-      dominantColor <= ENV_COLOR_PURPLE) {
+  // Jika kamera menyediakan warna dominan tersendiri,
+  // pertahankan nilai dari implementasi kamera tersebut.
+  if (
+    dominantColor > ENV_COLOR_UNKNOWN &&
+    dominantColor <= ENV_COLOR_PURPLE
+  ) {
     result.dominantColor = (EnvColor)dominantColor;
     result.colorConfidence = colorConfidence;
   }
 
   state = result;
+
   return true;
 }
 
