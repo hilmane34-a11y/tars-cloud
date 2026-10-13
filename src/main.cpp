@@ -70,7 +70,7 @@ volatile bool pendingVisionCheck=false;
 uint32_t lastVisionEventAt=0;
 const uint32_t VISION_EVENT_COOLDOWN_MS=45000;
 volatile bool visionAimMoving = false;
-bool littleFSOK = false;
+volatile bool cameraTransition = false;
 
 OV7670*camera=nullptr;
 SemaphoreHandle_t previewMux=nullptr,envMux=nullptr,cameraMux=nullptr;
@@ -236,22 +236,30 @@ bool playLocalMP3WithCameraOff(
     const String& name,
     bool alarm = false
 ) {
-  bool restoreCamera =
-      camera != nullptr && cameraOK && cameraLive;
-  if (restoreCamera) {
-    stopCamera();
-    if (camera != nullptr || cameraOK || cameraLive) {
-      Serial.println("TARS: CAMERA STOP FAILED");
-      return false;
+    bool restoreCamera =
+        camera != nullptr &&
+        cameraOK &&
+        cameraLive;
+    if (restoreCamera) {
+        cameraTransition = true;
+        stopCamera();
+        if (camera != nullptr ||
+            cameraOK ||
+            cameraLive) {
+            Serial.println("TARS: CAMERA STOP FAILED");
+            cameraTransition = false;
+            return false;
+        }
     }
-  }
-  bool ok = playLocalMP3(start, end, name, alarm);
-  if (restoreCamera) {
-    if (!startCamera()) {
-      Serial.println("TARS: CAMERA RESTART FAILED");
+    bool ok = playLocalMP3(start, end, name, alarm);
+    if (restoreCamera) {
+        bool restarted = startCamera();
+        if (!restarted) {
+            Serial.println("TARS: CAMERA RESTART FAILED");
+        }
+        cameraTransition = false;
     }
-  }
-  return ok;
+    return ok;
 }
 void cameraTask(void*){
   uint8_t frameErrors=0;
