@@ -1,10 +1,9 @@
 #include "vision_track.h"
-#include <vision_live.h>
+#include "vision_live.h"
 #include "stt.h"
 
 #include <Arduino.h>
 #include <WiFi.h>
-#include <string.h>
 
 extern bool playing;
 extern bool visionLiveEnabled();
@@ -23,7 +22,8 @@ bool visionTrackPerson(VisionTrackResult &result) {
 
     if (!visionLiveEnabled() ||
         playing ||
-        WiFi.status() != WL_CONNECTED) {
+        WiFi.status() != WL_CONNECTED ||
+        sttSessionActive) {
         return false;
     }
 
@@ -47,8 +47,7 @@ bool visionTrackPerson(VisionTrackResult &result) {
         }
     }
 
-    // Selalu lepaskan kepemilikan buffer setelah request selesai.
-    // visionLiveTrackResume() tidak mematikan kamera yang tetap aktif.
+    // Lepaskan buffer kamera setelah permintaan selesai.
     visionLiveTrackResume();
 
     return success;
