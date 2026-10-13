@@ -70,6 +70,7 @@ volatile bool pendingVisionCheck=false;
 uint32_t lastVisionEventAt=0;
 const uint32_t VISION_EVENT_COOLDOWN_MS=45000;
 volatile bool visionAimMoving = false;
+bool littleFSOK = false;
 
 OV7670*camera=nullptr;
 SemaphoreHandle_t previewMux=nullptr,envMux=nullptr,cameraMux=nullptr;
@@ -907,16 +908,21 @@ void setup(){
 
   micOK=initMic();
 
-  if(!LittleFS.begin(true))
-    Serial.println("TARS: LITTLEFS ERROR");
-  else
-    Serial.printf("TARS: LITTLEFS READY %u/%u KB\n",(unsigned)(LittleFS.usedBytes()/1024),(unsigned)(LittleFS.totalBytes()/1024));
-
+  littleFSOK = LittleFS.begin(true);
+if (!littleFSOK) {
+  Serial.println("TARS: LITTLEFS ERROR");
+} else {
+  Serial.printf(
+    "TARS: LITTLEFS READY %u/%u KB\n",
+    (unsigned)(LittleFS.usedBytes() / 1024),
+    (unsigned)(LittleFS.totalBytes() / 1024)
+  );
+}
   Serial.println("TARS: DAC GPIO26 ULP DAC2");
   Serial.println("TARS: AUDIO MP3/WAV -> 22050Hz/16bit");
   Serial.println("TARS: INMP441 SCK=18 WS=2 SD=15");
   Serial.println("TARS: L9110S A=23/16 B=17/19");
-  Serial.println("TARS: MIC PEAK=10000/8000 RMS=3000/1800 PREROLL=250 ms BUF=256");
+  Serial.println("TARS: MIC PEAK=10000/8000 RMS=3000/1800 PREROLL=150 ms BUF=256");
   Serial.println("TARS: STT ONLINE REALTIME PCM");
   Serial.println("TARS: STT OFFLINE REALTIME PCM");
   Serial.println("TARS: VISION ONLINE ONLY");
