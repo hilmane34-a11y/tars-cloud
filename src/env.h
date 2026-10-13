@@ -1,4 +1,3 @@
-
 #pragma once
 #include <Arduino.h>
 
@@ -7,7 +6,8 @@ enum EnvEvent : uint8_t {
   ENV_MOTION_LEFT,
   ENV_MOTION_CENTER,
   ENV_MOTION_RIGHT,
-  ENV_SCENE_CHANGED
+  ENV_SCENE_CHANGED,
+  ENV_LIGHTING_CHANGED
 };
 
 enum EnvColor : uint8_t {
@@ -45,6 +45,7 @@ struct EnvState {
   uint8_t rightBright;
 
   bool motion;
+  bool lightingChanged;
   EnvEvent event;
   uint8_t motionLevel;
 
@@ -59,11 +60,14 @@ struct EnvState {
   uint8_t centerColorConfidence;
   uint8_t rightColorConfidence;
 
-  // Indeks sektor: 0=kiri, 1=tengah, 2=kanan.
-  // Indeks zona: 0=atas, 1=tengah, 2=bawah.
+  // Sektor: 0=kiri, 1=tengah, 2=kanan.
+  // Zona: 0=atas, 1=tengah, 2=bawah.
   EnvSurface surface[3][3];
 
+  // Bayangan merupakan dugaan visual, bukan kepastian.
   bool shadow[3];
+
+  // Perkiraan visual tingkat kerumitan/penghalang.
   uint8_t obstacleConfidence[3];
 };
 
