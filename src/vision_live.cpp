@@ -428,7 +428,7 @@ void visionLiveResume() {
     if (cameraStoppedForVision &&
         visionLiveEnabled() &&
         WiFi.status() == WL_CONNECTED) {
-        if (!startCamera()) {
+        startCamera();
             Serial.println(
                 "TARS: VISION CAMERA RESTART FAILED"
             );
