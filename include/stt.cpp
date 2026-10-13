@@ -19,8 +19,8 @@
 #define MIC_WS 2
 #define MIC_SD 15
 #define MIC_RATE 16000
-#define MIC_THRESHOLD 10000
-#define MIC_SILENCE 8000
+#define MIC_THRESHOLD 6000
+#define MIC_SILENCE 4000
 #define RECORD_MIN_MS 500
 #define SILENCE_MS 800
 #define PREROLL_MS 150
@@ -709,59 +709,6 @@ static bool sendSamples(
 
     return true;
 }
-
-static void appendPending(
-    size_t &position,
-    size_t &stored,
-    const int16_t *data,
-    size_t count
-) {
-    for (size_t i = 0; i < count; i++) {
-        pendingBuf[position] = data[i];
-
-        position++;
-        if (position >= PENDING_SAMPLES) {
-            position = 0;
-        }
-
-        if (stored < PENDING_SAMPLES) {
-            stored++;
-        }
-    }
-}
-
-static bool flushPending(
-    size_t position,
-    size_t stored
-) {
-    if (!stored) return true;
-
-    size_t start =
-        stored == PENDING_SAMPLES ? position : 0;
-
-    size_t sent = 0;
-
-    while (sent < stored) {
-        size_t n = stored - sent;
-
-        if (n > 256) n = 256;
-
-        for (size_t i = 0; i < n; i++) {
-            sendBuf[i] =
-                pendingBuf[(start + sent + i) %
-                           PENDING_SAMPLES];
-        }
-
-        if (!sendPCM(sendBuf, n)) {
-            return false;
-        }
-
-        sent += n;
-    }
-
-    return true;
-}
-
 static bool readMic(
     size_t &count,
     int32_t &peak,
