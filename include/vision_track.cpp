@@ -35,12 +35,141 @@ extern bool visionLiveEnabled();
 extern void stopCamera();
 extern bool startCamera();
 
-static uint8_t trackJpeg[TRACK_JPEG_MAX];
+static const char TRACK_PREFIX[] =
+  "{\"mode\":\"track\",\"format\":\"jpeg\",\"image\":\"";
 
-static bool captureTrackFrame(size_t &length) {
+static const char TRACK_SUFFIX[] = "\"}";
+
+// Stream JSON: mengirim prefix, Base64 per potongan,
+// lalu suffix. Tidak membuat buffer JSON besar di heap.
+class TrackBodyStream : public Stream {
+public:
+  TrackBodyStream(const uint8_t *data, size_t length)
+    : jpeg(data),
+      jpegLength(length),
+      jpegOffset(0),
+      prefixOffset(0),
+      suffixOffset(0),
+      encodedLength(0),
+      encodedOffset(0),
+      totalLength(
+        sizeof(TRACK_PREFIX) - 1 +
+        ((length + 2) / 3) * 4 +
+        sizeof(TRACK_SUFFIX) - 1
+      ) {
+  }
+
+  int available() override {
+    size_t remaining = totalLength - emitted;
+    return remaining > 0x7FFF ? 0x7FFF : (int)remaining;
+  }
+
+  int read() override {
+    if (!prepare()) return -1;
+
+    ++emitted;
+
+    if (prefixOffset < sizeof(TRACK_PREFIX) - 1) {
+      return TRACK_PREFIX[prefixOffset++];
+    }
+
+    if (encodedOffset < encodedLength) {
+      return encoded[encodedOffset++];
+    }
+
+    return TRACK_SUFFIX[suffixOffset++];
+  }
+
+  int peek() override {
+    if (!prepare()) return -1;
+
+    if (prefixOffset < sizeof(TRACK_PREFIX) - 1) {
+      return TRACK_PREFIX[prefixOffset];
+    }
+
+    if (encodedOffset < encodedLength) {
+      return encoded[encodedOffset];
+    }
+
+    return TRACK_SUFFIX[suffixOffset];
+  }
+
+  void flush() override {}
+
+  size_t write(uint8_t) override {
+    return 0;
+  }
+
+  size_t totalSize() const {
+    return totalLength;
+  }
+
+private:
+  const uint8_t *jpeg;
+  size_t jpegLength;
+  size_t jpegOffset;
+  size_t prefixOffset;
+  size_t suffixOffset;
+  size_t encodedLength;
+  size_t encodedOffset;
+  size_t totalLength;
+  size_t emitted = 0;
+
+  // 192 byte input menghasilkan maksimal 256 byte Base64.
+  uint8_t encoded[256];
+
+  bool prepare() {
+    if (emitted >= totalLength) return false;
+
+    if (prefixOffset < sizeof(TRACK_PREFIX) - 1) {
+      return true;
+    }
+
+    if (encodedOffset < encodedLength) {
+      return true;
+    }
+
+    if (jpegOffset < jpegLength) {
+      size_t remaining = jpegLength - jpegOffset;
+      size_t chunk = remaining > 192 ? 192 : remaining;
+
+      size_t outputLength = 0;
+
+      int rc = mbedtls_base64_encode(
+        encoded,
+        sizeof(encoded),
+        &outputLength,
+        jpeg + jpegOffset,
+        chunk
+      );
+
+      if (rc != 0) {
+        encodedLength = 0;
+        encodedOffset = 0;
+        return false;
+      }
+
+      jpegOffset += chunk;
+      encodedLength = outputLength;
+      encodedOffset = 0;
+
+      return encodedLength > 0;
+    }
+
+    return suffixOffset < sizeof(TRACK_SUFFIX) - 1;
+  }
+};
+
+static bool captureTrackFrame(
+  uint8_t *jpeg,
+  size_t capacity,
+  size_t &length
+) {
   length = 0;
 
-  if (!cameraMux) return false;
+  if (!jpeg || capacity < TRACK_JPEG_MAX || !cameraMux) {
+    return false;
+  }
 
   if (xSemaphoreTake(
         cameraMux,
@@ -51,12 +180,9 @@ static bool captureTrackFrame(size_t &length) {
 
   bool ok = false;
 
-  if (camera &&
-      cameraLive &&
-      cameraOK &&
-      !playing) {
+  if (camera && cameraLive && cameraOK && !playing) {
     ok = I2SCamera::encodeFrameToJPEG(
-      trackJpeg,
+      jpeg,
       &length,
       55
     );
@@ -64,10 +190,8 @@ static bool captureTrackFrame(size_t &length) {
 
   xSemaphoreGive(cameraMux);
 
-  if (!ok ||
-      length == 0 ||
-      length > TRACK_JPEG_MAX) {
-    memset(trackJpeg, 0, sizeof(trackJpeg));
+  if (!ok || length == 0 || length > capacity) {
+    memset(jpeg, 0, capacity);
     Serial.println("TARS TRACK: JPEG CAPTURE FAILED");
     return false;
   }
@@ -81,6 +205,7 @@ static bool captureTrackFrame(size_t &length) {
 }
 
 static bool sendTrackRequest(
+  uint8_t *&jpeg,
   size_t jpegLength,
   VisionTrackResult &result
 ) {
@@ -89,69 +214,28 @@ static bool sendTrackRequest(
   result.centerX = -1;
   result.targetX = -1;
 
-  const char *prefix =
-    "{\"mode\":\"track\",\"format\":\"jpeg\",\"image\":\"";
+  if (!jpeg || jpegLength == 0 ||
+      jpegLength > TRACK_JPEG_MAX) {
+    return false;
+  }
 
-  const char *suffix = "\"}";
+  const size_t bodyLength =
+    sizeof(TRACK_PREFIX) - 1 +
+    ((jpegLength + 2) / 3) * 4 +
+    sizeof(TRACK_SUFFIX) - 1;
 
-  size_t prefixLength = strlen(prefix);
-  size_t suffixLength = strlen(suffix);
-  size_t base64Capacity =
-    ((jpegLength + 2) / 3) * 4;
-
-  size_t required =
-    prefixLength +
-    base64Capacity +
-    suffixLength +
-    1;
-
-  if (required > TRACK_JSON_MAX) {
+  if (bodyLength + 1 > TRACK_JSON_MAX) {
     Serial.println("TARS TRACK: JSON TOO LARGE");
     return false;
   }
-
-  char *body = (char *)malloc(TRACK_JSON_MAX);
-
-  if (!body) {
-    Serial.println("TARS TRACK: JSON ALLOC FAILED");
-    return false;
-  }
-
-  memcpy(body, prefix, prefixLength);
-
-  size_t encodedLength = 0;
-
-  int encodeResult = mbedtls_base64_encode(
-    (unsigned char *)body + prefixLength,
-    TRACK_JSON_MAX - prefixLength - suffixLength,
-    &encodedLength,
-    trackJpeg,
-    jpegLength
-  );
-
-  if (encodeResult != 0 ||
-      encodedLength != base64Capacity) {
-    free(body);
-    Serial.println("TARS TRACK: BASE64 FAILED");
-    return false;
-  }
-
-  size_t bodyLength =
-    prefixLength + encodedLength;
-
-  memcpy(body + bodyLength, suffix, suffixLength);
-  bodyLength += suffixLength;
-  body[bodyLength] = '\0';
 
   WiFiClientSecure client;
   client.setInsecure();
 
   HTTPClient http;
-
   String url = String(TARS_CLOUD_URL) + "/vision";
 
   if (!http.begin(client, url)) {
-    free(body);
     Serial.println("TARS TRACK: HTTP BEGIN FAILED");
     return false;
   }
@@ -163,32 +247,34 @@ static bool sendTrackRequest(
     String("Bearer ") + TARS_LIVE_TOKEN
   );
 
+  TrackBodyStream bodyStream(jpeg, jpegLength);
+
   Serial.println("TARS TRACK: POST DETR");
 
-  int code = http.POST(
-    (uint8_t *)body,
+  int code = http.sendRequest(
+    "POST",
+    &bodyStream,
     bodyLength
   );
 
-  free(body);
+  // JPEG tidak dibutuhkan lagi setelah pengiriman selesai.
+  memset(jpeg, 0, TRACK_JPEG_MAX);
+  free(jpeg);
+  jpeg = nullptr;
 
-  Serial.printf(
-    "TARS TRACK: HTTP=%d\n",
-    code
-  );
+  Serial.printf("TARS TRACK: HTTP=%d\n", code);
 
   if (code < 200 || code >= 300) {
     http.end();
     return false;
   }
 
+  // Respons tracking hanya berisi beberapa field kecil.
   String response = http.getString();
   http.end();
 
   JsonDocument doc;
-
-  DeserializationError err =
-    deserializeJson(doc, response);
+  DeserializationError err = deserializeJson(doc, response);
 
   response = "";
 
@@ -197,8 +283,8 @@ static bool sendTrackRequest(
     return false;
   }
 
-  String responseMode = doc["mode"].as<String>();
-if (responseMode != "track") {
+  if (!doc["mode"].is<const char *>() ||
+      strcmp(doc["mode"].as<const char *>(), "track") != 0) {
     Serial.println("TARS TRACK: WRONG RESPONSE MODE");
     return false;
   }
@@ -255,39 +341,59 @@ bool visionTrackPerson(VisionTrackResult &result) {
     return false;
   }
 
-  if (!visionLivePause()) {
-    Serial.println("TARS TRACK: VISION BUSY");
+  uint8_t *trackJpeg =
+    (uint8_t *)malloc(TRACK_JPEG_MAX);
+
+  if (!trackJpeg) {
+    Serial.println("TARS TRACK: JPEG ALLOC FAILED");
     return false;
   }
 
+  bool visionPaused = false;
   bool cameraWasStopped = false;
   bool success = false;
   size_t jpegLength = 0;
 
-  if (!captureTrackFrame(jpegLength)) {
+  if (!visionLivePause()) {
+    Serial.println("TARS TRACK: VISION BUSY");
+    goto cleanup;
+  }
+
+  visionPaused = true;
+
+  if (!captureTrackFrame(
+        trackJpeg,
+        TRACK_JPEG_MAX,
+        jpegLength)) {
     goto cleanup;
   }
 
   stopCamera();
 
-  cameraWasStopped =
-    !camera && !cameraLive && !cameraOK;
+  cameraWasStopped = !camera && !cameraLive && !cameraOK;
 
   if (!cameraWasStopped) {
     Serial.println("TARS TRACK: CAMERA STOP FAILED");
     goto cleanup;
   }
 
-  success = sendTrackRequest(jpegLength, result);
+  success = sendTrackRequest(
+    trackJpeg,
+    jpegLength,
+    result
+  );
 
 cleanup:
-  memset(trackJpeg, 0, sizeof(trackJpeg));
+  if (trackJpeg) {
+    memset(trackJpeg, 0, TRACK_JPEG_MAX);
+    free(trackJpeg);
+    trackJpeg = nullptr;
+  }
 
-  visionLiveResume();
+  if (visionPaused) {
+    visionLiveResume();
+  }
 
-  // vision_live.cpp tidak mengetahui bahwa kamera
-  // dihentikan oleh modul tracking ini.
-  // Pastikan kamera dipulihkan melalui API yang ada.
   if (cameraWasStopped) {
     if (!startCamera()) {
       Serial.println("TARS TRACK: CAMERA RESTART FAILED");
