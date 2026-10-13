@@ -6,38 +6,57 @@
 #include <WiFi.h>
 
 extern bool playing;
+extern volatile bool cameraTransition;
 extern bool visionLiveEnabled();
 
 #define TRACK_TIMEOUT 8000
 
 void visionTrackBegin() {
-    Serial.println("TARS TRACK: SHARED STT WSS READY");
+Serial.println("TARS TRACK: SHARED STT WSS READY");
 }
 
 bool visionTrackPerson(VisionTrackResult &result) {
-    result.found = false;
-    result.score = 0.0f;
-    result.centerX = 0.0f;
-    result.targetX = -1;
+result.found = false;
+result.score = 0.0f;
+result.centerX = 0.0f;
+result.targetX = -1;
 
-    if (!visionLiveEnabled() ||
-        playing ||
-        WiFi.status() != WL_CONNECTED ||
-        sttSessionActive) {
-        return false;
-    }
+// Jangan mulai tracking ketika kamera atau STT sedang sibuk.
+if (!visionLiveEnabled() ||
+    playing ||
+    cameraTransition ||
+    WiFi.status() != WL_CONNECTED ||
+    sttSessionActive) {
+    return false;
+}
 
-    if (!visionLiveTrackPause()) {
-        return false;
-    }
+// Ambil kepemilikan jalur tracking.
+if (!visionLiveTrackPause()) {
+    return false;
+}
 
-    bool success = false;
-    size_t jpegLength = 0;
+bool success = false;
+size_t jpegLength = 0;
+
+// Periksa ulang sebelum mengambil frame JPEG.
+if (!cameraTransition &&
+    !playing &&
+    visionLiveEnabled() &&
+    WiFi.status() == WL_CONNECTED &&
+    !sttSessionActive) {
 
     if (visionLiveTrackCapture(jpegLength)) {
         uint8_t *jpeg = visionLiveSharedJpeg();
 
-        if (jpeg && jpegLength > 0) {
+        // Pastikan data masih valid sebelum dikirim ke DETR.
+        if (jpeg &&
+            jpegLength > 0 &&
+            !cameraTransition &&
+            !playing &&
+            visionLiveEnabled() &&
+            WiFi.status() == WL_CONNECTED &&
+            !sttSessionActive) {
+
             success = sttTrackDetect(
                 jpeg,
                 jpegLength,
@@ -46,9 +65,24 @@ bool visionTrackPerson(VisionTrackResult &result) {
             );
         }
     }
+}
 
-    // Lepaskan buffer kamera setelah permintaan selesai.
-    visionLiveTrackResume();
+// Selalu lepaskan kepemilikan tracking setelah proses selesai.
+visionLiveTrackResume();
 
-    return success;
+// Abaikan hasil jika kamera sedang bertransisi atau mode berubah.
+if (cameraTransition ||
+    playing ||
+    !visionLiveEnabled()) {
+
+    result.found = false;
+    result.score = 0.0f;
+    result.centerX = 0.0f;
+    result.targetX = -1;
+
+    return false;
+}
+
+return success;
+
 }
