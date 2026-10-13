@@ -13,7 +13,7 @@
 #include <string.h>
 
 #include "config.h"
-#include "vision_live.h"
+#include <vision_live.h>
 
 #ifndef TARS_LIVE_TOKEN
 #error "Tambahkan TARS_LIVE_TOKEN di config.h"
