@@ -264,7 +264,7 @@ bool playLocalMP3WithCameraOff(
 void cameraTask(void*){
   uint8_t frameErrors=0;
   for(;;){
-    if (!cameraLive || !camera || !cameraOK || playing) {
+   if (cameraTransition || !cameraLive ||  !camera || !cameraOK || playing) {
   if (playing || !visionAimMoving) {
     wheelsStop();
   }
@@ -274,9 +274,15 @@ void cameraTask(void*){
     bool ok=false;
     bool analyzed=false;
     EnvState environment={};
-    if(xSemaphoreTake(cameraMux,portMAX_DELAY)==pdTRUE){
-      if(xSemaphoreTake(envMux,portMAX_DELAY)==pdTRUE){
-        if(xSemaphoreTake(previewMux,portMAX_DELAY)==pdTRUE){
+    if (xSemaphoreTake(cameraMux, portMAX_DELAY) == pdTRUE) {
+// Kamera mungkin berubah saat task menunggu mutex.
+if (cameraTransition ||!cameraLive ||!camera ||!cameraOK ||playing) {
+xSemaphoreGive(cameraMux);
+vTaskDelay(pdMS_TO_TICKS(20));
+continue;
+}
+     if (xSemaphoreTake(envMux, portMAX_DELAY) == pdTRUE) {
+     if(xSemaphoreTake(previewMux,portMAX_DELAY)==pdTRUE){
 ok=I2SCamera::captureFrameData( cameraEnvironment, cameraPreview);
 static uint32_t lastPreviewDiag=0;
 if(millis()-lastPreviewDiag>=5000){
