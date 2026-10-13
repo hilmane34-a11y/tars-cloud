@@ -479,22 +479,10 @@ uint8_t *visionLiveSharedJpeg() {
     return visionJpeg;
 }
 
+
 void visionLiveTrackResume() {
     if (!ownerIs(VISION_OWNER_TRACK)) {
         return;
-    }
-
-    if (playing) {
-        Serial.println(
-            "TARS: TRACK RESUME DEFERRED - AUDIO ACTIVE"
-        );
-        return;
-    }
-
-    if (cameraStoppedForVision &&
-        visionLiveEnabled() &&
-        WiFi.status() == WL_CONNECTED) {
-        startCamera();
     }
 
     if (sharedJpegLength > 0) {
@@ -502,11 +490,17 @@ void visionLiveTrackResume() {
     }
 
     sharedJpegLength = 0;
+
+    if (cameraStoppedForVision &&
+        visionLiveEnabled() &&
+        WiFi.status() == WL_CONNECTED) {
+        startCamera();
+    }
+
     cameraStoppedForVision = false;
 
     releaseVision(VISION_OWNER_TRACK);
 }
-
 String visionLiveAsk(const String &question) {
     if (!visionLiveEnabled() ||
         !ownerIs(VISION_OWNER_USER)) {
