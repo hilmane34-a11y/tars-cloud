@@ -31,17 +31,12 @@
 
 static const size_t BUF = 256;
 static const size_t RAW_SAMPLES = BUF / 4;
-static const size_t PREROLL_SAMPLES =
-    MIC_RATE * PREROLL_MS / 1000;
-
-// Buffer pending diperkecil agar DRAM statis tidak overflow.
-static const size_t PENDING_SAMPLES = 512;
+static const size_t PREROLL_SAMPLES =    MIC_RATE * PREROLL_MS / 1000;
 
 static int32_t rawBuf[RAW_SAMPLES];
 static int16_t pcmBuf[RAW_SAMPLES];
 static int16_t preBuf[PREROLL_SAMPLES];
 static int16_t sendBuf[256];
-static int16_t pendingBuf[PENDING_SAMPLES];
 
 static WebSocketsClient sttWS;
 static bool wsStarted = false;
@@ -913,13 +908,10 @@ String recordSTT(bool offline) {
                     (long)peak,
                     (unsigned long)rms
                 );
-
-                // Tunggu upstream siap sambil tetap menangkap
-                // audio agar awal ucapan tidak langsung hilang.
-                size_t pendingPosition = 0;
-                size_t pendingCount = 0;
-
-                uint32_t waitStart = millis();
+               // Tunggu READY tanpa menyimpan audio pending.
+                // Audio mikrofon tetap dibaca agar buffer I2S
+                // tidak menumpuk selama menunggu Speechmatics.
+            uint32_t waitStart = millis();
 
                 while (!sttReady &&
                        !sttError &&
@@ -927,26 +919,20 @@ String recordSTT(bool offline) {
                            STT_READY_TIMEOUT_MS) {
                     sttService();
 
-                    size_t pendingRead = 0;
-                    int32_t pendingPeak = 0;
-                    uint32_t pendingRms = 0;
+                    size_t discardCount = 0;
+                    int32_t discardPeak = 0;
+                    uint32_t discardRms = 0;
 
-                    if (readMic(
-                            pendingRead,
-                            pendingPeak,
-                            pendingRms
-                        ) && pendingRead) {
-                        appendPending(
-                            pendingPosition,
-                            pendingCount,
-                            pcmBuf,
-                            pendingRead
-                        );
+                    // Audio selama menunggu READY dibuang.
+                    readMic(
+                        discardCount,
+                        discardPeak,
+                        discardRms
+                    );
 
-                        if (pendingPeak >= MIC_SILENCE ||
-                            pendingRms >= 1800) {
-                            lastVoice = millis();
-                        }
+                    if (discardPeak >= MIC_SILENCE ||
+                        discardRms >= 1800) {
+                        lastVoice = millis();
                     }
 
                     delay(1);
@@ -962,7 +948,11 @@ String recordSTT(bool offline) {
                     return "";
                 }
 
-                // Kirim preroll dalam urutan waktu.
+                Serial.println(
+                    "TARS: STREAMING PCM REALTIME"
+                );
+
+                // Kirim preroll 150 ms dalam urutan waktu.
                 size_t preStart =
                     preCount == PREROLL_SAMPLES
                         ? prePos
@@ -992,17 +982,8 @@ String recordSTT(bool offline) {
 
                 samples += preCount;
 
-                // Kirim audio yang terkumpul selama menunggu ready.
-                if (!flushPending(
-                        pendingPosition,
-                        pendingCount
-                    )) {
-                    sttError = true;
-                    break;
-                }
-
-                samples += pendingCount;
-
+                // Setelah READY, audio berikutnya langsung
+                // dikirim secara realtime di loop perekaman.
                 // Lanjutkan rekaman realtime sampai jeda ucapan.
                 while (!sttError) {
                     sttService();
