@@ -3,11 +3,14 @@
 #include <Arduino.h>
 
 struct VisionTrackResult {
-  bool found;
-  float score;
-  float centerX;
-  int targetX;
+    bool found;
+    float score;
+    float centerX;
+    int targetX;
 };
 
 void visionTrackBegin();
-bool visionTrackPerson(VisionTrackResult &result);
+
+bool visionTrackPerson(
+    VisionTrackResult &result
+);
