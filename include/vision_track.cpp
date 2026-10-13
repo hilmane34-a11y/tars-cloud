@@ -149,7 +149,6 @@ private:
         return suffixOffset < sizeof(TRACK_SUFFIX) - 1;
     }
 };
-
 static bool sendTrackRequest(
     const uint8_t *jpeg,
     size_t jpegLength,
@@ -161,12 +160,15 @@ static bool sendTrackRequest(
     result.targetX = -1;
 
     if (!jpeg || jpegLength == 0 || jpegLength > 20000) {
-        Serial.println("TARS TRACK: INVALID SHARED JPEG");
+        Serial.println("TARS TRACK ERROR: INVALID JPEG");
         return false;
     }
 
     if (WiFi.status() != WL_CONNECTED) {
-        Serial.println("TARS TRACK: WIFI DISCONNECTED");
+        Serial.printf(
+            "TARS TRACK ERROR: WIFI DISCONNECTED STATUS=%d\n",
+            (int)WiFi.status()
+        );
         return false;
     }
 
@@ -174,6 +176,25 @@ static bool sendTrackRequest(
         sizeof(TRACK_PREFIX) - 1 +
         ((jpegLength + 2) / 3) * 4 +
         sizeof(TRACK_SUFFIX) - 1;
+
+    Serial.printf(
+        "\nTARS TRACK DIAG: BEGIN JPEG=%u BODY=%u\n",
+        (unsigned)jpegLength,
+        (unsigned)bodyLength
+    );
+
+    Serial.printf(
+        "TARS TRACK DIAG: HEAP free=%u min=%u largest=%u\n",
+        ESP.getFreeHeap(),
+        ESP.getMinFreeHeap(),
+        ESP.getMaxAllocHeap()
+    );
+
+    Serial.printf(
+        "TARS TRACK DIAG: WIFI RSSI=%d STATUS=%d\n",
+        WiFi.RSSI(),
+        (int)WiFi.status()
+    );
 
     WiFiClientSecure client;
     client.setInsecure();
@@ -183,12 +204,19 @@ static bool sendTrackRequest(
 
     String url = String(TARS_CLOUD_URL) + "/vision";
 
+    Serial.println("TARS TRACK DIAG: STAGE=HTTP_BEGIN");
+
     if (!http.begin(client, url)) {
-        Serial.println("TARS TRACK: HTTP BEGIN FAILED");
+        Serial.printf(
+            "TARS TRACK ERROR: HTTP_BEGIN FAILED HEAP=%u MAX=%u\n",
+            ESP.getFreeHeap(),
+            ESP.getMaxAllocHeap()
+        );
         client.stop();
         return false;
     }
-    http.setConnectTimeout(5000);
+
+    http.setConnectTimeout(6000);
     http.setTimeout(TRACK_TIMEOUT);
     http.addHeader("Content-Type", "application/json");
     http.addHeader(
@@ -199,12 +227,12 @@ static bool sendTrackRequest(
     TrackBodyStream bodyStream(jpeg, jpegLength);
 
     Serial.printf(
-        "TARS TRACK: POST DETR JPEG=%u BODY=%u HEAP=%u LARGEST=%u\n",
-        (unsigned)jpegLength,
-        (unsigned)bodyLength,
+        "TARS TRACK DIAG: STAGE=SEND_REQUEST HEAP=%u MAX=%u\n",
         ESP.getFreeHeap(),
         ESP.getMaxAllocHeap()
     );
+
+    uint32_t started = millis();
 
     int code = http.sendRequest(
         "POST",
@@ -212,20 +240,58 @@ static bool sendTrackRequest(
         bodyLength
     );
 
-    Serial.printf("TARS TRACK: HTTP=%d\n", code);
+    uint32_t elapsed = millis() - started;
+
+    Serial.printf(
+        "TARS TRACK DIAG: HTTP=%d ERROR=%s ELAPSED=%lu ms\n",
+        code,
+        HTTPClient::errorToString(code).c_str(),
+        (unsigned long)elapsed
+    );
+
+    Serial.printf(
+        "TARS TRACK DIAG: AFTER_SEND HEAP=%u MIN=%u MAX=%u WIFI=%d RSSI=%d\n",
+        ESP.getFreeHeap(),
+        ESP.getMinFreeHeap(),
+        ESP.getMaxAllocHeap(),
+        (int)WiFi.status(),
+        WiFi.RSSI()
+    );
+
+    char tlsError[160] = {0};
+    int tlsErrorCode = client.lastError(
+        tlsError,
+        sizeof(tlsError)
+    );
+
+    Serial.printf(
+        "TARS TRACK DIAG: TLS_LAST_ERROR=%d DETAIL=%s\n",
+        tlsErrorCode,
+        tlsError[0] ? tlsError : "(no detail)"
+    );
 
     String response;
 
     if (code >= 200 && code < 300) {
+        Serial.println("TARS TRACK DIAG: STAGE=READ_RESPONSE");
         response = http.getString();
+
+        Serial.printf(
+            "TARS TRACK DIAG: RESPONSE_BYTES=%u\n",
+            (unsigned)response.length()
+        );
+    } else {
+        Serial.printf(
+            "TARS TRACK DIAG: REQUEST_FAILED CODE=%d\n",
+            code
+        );
     }
 
-    // Selalu tutup HTTP dan koneksi TLS, termasuk saat request gagal.
     http.end();
     client.stop();
 
     Serial.printf(
-        "TARS TRACK: TLS CLOSED HEAP=%u LARGEST=%u\n",
+        "TARS TRACK DIAG: CLOSED HEAP=%u MAX=%u\n",
         ESP.getFreeHeap(),
         ESP.getMaxAllocHeap()
     );
@@ -240,18 +306,21 @@ static bool sendTrackRequest(
     response = "";
 
     if (err) {
-        Serial.println("TARS TRACK: INVALID JSON RESPONSE");
+        Serial.printf(
+            "TARS TRACK ERROR: RESPONSE JSON=%s\n",
+            err.c_str()
+        );
         return false;
     }
 
     if (!doc["mode"].is<const char *>() ||
         strcmp(doc["mode"].as<const char *>(), "track") != 0) {
-        Serial.println("TARS TRACK: WRONG RESPONSE MODE");
+        Serial.println("TARS TRACK ERROR: WRONG RESPONSE MODE");
         return false;
     }
 
     if (!doc["found"].is<bool>()) {
-        Serial.println("TARS TRACK: MISSING FOUND FIELD");
+        Serial.println("TARS TRACK ERROR: MISSING FOUND");
         return false;
     }
 
@@ -267,7 +336,7 @@ static bool sendTrackRequest(
     if (!doc["targetX"].is<int>() ||
         !doc["centerX"].is<float>() ||
         !doc["score"].is<float>()) {
-        Serial.println("TARS TRACK: INVALID DETECTION DATA");
+        Serial.println("TARS TRACK ERROR: INVALID DETECTION DATA");
         result.found = false;
         return false;
     }
@@ -279,14 +348,14 @@ static bool sendTrackRequest(
     if (result.targetX < 0 || result.targetX > 319 ||
         result.centerX < 0.0f || result.centerX > 1.0f ||
         result.score < 0.60f || result.score > 1.0f) {
-        Serial.println("TARS TRACK: DETECTION OUT OF RANGE");
+        Serial.println("TARS TRACK ERROR: DETECTION OUT OF RANGE");
         result.found = false;
         return false;
     }
 
+    Serial.println("TARS TRACK DIAG: SUCCESS");
     return true;
 }
-
 bool visionTrackPerson(VisionTrackResult &result) {
     result.found = false;
     result.score = 0;
