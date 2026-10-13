@@ -814,6 +814,7 @@ bool processOffline(const String&q){
     Serial.println("TARS: SWITCH OFFLINE -> ONLINE");
     oledShowText("ONLINE","OFFLINE");
     tarsMode=MODE_ONLINE;
+    cameraTransition = true;
     personalityResetSpeechTimer();
     autoSpeechResetTimer();
     tarsEmotionResetPending();
@@ -878,7 +879,7 @@ void processQuestion(const String&q){
 void visionAimTask(void *parameter) {
   VisionTrackResult target = {};
   for (;;) {
-    if (tarsMode != MODE_ONLINE || playing) {
+    if (tarsMode != MODE_ONLINE ||  playing ||  cameraTransition ||  !camera ||  !cameraOK || !cameraLive) {
       wheelsStop();
       visionAimMoving = false;
       vTaskDelay(pdMS_TO_TICKS(200));
@@ -888,10 +889,11 @@ void visionAimTask(void *parameter) {
     visionAimMoving = false;
     bool ok = visionTrackPerson(target);
     // Selalu berhenti jika mode berubah atau audio dimulai.
-    if (tarsMode != MODE_ONLINE || playing) {
-      wheelsStop();
-      vTaskDelay(pdMS_TO_TICKS(200));
-      continue;
+    if (tarsMode != MODE_ONLINE ||    playing ||   cameraTransition ||    !camera ||   !cameraOK ||    !cameraLive) {
+    wheelsStop();
+    visionAimMoving = false;
+    vTaskDelay(pdMS_TO_TICKS(200));
+    continue;
     }
     if (ok && target.found) {
       if (target.targetX < 135) {
