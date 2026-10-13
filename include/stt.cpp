@@ -73,15 +73,14 @@ extern void oledSetStatus(const String &);
 extern void oledSetListening();
 
 // Mount LittleFS satu kali saat diperlukan; tidak memformat filesystem.
-static bool ensurePendingFS(){
-    if(pendingFSReady)return true;
-    if(!LittleFS.begin(false)){
-        Serial.println("TARS: LITTLEFS MOUNT FAILED");
-        return false;
-    }
-    pendingFSReady=true;
-    Serial.println("TARS: LITTLEFS READY");
-    return true;
+extern bool littleFSOK;
+static bool ensurePendingFS() {
+  if (!littleFSOK) {
+    Serial.println("TARS: STT PENDING FILESYSTEM NOT READY");
+    return false;
+  }
+
+  return true;
 }
 
 // Kirim pesan teks melalui WSS persisten.
