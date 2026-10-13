@@ -69,6 +69,8 @@ uint32_t sleepPrepareAt=0;
 volatile bool pendingVisionCheck=false;
 uint32_t lastVisionEventAt=0;
 const uint32_t VISION_EVENT_COOLDOWN_MS=45000;
+SemaphoreHandle_t visionRequestMux = nullptr;
+volatile bool visionAimMoving = false;
 
 OV7670*camera=nullptr;
 SemaphoreHandle_t previewMux=nullptr,envMux=nullptr,cameraMux=nullptr;
@@ -231,10 +233,12 @@ bool startCamera(){
 void cameraTask(void*){
   uint8_t frameErrors=0;
   for(;;){
-    if(!cameraLive||!camera||!cameraOK||playing){
-      wheelsStop();
-      vTaskDelay(pdMS_TO_TICKS(20));
-      continue;
+    if (!cameraLive || !camera || !cameraOK || playing) {
+  if (playing || !visionAimMoving) {
+    wheelsStop();
+  }
+  vTaskDelay(pdMS_TO_TICKS(20));
+  continue;
     }
     bool ok=false;
     bool analyzed=false;
@@ -835,7 +839,50 @@ void processQuestion(const String&q){
   request+=" Jangan mengulang kalimat atau sapaan yang sama jika tidak diperlukan.";
   processOnlineRequest(request,vision,status,false);
 }
-
+void visionAimTask(void *parameter) {
+  VisionTrackResult target;
+  for (;;) {
+    if (tarsMode != MODE_ONLINE || playing) {
+      wheelsStop();
+      visionAimMoving = false;
+      vTaskDelay(pdMS_TO_TICKS(200));
+      continue;
+    }
+    if (xSemaphoreTake(
+          visionRequestMux,
+          pdMS_TO_TICKS(100)
+        ) != pdTRUE) {
+      vTaskDelay(pdMS_TO_TICKS(100));
+      continue;
+    }
+    wheelsStop();
+    visionAimMoving = false;
+    bool ok = visionTrackPerson(target);
+    if (tarsMode == MODE_ONLINE && !playing &&
+        ok && target.found) {
+      if (target.targetX < 135) {
+        // Manusia di kiri: roda kanan maju.
+        wheelsDrive(0, 65);
+        visionAimMoving = true;
+      }
+      else if (target.targetX > 185) {
+        // Manusia di kanan: roda kiri maju.
+        wheelsDrive(65, 0);
+        visionAimMoving = true;
+      }
+      else {
+        // Manusia di tengah: diam dan amati.
+        wheelsStop();
+      }
+    }
+    else {
+      // Tidak terdeteksi atau permintaan gagal.
+      wheelsStop();
+    }
+    xSemaphoreGive(visionRequestMux);
+    vTaskDelay(pdMS_TO_TICKS(500));
+  }
+}
 void setup(){
   Serial.begin(SERIAL_BAUD);
   Wire.begin(OLED_SDA,OLED_SCL);
@@ -862,6 +909,7 @@ void setup(){
   previewMux=xSemaphoreCreateMutex();
   envMux=xSemaphoreCreateMutex();
   cameraMux=xSemaphoreCreateMutex();
+  visionRequestMux = xSemaphoreCreateMutex();
 
   micOK=initMic();
 
@@ -911,7 +959,7 @@ void setup(){
 
   startCamera();
   xTaskCreatePinnedToCore(cameraTask,"TARS_EYE",4096,nullptr,2,nullptr,1);
-
+  xTaskCreatePinnedToCore(visionAimTask, "TARS_VisionAim", 6144, nullptr,1, nullptr, 0);
   ramDiag("READY");
   wheelsStop();
 
