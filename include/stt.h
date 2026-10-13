@@ -1,5 +1,6 @@
 #pragma once
 #include <Arduino.h>
+#include "vision_track.h"
 
 struct VisionTrackResult;
 
