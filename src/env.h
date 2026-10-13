@@ -32,20 +32,27 @@ enum EnvSurface : uint8_t {
   ENV_SURFACE_OBSTACLE
 };
 
+enum EnvShadowKind : uint8_t {
+  ENV_SHADOW_UNKNOWN,
+  ENV_SHADOW_OBJECT,
+  ENV_SHADOW_WALL
+};
+
 struct EnvState {
   bool valid;
   bool obstacle;
+
   bool leftClear;
   bool centerClear;
   bool rightClear;
 
   uint8_t confidence;
+
   uint8_t leftBright;
   uint8_t centerBright;
   uint8_t rightBright;
 
   bool motion;
-  bool lightingChanged;
   EnvEvent event;
   uint8_t motionLevel;
 
@@ -60,15 +67,33 @@ struct EnvState {
   uint8_t centerColorConfidence;
   uint8_t rightColorConfidence;
 
-  // Sektor: 0=kiri, 1=tengah, 2=kanan.
-  // Zona: 0=atas, 1=tengah, 2=bawah.
+  // Indeks sektor: 0=kiri, 1=tengah, 2=kanan.
+  // Indeks zona: 0=atas, 1=tengah, 2=bawah.
   EnvSurface surface[3][3];
 
-  // Bayangan merupakan dugaan visual, bukan kepastian.
+  // Indikasi kemungkinan bayangan pada setiap sektor.
   bool shadow[3];
+  uint8_t shadowConfidence[3];
+  EnvShadowKind shadowKind[3];
 
-  // Perkiraan visual tingkat kerumitan/penghalang.
+  // Indikasi permukaan yang menyerupai dinding.
+  bool wallDetected[3];
+  uint8_t wallConfidence[3];
+
+  // Indikasi garis sudut/pertemuan bidang dinding.
+  bool wallCorner[3];
+  bool cornerDetected;
+  uint8_t cornerConfidence;
+
+  // Indikasi objek tanpa mengenali jenis objek.
+  bool objectDetected[3];
+  uint8_t objectConfidence[3];
+
+  // Dipertahankan untuk kompatibilitas dengan kode lama.
   uint8_t obstacleConfidence[3];
+
+  // True jika perubahan global lebih menyerupai perubahan cahaya.
+  bool lightingChanged;
 };
 
 void envBegin();
