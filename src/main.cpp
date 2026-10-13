@@ -231,9 +231,10 @@ bool startCamera(){
   return true;
 }
 bool playLocalMP3WithCameraOff(
-    const uint8_t *start,
-    const uint8_t *end,
-    const String &text
+    const uint8_t* start,
+    const uint8_t* end,
+    const String& name,
+    bool alarm = false
 ) {
   bool restoreCamera =
       camera != nullptr && cameraOK && cameraLive;
@@ -244,7 +245,7 @@ bool playLocalMP3WithCameraOff(
       return false;
     }
   }
-  bool ok = playLocalMP3(start, end, text);
+  bool ok = playLocalMP3(start, end, name, alarm);
   if (restoreCamera) {
     if (!startCamera()) {
       Serial.println("TARS: CAMERA RESTART FAILED");
