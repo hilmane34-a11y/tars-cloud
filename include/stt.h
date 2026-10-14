@@ -30,16 +30,12 @@ void closeSTT(
     uint32_t cooldown = STT_NORMAL_COOLDOWN
 );
 
-bool startSTT(bool offline = false);
+bool startSTT();
 
-String stopSTT(
-    uint32_t samples,
-    bool offline = false
-);
+String stopSTT(uint32_t samples);
 
-String recordSTT(bool offline);
+String recordSTT();
 String recordRealtime();
-String recordOffline();
 
 bool sttTrackDetect(
     const uint8_t *jpeg,
