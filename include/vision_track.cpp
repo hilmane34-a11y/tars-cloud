@@ -1,6 +1,5 @@
 #include "vision_track.h"
 #include "vision_live.h"
-
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
@@ -9,8 +8,6 @@
 #include <mbedtls/base64.h>
 #include <stdlib.h>
 #include <stdio.h>
-#include <string.h>
-
 #include "config.h"
 
 #ifndef TARS_LIVE_TOKEN
@@ -24,20 +21,16 @@
 extern bool playing;
 extern bool visionLiveEnabled();
 
-static char *trackJson = nullptr;
-
 static void clearResult(VisionTrackResult &r) {
     r.found = false;
-    r.score = 0.0f;
-    r.centerX = 0.0f;
+    r.score = 0;
+    r.centerX = 0;
     r.targetX = -1;
 }
 
 static String trackURL() {
     String url = TARS_CLOUD_URL;
-    while (url.endsWith("/")) {
-        url.remove(url.length() - 1);
-    }
+    while (url.endsWith("/")) url.remove(url.length() - 1);
     return url + "/vision";
 }
 
@@ -45,72 +38,44 @@ void visionTrackBegin() {
     Serial.println("TARS TRACK: HTTPS DETR READY");
 }
 
-static bool sendTrackHTTPS(
-    const uint8_t *jpeg,
-    size_t jpegLength,
-    VisionTrackResult &result
-) {
-    if (!jpeg || jpegLength == 0 ||
-        jpegLength > TRACK_JPEG_MAX ||
-        WiFi.status() != WL_CONNECTED) {
+static bool sendTrackHTTPS(const uint8_t *jpeg, size_t len,
+                           VisionTrackResult &r) {
+    if (!jpeg || !len || len > TRACK_JPEG_MAX ||
+        WiFi.status() != WL_CONNECTED) return false;
+
+    const char *head = "{\"mode\":\"track\",\"format\":\"jpeg\",\"image\":\"";
+    size_t prefix = strlen(head);
+    size_t b64Max = 4 * ((len + 2) / 3);
+    size_t capacity = prefix + b64Max + 3;
+
+    if (capacity > TRACK_JSON_MAX) return false;
+
+    char *body = (char *)malloc(capacity);
+    if (!body) {
+        Serial.printf("TARS TRACK: ALLOC FAIL HEAP=%u MAX=%u NEED=%u\n",
+            ESP.getFreeHeap(), ESP.getMaxAllocHeap(), (unsigned)capacity);
         return false;
     }
 
-    trackJson = (char *)malloc(TRACK_JSON_MAX);
-    if (!trackJson) {
-        Serial.printf(
-            "TARS TRACK: JSON ALLOC FAILED HEAP=%u MAX=%u\n",
-            ESP.getFreeHeap(),
-            ESP.getMaxAllocHeap()
-        );
+    memcpy(body, head, prefix);
+    size_t encoded = 0;
+    int err = mbedtls_base64_encode(
+        (unsigned char *)body + prefix, capacity - prefix,
+        &encoded, jpeg, len);
+
+    if (err || prefix + encoded + 3 > capacity) {
+        Serial.printf("TARS TRACK: BASE64 ERROR=%d\n", err);
+        free(body);
         return false;
     }
 
-    int prefix = snprintf(
-        trackJson, TRACK_JSON_MAX,
-        "{\"mode\":\"track\",\"format\":\"jpeg\",\"image\":\""
-    );
+    size_t bodyLen = prefix + encoded;
+    body[bodyLen++] = '"';
+    body[bodyLen++] = '}';
+    body[bodyLen] = '\0';
 
-    if (prefix <= 0 || prefix >= TRACK_JSON_MAX) {
-        free(trackJson);
-        trackJson = nullptr;
-        return false;
-    }
-
-    size_t encodedLength = 0;
-    int b64 = mbedtls_base64_encode(
-        (unsigned char *)trackJson + prefix,
-        TRACK_JSON_MAX - (size_t)prefix,
-        &encodedLength,
-        jpeg,
-        jpegLength
-    );
-
-    if (b64 != 0) {
-        Serial.printf("TARS TRACK: BASE64 ERROR=%d\n", b64);
-        free(trackJson);
-        trackJson = nullptr;
-        return false;
-    }
-
-    size_t bodyLength = (size_t)prefix + encodedLength;
-    if (bodyLength + 3 > TRACK_JSON_MAX) {
-        free(trackJson);
-        trackJson = nullptr;
-        return false;
-    }
-
-    trackJson[bodyLength++] = '"';
-    trackJson[bodyLength++] = '}';
-    trackJson[bodyLength] = '\0';
-
-    Serial.printf(
-        "TARS TRACK: HTTPS POST JPEG=%u BODY=%u HEAP=%u MAX=%u\n",
-        (unsigned)jpegLength,
-        (unsigned)bodyLength,
-        ESP.getFreeHeap(),
-        ESP.getMaxAllocHeap()
-    );
+    Serial.printf("TARS TRACK: POST JPEG=%u BODY=%u HEAP=%u\n",
+        (unsigned)len, (unsigned)bodyLen, ESP.getFreeHeap());
 
     WiFiClientSecure client;
     client.setInsecure();
@@ -119,118 +84,77 @@ static bool sendTrackHTTPS(
     HTTPClient http;
     http.setTimeout(TRACK_TIMEOUT);
 
-    if (!http.begin(client, trackURL())) {
-        Serial.println("TARS TRACK: HTTP BEGIN FAILED");
-        free(trackJson);
-        trackJson = nullptr;
-        client.stop();
-        return false;
-    }
-
-    http.addHeader("Content-Type", "application/json");
-    http.addHeader(
-        "Authorization",
-        String("Bearer ") + TARS_LIVE_TOKEN
-    );
-
-    int code = http.POST((uint8_t *)trackJson, bodyLength);
-    Serial.printf("TARS TRACK: HTTP=%d\n", code);
-
     bool success = false;
+    if (http.begin(client, trackURL())) {
+        http.addHeader("Content-Type", "application/json");
+        http.addHeader("Authorization", String("Bearer ") + TARS_LIVE_TOKEN);
 
-    if (code >= 200 && code < 300) {
-        String response = http.getString();
-        JsonDocument doc;
-        DeserializationError err = deserializeJson(doc, response);
+        int code = http.POST((uint8_t *)body, bodyLen);
+        Serial.printf("TARS TRACK: HTTP=%d", code);
+        if (code < 0)
+            Serial.printf(" (%s)", http.errorToString(code).c_str());
+        Serial.println();
 
-        if (!err) {
-            result.found = doc["found"] | false;
-            result.score = doc["score"] | 0.0f;
-            result.centerX = doc["centerX"] | 0.0f;
-            result.targetX = doc["targetX"] | -1;
+        if (code >= 200 && code < 300) {
+            JsonDocument doc;
+            DeserializationError e = deserializeJson(doc, http.getStream());
+            if (!e) {
+                r.found = doc["found"] | false;
+                r.score = doc["score"] | 0.0f;
+                r.centerX = doc["centerX"] | 0.0f;
+                r.targetX = doc["targetX"] | -1;
 
-            if (result.found &&
-                result.score >= 0.60f &&
-                result.targetX >= 0 &&
-                result.targetX <= 319) {
-                success = true;
+                if (r.found && r.score >= 0.60f &&
+                    r.targetX >= 0 && r.targetX <= 319) {
+                    success = true;
+                } else {
+                    clearResult(r);
+                    success = true;
+                }
             } else {
-                clearResult(result);
-                success = true;
+                Serial.println("TARS TRACK: RESPONSE JSON ERROR");
             }
-        } else {
-            Serial.println("TARS TRACK: RESPONSE JSON ERROR");
+        } else if (code >= 0) {
+            Serial.printf("TARS TRACK: SERVER ERROR=%s\n",
+                          http.getString().c_str());
         }
-        response = "";
-    } else if (code >= 0) {
-        Serial.printf(
-            "TARS TRACK: HTTP ERROR=%s\n",
-            http.getString().c_str()
-        );
+        http.end();
+    } else {
+        Serial.println("TARS TRACK: HTTP BEGIN FAILED");
     }
 
-    http.end();
     client.stop();
+    free(body);
 
-    free(trackJson);
-    trackJson = nullptr;
-
-    Serial.printf(
-        "TARS TRACK: DONE OK=%d FOUND=%d SCORE=%.2f X=%d HEAP=%u MAX=%u\n",
-        success,
-        result.found,
-        result.score,
-        result.targetX,
-        ESP.getFreeHeap(),
-        ESP.getMaxAllocHeap()
-    );
-
+    Serial.printf("TARS TRACK: DONE OK=%d FOUND=%d SCORE=%.2f X=%d HEAP=%u MAX=%u\n",
+        success, r.found, r.score, r.targetX,
+        ESP.getFreeHeap(), ESP.getMaxAllocHeap());
     return success;
 }
 
-bool visionTrackPerson(VisionTrackResult &result) {
-    clearResult(result);
+bool visionTrackPerson(VisionTrackResult &r) {
+    clearResult(r);
+    if (!visionLiveEnabled() || playing ||
+        WiFi.status() != WL_CONNECTED) return false;
+    if (!visionLiveTrackPause()) return false;
 
-    if (!visionLiveEnabled() ||
-        playing ||
-        WiFi.status() != WL_CONNECTED) {
-        return false;
-    }
+    bool ok = false;
+    size_t len = 0;
 
-    if (!visionLiveTrackPause()) {
-        return false;
-    }
-
-    bool success = false;
-    size_t jpegLength = 0;
-
-    if (!playing &&
-        visionLiveEnabled() &&
+    if (!playing && visionLiveEnabled() &&
         WiFi.status() == WL_CONNECTED &&
-        visionLiveTrackCapture(jpegLength)) {
-
+        visionLiveTrackCapture(len)) {
         uint8_t *jpeg = visionLiveSharedJpeg();
-
-        if (jpeg &&
-            jpegLength > 0 &&
-            jpegLength <= TRACK_JPEG_MAX &&
-            !playing &&
-            visionLiveEnabled() &&
-            WiFi.status() == WL_CONNECTED) {
-            success = sendTrackHTTPS(
-                jpeg,
-                jpegLength,
-                result
-            );
-        }
+        if (jpeg && len && len <= TRACK_JPEG_MAX &&
+            !playing && visionLiveEnabled() &&
+            WiFi.status() == WL_CONNECTED)
+            ok = sendTrackHTTPS(jpeg, len, r);
     }
 
     visionLiveTrackResume();
-
     if (playing || !visionLiveEnabled()) {
-        clearResult(result);
+        clearResult(r);
         return false;
     }
-
-    return success;
+    return ok;
 }
