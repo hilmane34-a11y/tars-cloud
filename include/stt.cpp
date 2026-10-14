@@ -1,5 +1,4 @@
 #include "stt.h"
-#include "vision_track.h"
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <Arduino.h>
@@ -38,14 +37,6 @@ static bool wsStarted=false;
 static uint32_t sttRetryAt=0;
 static bool sttRetryShown=false;
 static bool sttStopped=false;
-static portMUX_TYPE trackMux=portMUX_INITIALIZER_UNLOCKED;
-static bool trackPending=false,trackActive=false,trackResponseReady=false,trackResultValid=false;
-static const uint8_t *trackJpeg=nullptr;
-static size_t trackJpegLength=0;
-static uint32_t trackIdCounter=0,trackCurrentId=0;
-static bool trackFound=false;
-static float trackScore=0.0f,trackCenterX=0.0f;
-static int trackTargetX=-1;
 
 String sttFinal,sttPartial;
 bool micOK=false;
@@ -69,151 +60,6 @@ static bool wsSendBIN(const uint8_t *data,size_t length){
 }
 bool sttCooling(){return (int32_t)(millis()-sttRetryAt)<0;}
 
-static void failTrackRequest(){
-    portENTER_CRITICAL(&trackMux);
-    if(trackActive){
-        trackPending=false;
-        trackResponseReady=true;
-        trackResultValid=false;
-    }
-    portEXIT_CRITICAL(&trackMux);
-}
-static void cancelTrackRequest(){
-    portENTER_CRITICAL(&trackMux);
-    if(trackActive){
-        trackPending=false;
-        trackResponseReady=true;
-        trackResultValid=false;
-    }else{
-        trackPending=false;
-        trackJpeg=nullptr;
-        trackJpegLength=0;
-    }
-    portEXIT_CRITICAL(&trackMux);
-}
-static void serviceTrackRequest(){
-    const uint8_t *jpeg=nullptr;
-    size_t length=0;
-    uint32_t id=0;
-    bool sendRequest=false;
-
-    if(!sttConnected||sttSessionActive||sttClosing)return;
-
-    portENTER_CRITICAL(&trackMux);
-    if(trackPending&&trackActive){
-        jpeg=trackJpeg;
-        length=trackJpegLength;
-        id=trackCurrentId;
-        trackPending=false;
-        sendRequest=true;
-    }
-    portEXIT_CRITICAL(&trackMux);
-
-    if(!sendRequest)return;
-    if(!jpeg||!length){failTrackRequest();return;}
-
-    String control;
-    control.reserve(48);
-    control="{\"type\":\"track_begin\",\"id\":";
-    control+=String(id);
-    control+="}";
-
-    bool controlSent=wsSendTXT(control);
-    bool imageSent=false;
-    if(controlSent)imageSent=wsSendBIN(jpeg,length);
-
-    Serial.printf("TARS TRACK: ID=%lu CONTROL=%d JPEG=%d SIZE=%u\n",
-        (unsigned long)id,controlSent,imageSent,(unsigned)length);
-
-    if(!controlSent||!imageSent){
-        portENTER_CRITICAL(&trackMux);
-        if(trackActive&&trackCurrentId==id){
-            trackResponseReady=true;
-            trackResultValid=false;
-        }
-        portEXIT_CRITICAL(&trackMux);
-    }
-}
-
-bool sttTrackDetect(const uint8_t *jpeg,size_t length,VisionTrackResult &result,uint32_t timeoutMs){
-    result.found=false;
-    result.score=0.0f;
-    result.centerX=0.0f;
-    result.targetX=-1;
-
-    if(!jpeg||!length||!sttConnected||sttSessionActive||sttClosing)return false;
-
-    uint32_t id;
-    portENTER_CRITICAL(&trackMux);
-    if(trackActive||trackPending){
-        portEXIT_CRITICAL(&trackMux);
-        return false;
-    }
-
-    id=++trackIdCounter;
-    if(id==0)id=++trackIdCounter;
-    trackCurrentId=id;
-    trackJpeg=jpeg;
-    trackJpegLength=length;
-    trackFound=false;
-    trackScore=0.0f;
-    trackCenterX=0.0f;
-    trackTargetX=-1;
-    trackResultValid=false;
-    trackResponseReady=false;
-    trackActive=true;
-    trackPending=true;
-    portEXIT_CRITICAL(&trackMux);
-
-    Serial.printf("TARS TRACK: REQUEST ID=%lu SIZE=%u\n",(unsigned long)id,(unsigned)length);
-    uint32_t started=millis();
-
-    while(millis()-started<timeoutMs){
-        bool ready=false,valid=false;
-        portENTER_CRITICAL(&trackMux);
-        ready=trackResponseReady;
-        if(ready&&trackCurrentId==id){
-            valid=trackResultValid;
-            if(valid){
-                result.found=trackFound;
-                result.score=trackScore;
-                result.centerX=trackCenterX;
-                result.targetX=trackTargetX;
-            }
-            trackPending=false;
-            trackActive=false;
-            trackResponseReady=false;
-            trackResultValid=false;
-            trackJpeg=nullptr;
-            trackJpegLength=0;
-        }
-        portEXIT_CRITICAL(&trackMux);
-
-        if(ready){
-            if(valid){
-                Serial.printf("TARS TRACK: RESULT FOUND=%d X=%d SCORE=%.2f\n",
-                    result.found,result.targetX,result.score);
-            }else Serial.println("TARS TRACK: REQUEST FAILED");
-            return valid;
-        }
-        if(!sttConnected||sttSessionActive||sttClosing)break;
-        vTaskDelay(pdMS_TO_TICKS(10));
-    }
-
-    portENTER_CRITICAL(&trackMux);
-    if(trackCurrentId==id){
-        trackPending=false;
-        trackActive=false;
-        trackResponseReady=false;
-        trackResultValid=false;
-        trackJpeg=nullptr;
-        trackJpegLength=0;
-    }
-    portEXIT_CRITICAL(&trackMux);
-    Serial.printf("TARS TRACK: TIMEOUT ID=%lu\n",(unsigned long)id);
-    return false;
-}
-
 static void sttEvent(WStype_t type,uint8_t *payload,size_t length){
     if(type==WStype_CONNECTED){
         sttConnected=true;
@@ -228,7 +74,6 @@ static void sttEvent(WStype_t type,uint8_t *payload,size_t length){
         sttSessionActive=false;
         sttStopped=true;
         if(!sttClosing&&wasActive)sttError=true;
-        failTrackRequest();
         Serial.println(sttClosing?"TARS: WSS DISCONNECTED (NORMAL)":"TARS: WSS DISCONNECTED");
         return;
     }
@@ -255,31 +100,6 @@ static void sttEvent(WStype_t type,uint8_t *payload,size_t length){
     const char *t=j["type"]|"";
     if(strcmp(t,"pong")==0)return;
 
-    if(strcmp(t,"track_result")==0){
-        uint32_t id=j["id"]|0U;
-        bool found=j["found"]|false;
-        float score=j["score"]|0.0f;
-        float centerX=j["centerX"]|0.0f;
-        int targetX=j["targetX"]|-1;
-
-        if(found&&(targetX<0||targetX>319||score<0.60f||score>1.0f)){
-            found=false;
-            targetX=-1;
-        }
-        if(centerX<0.0f||centerX>1.0f)centerX=0.0f;
-
-        portENTER_CRITICAL(&trackMux);
-        if(trackActive&&id==trackCurrentId){
-            trackFound=found;
-            trackScore=score;
-            trackCenterX=centerX;
-            trackTargetX=found?targetX:-1;
-            trackResultValid=true;
-            trackResponseReady=true;
-        }
-        portEXIT_CRITICAL(&trackMux);
-        return;
-    }
     if(strcmp(t,"ready")==0){
         sttReady=true;
         sttError=false;
@@ -310,17 +130,10 @@ static void sttEvent(WStype_t type,uint8_t *payload,size_t length){
     }
     if(strcmp(t,"error")==0){
         const char *e=j["error"]|"unknown";
-        bool trackBusy=strstr(e,"DETR_BUSY")!=nullptr||strstr(e,"STT_OR_DETR_BUSY")!=nullptr;
-        if(trackBusy){
-            Serial.printf("TARS TRACK: BUSY, WILL RETRY (%s)\n",e);
-            failTrackRequest();
-            return;
-        }
         sttError=true;
         sttDone=true;
         Serial.printf("TARS: STT ERROR = %s\n",e);
         oledSetStatus("STT ERROR");
-        failTrackRequest();
         return;
     }
 }
@@ -335,12 +148,10 @@ void sttService(){
         wsStarted=true;
     }
     if(wsStarted)sttWS.loop();
-    serviceTrackRequest();
 }
 
 void closeSTT(uint32_t cooldown){
     sttClosing=true;
-    cancelTrackRequest();
     if(sttConnected&&sttSessionActive){
         JsonDocument j;
         j["type"]="end";
@@ -395,7 +206,7 @@ bool startSTT(){
     sttStopped=false;
     sttSessionActive=false;
     sttRetryShown=false;
-    Serial.println("TARS: WSS READY FOR STT/DETR");
+    Serial.println("TARS: WSS READY FOR STT");
     return true;
 }
 
