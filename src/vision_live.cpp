@@ -1,4 +1,3 @@
-
 #include "vision_live.h"
 #include <Arduino.h>
 #include <I2SCamera.h>
@@ -23,7 +22,7 @@
 #define VISION_JSON_MAX 28000
 #define VISION_LOCK_WAIT 15000
 #define VISION_QA_QUALITY 55
-#define VISION_TRACK_QUALITY 35
+#define VISION_TRACK_QUALITY 20
 
 extern OV7670 *camera;
 extern SemaphoreHandle_t cameraMux;
