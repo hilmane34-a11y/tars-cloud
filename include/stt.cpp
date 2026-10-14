@@ -1,4 +1,3 @@
-
 #include "stt.h"
 #include <Arduino.h>
 #include <WiFi.h>
@@ -17,8 +16,8 @@
 #define RECORD_MIN_MS 500
 #define SILENCE_MS 800
 #define PREROLL_MS 150
-#define STT_NORMAL_COOLDOWN 1000
-#define STT_ERROR_COOLDOWN 30000
+#define STT_NORMAL_COOLDOWN 2000
+#define STT_ERROR_COOLDOWN 5000
 #define STT_IDLE_TIMEOUT_MS 10000
 
 static const size_t BUF=256;
@@ -145,7 +144,7 @@ bool startSTT(){
   sttRetryShown=false;
 
   sttWS.onEvent(sttEvent);
-  sttWS.setReconnectInterval(5000);
+  sttWS.setReconnectInterval(4000);
   sttWS.enableHeartbeat(15000,5000,2);
   Serial.printf("TARS: STT DIAG heap=%u maxBlock=%u RSSI=%d\n",ESP.getFreeHeap(),ESP.getMaxAllocHeap(),WiFi.RSSI());
   sttWS.beginSSL(STT_HOST_LOCAL,443,"/stt");
