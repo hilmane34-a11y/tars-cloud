@@ -70,7 +70,6 @@ volatile bool pendingVisionCheck=false;
 uint32_t lastVisionEventAt=0;
 const uint32_t VISION_EVENT_COOLDOWN_MS=45000;
 volatile bool visionAimMoving = false;
-volatile bool cameraTransition = false;
 
 OV7670*camera=nullptr;
 SemaphoreHandle_t previewMux=nullptr,envMux=nullptr,cameraMux=nullptr;
@@ -230,41 +229,10 @@ bool startCamera(){
   camDiag("START-DONE");
   return true;
 }
-bool playLocalMP3WithCameraOff(
-    const uint8_t* start,
-    const uint8_t* end,
-    const String& name,
-    bool alarm = false
-) {
-    bool restoreCamera =
-        camera != nullptr &&
-        cameraOK &&
-        cameraLive;
-    if (restoreCamera) {
-        cameraTransition = true;
-        stopCamera();
-        if (camera != nullptr ||
-            cameraOK ||
-            cameraLive) {
-            Serial.println("TARS: CAMERA STOP FAILED");
-            cameraTransition = false;
-            return false;
-        }
-    }
-    bool ok = playLocalMP3(start, end, name, alarm);
-    if (restoreCamera) {
-        bool restarted = startCamera();
-        if (!restarted) {
-            Serial.println("TARS: CAMERA RESTART FAILED");
-        }
-        cameraTransition = false;
-    }
-    return ok;
-}
 void cameraTask(void*){
   uint8_t frameErrors=0;
   for(;;){
-   if (cameraTransition || !cameraLive ||  !camera || !cameraOK || playing) {
+    if (!cameraLive || !camera || !cameraOK || playing) {
   if (playing || !visionAimMoving) {
     wheelsStop();
   }
@@ -274,15 +242,9 @@ void cameraTask(void*){
     bool ok=false;
     bool analyzed=false;
     EnvState environment={};
-    if (xSemaphoreTake(cameraMux, portMAX_DELAY) == pdTRUE) {
-// Kamera mungkin berubah saat task menunggu mutex.
-if (cameraTransition ||!cameraLive ||!camera ||!cameraOK ||playing) {
-xSemaphoreGive(cameraMux);
-vTaskDelay(pdMS_TO_TICKS(20));
-continue;
-}
-     if (xSemaphoreTake(envMux, portMAX_DELAY) == pdTRUE) {
-     if(xSemaphoreTake(previewMux,portMAX_DELAY)==pdTRUE){
+    if(xSemaphoreTake(cameraMux,portMAX_DELAY)==pdTRUE){
+      if(xSemaphoreTake(envMux,portMAX_DELAY)==pdTRUE){
+        if(xSemaphoreTake(previewMux,portMAX_DELAY)==pdTRUE){
 ok=I2SCamera::captureFrameData( cameraEnvironment, cameraPreview);
 static uint32_t lastPreviewDiag=0;
 if(millis()-lastPreviewDiag>=5000){
@@ -559,24 +521,27 @@ const char*greetingText(uint8_t p){
 
 bool playTimeGreeting(uint8_t p){
   switch(p){
-    case 0:return playLocalMP3WithCameraOff(pagi_start,pagi_end,greetingText(p));
-    case 1:return playLocalMP3WithCameraOff(siang_start,siang_end,greetingText(p));
-    case 2:return playLocalMP3WithCameraOff(sore_start,sore_end,greetingText(p));
-    case 3:return playLocalMP3WithCameraOff(malam_start,malam_end,greetingText(p));
+    case 0:return playLocalMP3(pagi_start,pagi_end,greetingText(p));
+    case 1:return playLocalMP3(siang_start,siang_end,greetingText(p));
+    case 2:return playLocalMP3(sore_start,sore_end,greetingText(p));
+    case 3:return playLocalMP3(malam_start,malam_end,greetingText(p));
   }
   return false;
 }
-bool autoSpeechCallback(const String&prompt){
-if(tarsMode!=MODE_ONLINE||playing||sttSessionActive||WiFi.status()!=WL_CONNECTED)
-return false;
-if(!prompt.startsWith("[AUTO_CHAT]"))
-return false;
-String q=prompt.substring(11);
-q.trim();
-if(!q.length())return false;
 
-return processOnlineRequest(q,false,false,true);
+bool autoSpeechCallback(const String&prompt){
+  if(tarsMode!=MODE_ONLINE||playing||sttConnected||WiFi.status()!=WL_CONNECTED)
+    return false;
+  if(!prompt.startsWith("[AUTO_CHAT]"))
+    return false;
+
+  String q=prompt.substring(11);
+  q.trim();
+  if(!q.length())return false;
+
+  return processOnlineRequest(q,false,false,true);
 }
+
 bool processOnlineRequest(const String&q,bool vision,bool status,bool automatic){
   wheelsStop();
   autonomyStop();
@@ -684,8 +649,7 @@ String systemStatus(){
      ", kamera "+String(cameraLive?"aktif":"off")+
      ", audio "+String(playing?"sedang berjalan":"idle")+
      ", sistem roda siap (tanpa sensor umpan balik gerak), STT "+
-      String(sttSessionActive?(sttReady?"aktif dan ready":"sesi aktif"):
-       (sttConnected?"WSS terhubung, STT idle":"WSS terputus"))+".";
+     String(sttReady?"ready":sttConnected?"connected":"idle")+".";
   return s;
 }
 
@@ -741,10 +705,6 @@ void runAlarm(){
   wheelsStop();
   uint32_t st=millis();
   bool played=false;
- bool restoreCamera =
-    camera != nullptr && cameraOK && cameraLive;
-if (restoreCamera) {
-  stopCamera();}
   while(millis()-st<ALARM_DURATION_MS){
     if(!playLocalAlarm())break;
     played=true;
@@ -754,10 +714,9 @@ if (restoreCamera) {
   audioStop();
   alarmRunning=false;
   wheelsStop();
-  if (restoreCamera) {
-  startCamera();}
   oledSetStatus(tarsMode==MODE_ONLINE?"LISTENING":"READY");
 }
+
 void checkTimeGreeting(){
   if(!ntpOK||playing||alarmRunning||greetingPlaying)return;
   uint8_t p=greetingPeriod();
@@ -771,6 +730,7 @@ void checkTimeGreeting(){
   wheelsStop();
   oledSetStatus(ok?(tarsMode==MODE_ONLINE?"LISTENING":"READY"):"AUDIO ERROR");
 }
+
 String ask(const String&q){
   if(!wifiOK())return "";
   WiFiClientSecure c;
@@ -803,13 +763,17 @@ String ask(const String&q){
 }
 void processQuestion(const String&q){
   String nq=normCmd(q);
+
   oledShowText(q,"STT");
   delay(300);
   tarsEmotionQuestion(q);
+
   if(tarsEmotionHasEvent())
     tarsEmotionTakeEvent();
+
   bool vision=needsVision(q);
   bool status=isStatusQuery(q);
+
   String request=q;
   switch(random(0,5)){
     case 0:request+=" Jawab dengan gaya santai dan natural.";break;
@@ -825,7 +789,7 @@ void processQuestion(const String&q){
 void visionAimTask(void *parameter) {
   VisionTrackResult target = {};
   for (;;) {
-    if (tarsMode != MODE_ONLINE ||  playing ||  cameraTransition ||  !camera ||  !cameraOK || !cameraLive) {
+    if (tarsMode != MODE_ONLINE || playing) {
       wheelsStop();
       visionAimMoving = false;
       vTaskDelay(pdMS_TO_TICKS(200));
@@ -835,11 +799,10 @@ void visionAimTask(void *parameter) {
     visionAimMoving = false;
     bool ok = visionTrackPerson(target);
     // Selalu berhenti jika mode berubah atau audio dimulai.
-    if (tarsMode != MODE_ONLINE ||    playing ||   cameraTransition ||    !camera ||   !cameraOK ||    !cameraLive) {
-    wheelsStop();
-    visionAimMoving = false;
-    vTaskDelay(pdMS_TO_TICKS(200));
-    continue;
+    if (tarsMode != MODE_ONLINE || playing) {
+      wheelsStop();
+      vTaskDelay(pdMS_TO_TICKS(200));
+      continue;
     }
     if (ok && target.found) {
       if (target.targetX < 135) {
@@ -902,14 +865,13 @@ void setup(){
   Serial.println("TARS: AUDIO MP3/WAV -> 22050Hz/16bit");
   Serial.println("TARS: INMP441 SCK=18 WS=2 SD=15");
   Serial.println("TARS: L9110S A=23/16 B=17/19");
-  Serial.println("TARS: MIC PEAK=10000/8000 RMS=3000/1800 PREROLL=150 ms BUF=256");
+  Serial.println("TARS: MIC PEAK=14000/8000 RMS=3000/1800 PREROLL=250 ms BUF=256");
   Serial.println("TARS: ONLINE MODE ONLY");
   Serial.println("TARS: STT ONLINE REALTIME PCM");
   Serial.println("TARS: VISION ONLINE ONLY");
   Serial.printf("TARS: OV7670 D0..D7=%d,%d,%d,%d,%d,%d,%d,%d XCLK=%d PCLK=%d VSYNC=%d HREF=%d SCCB=%d/%d\n",CAM_D0,CAM_D1,CAM_D2,CAM_D3,CAM_D4,CAM_D5,CAM_D6,CAM_D7,CAM_XCLK,CAM_PCLK,CAM_VSYNC,CAM_HREF,CAM_SIOD,CAM_SIOC);
   Serial.println("TARS: GPIO4 RESERVED FOR OV7670 XCLK");
   Serial.println("TARS: BLUETOOTH DISABLED");
-  Serial.println("TARS: MODE OFFLINE");
   ramDiag("BOOT");
 
   if(oledOK)
@@ -940,7 +902,7 @@ startCamera();
 xTaskCreatePinnedToCore(  cameraTask,  "TARS_EYE",  4096,  nullptr,  2,  nullptr,  1);
 BaseType_t visionTaskResult = xTaskCreatePinnedToCore( visionAimTask, "TARS_VisionAim", 6144, nullptr, 1, nullptr, 0);if (visionTaskResult == pdPASS) { Serial.println("TARS: VISION AIM TASK READY");
 } else {
- Serial.println("TARS: VISION AIM TASK FAILED");}
+  Serial.println("TARS: VISION AIM TASK FAILED");}
 ramDiag("READY");
   wheelsStop();
 
@@ -980,7 +942,6 @@ void enterTarsDeepSleep(){
 }
 
 void loop(){
- sttService();
   /*time_t now=time(nullptr);
   struct tm t={};
 
@@ -1030,13 +991,13 @@ if(playing){
   return;
 }
 String q=recordRealtime();
-if(q.length()){
+  if(q.length()){
   wheelsStop();
   processQuestion(q);
 }else if(!oledSpecial){
   oledSetStatus(tarsMode==MODE_ONLINE?"LISTENING":"READY");
 }
-if(!playing&&tarsMode==MODE_ONLINE&&!sttSessionActive)
+if(!playing&&tarsMode==MODE_ONLINE&&!sttConnected)
   autoSpeechUpdate(true,false,false);
 delay(1);
 }
