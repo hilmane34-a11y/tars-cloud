@@ -22,7 +22,6 @@
 #define TRACK_JSON_MAX 28000
 
 extern bool playing;
-extern volatile bool cameraTransition;
 extern bool visionLiveEnabled();
 
 static char *trackJson = nullptr;
@@ -57,9 +56,7 @@ static bool sendTrackHTTPS(
         return false;
     }
 
-    const size_t capacity = TRACK_JSON_MAX;
-    trackJson = (char *)malloc(capacity);
-
+    trackJson = (char *)malloc(TRACK_JSON_MAX);
     if (!trackJson) {
         Serial.printf(
             "TARS TRACK: JSON ALLOC FAILED HEAP=%u MAX=%u\n",
@@ -70,12 +67,11 @@ static bool sendTrackHTTPS(
     }
 
     int prefix = snprintf(
-        trackJson,
-        capacity,
+        trackJson, TRACK_JSON_MAX,
         "{\"mode\":\"track\",\"format\":\"jpeg\",\"image\":\""
     );
 
-    if (prefix <= 0 || (size_t)prefix >= capacity) {
+    if (prefix <= 0 || prefix >= TRACK_JSON_MAX) {
         free(trackJson);
         trackJson = nullptr;
         return false;
@@ -84,7 +80,7 @@ static bool sendTrackHTTPS(
     size_t encodedLength = 0;
     int b64 = mbedtls_base64_encode(
         (unsigned char *)trackJson + prefix,
-        capacity - (size_t)prefix,
+        TRACK_JSON_MAX - (size_t)prefix,
         &encodedLength,
         jpeg,
         jpegLength
@@ -98,7 +94,7 @@ static bool sendTrackHTTPS(
     }
 
     size_t bodyLength = (size_t)prefix + encodedLength;
-    if (bodyLength + 3 > capacity) {
+    if (bodyLength + 3 > TRACK_JSON_MAX) {
         free(trackJson);
         trackJson = nullptr;
         return false;
@@ -160,15 +156,17 @@ static bool sendTrackHTTPS(
                 success = true;
             } else {
                 clearResult(result);
-                success = true; // Deteksi berhasil, target tidak ditemukan.
+                success = true;
             }
         } else {
             Serial.println("TARS TRACK: RESPONSE JSON ERROR");
         }
         response = "";
     } else if (code >= 0) {
-        Serial.printf("TARS TRACK: HTTP ERROR=%s\n",
-                      http.getString().c_str());
+        Serial.printf(
+            "TARS TRACK: HTTP ERROR=%s\n",
+            http.getString().c_str()
+        );
     }
 
     http.end();
@@ -195,7 +193,6 @@ bool visionTrackPerson(VisionTrackResult &result) {
 
     if (!visionLiveEnabled() ||
         playing ||
-        cameraTransition ||
         WiFi.status() != WL_CONNECTED) {
         return false;
     }
@@ -207,8 +204,7 @@ bool visionTrackPerson(VisionTrackResult &result) {
     bool success = false;
     size_t jpegLength = 0;
 
-    if (!cameraTransition &&
-        !playing &&
+    if (!playing &&
         visionLiveEnabled() &&
         WiFi.status() == WL_CONNECTED &&
         visionLiveTrackCapture(jpegLength)) {
@@ -218,7 +214,6 @@ bool visionTrackPerson(VisionTrackResult &result) {
         if (jpeg &&
             jpegLength > 0 &&
             jpegLength <= TRACK_JPEG_MAX &&
-            !cameraTransition &&
             !playing &&
             visionLiveEnabled() &&
             WiFi.status() == WL_CONNECTED) {
@@ -232,7 +227,7 @@ bool visionTrackPerson(VisionTrackResult &result) {
 
     visionLiveTrackResume();
 
-    if (cameraTransition || playing || !visionLiveEnabled()) {
+    if (playing || !visionLiveEnabled()) {
         clearResult(result);
         return false;
     }
