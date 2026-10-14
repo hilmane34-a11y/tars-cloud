@@ -7,7 +7,7 @@
 #include <ArduinoJson.h>
 #include <mbedtls/base64.h>
 #include <stdlib.h>
-#include <stdio.h>
+#include <string.h>
 #include "config.h"
 
 #ifndef TARS_LIVE_TOKEN
@@ -15,8 +15,8 @@
 #endif
 
 #define TRACK_TIMEOUT 8000
-#define TRACK_JPEG_MAX 20000
-#define TRACK_JSON_MAX 28000
+#define TRACK_JPEG_MAX 8000
+#define TRACK_JSON_MAX 11000
 
 extern bool playing;
 extern bool visionLiveEnabled();
@@ -43,7 +43,8 @@ static bool sendTrackHTTPS(const uint8_t *jpeg, size_t len,
     if (!jpeg || !len || len > TRACK_JPEG_MAX ||
         WiFi.status() != WL_CONNECTED) return false;
 
-    const char *head = "{\"mode\":\"track\",\"format\":\"jpeg\",\"image\":\"";
+    const char *head =
+        "{\"mode\":\"track\",\"format\":\"jpeg\",\"image\":\"";
     size_t prefix = strlen(head);
     size_t b64Max = 4 * ((len + 2) / 3);
     size_t capacity = prefix + b64Max + 3;
@@ -53,7 +54,8 @@ static bool sendTrackHTTPS(const uint8_t *jpeg, size_t len,
     char *body = (char *)malloc(capacity);
     if (!body) {
         Serial.printf("TARS TRACK: ALLOC FAIL HEAP=%u MAX=%u NEED=%u\n",
-            ESP.getFreeHeap(), ESP.getMaxAllocHeap(), (unsigned)capacity);
+            ESP.getFreeHeap(), ESP.getMaxAllocHeap(),
+            (unsigned)capacity);
         return false;
     }
 
@@ -82,12 +84,13 @@ static bool sendTrackHTTPS(const uint8_t *jpeg, size_t len,
     client.setTimeout(TRACK_TIMEOUT);
 
     HTTPClient http;
-    http.setTimeout(TRACK_TIMEOUT);
-
     bool success = false;
+
     if (http.begin(client, trackURL())) {
+        http.setTimeout(TRACK_TIMEOUT);
         http.addHeader("Content-Type", "application/json");
-        http.addHeader("Authorization", String("Bearer ") + TARS_LIVE_TOKEN);
+        http.addHeader("Authorization",
+                       String("Bearer ") + TARS_LIVE_TOKEN);
 
         int code = http.POST((uint8_t *)body, bodyLen);
         Serial.printf("TARS TRACK: HTTP=%d", code);
@@ -97,20 +100,20 @@ static bool sendTrackHTTPS(const uint8_t *jpeg, size_t len,
 
         if (code >= 200 && code < 300) {
             JsonDocument doc;
-            DeserializationError e = deserializeJson(doc, http.getStream());
+            DeserializationError e =
+                deserializeJson(doc, http.getStream());
+
             if (!e) {
                 r.found = doc["found"] | false;
                 r.score = doc["score"] | 0.0f;
                 r.centerX = doc["centerX"] | 0.0f;
                 r.targetX = doc["targetX"] | -1;
 
-                if (r.found && r.score >= 0.60f &&
-                    r.targetX >= 0 && r.targetX <= 319) {
-                    success = true;
-                } else {
+                if (!r.found || r.score < 0.60f ||
+                    r.targetX < 0 || r.targetX > 319)
                     clearResult(r);
-                    success = true;
-                }
+
+                success = true;
             } else {
                 Serial.println("TARS TRACK: RESPONSE JSON ERROR");
             }
@@ -118,6 +121,7 @@ static bool sendTrackHTTPS(const uint8_t *jpeg, size_t len,
             Serial.printf("TARS TRACK: SERVER ERROR=%s\n",
                           http.getString().c_str());
         }
+
         http.end();
     } else {
         Serial.println("TARS TRACK: HTTP BEGIN FAILED");
@@ -129,13 +133,16 @@ static bool sendTrackHTTPS(const uint8_t *jpeg, size_t len,
     Serial.printf("TARS TRACK: DONE OK=%d FOUND=%d SCORE=%.2f X=%d HEAP=%u MAX=%u\n",
         success, r.found, r.score, r.targetX,
         ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+
     return success;
 }
 
 bool visionTrackPerson(VisionTrackResult &r) {
     clearResult(r);
+
     if (!visionLiveEnabled() || playing ||
         WiFi.status() != WL_CONNECTED) return false;
+
     if (!visionLiveTrackPause()) return false;
 
     bool ok = false;
@@ -145,16 +152,23 @@ bool visionTrackPerson(VisionTrackResult &r) {
         WiFi.status() == WL_CONNECTED &&
         visionLiveTrackCapture(len)) {
         uint8_t *jpeg = visionLiveSharedJpeg();
+
         if (jpeg && len && len <= TRACK_JPEG_MAX &&
             !playing && visionLiveEnabled() &&
-            WiFi.status() == WL_CONNECTED)
+            WiFi.status() == WL_CONNECTED) {
             ok = sendTrackHTTPS(jpeg, len, r);
+        } else if (len > TRACK_JPEG_MAX) {
+            Serial.printf("TARS TRACK: JPEG TOO LARGE=%u LIMIT=%u\n",
+                (unsigned)len, TRACK_JPEG_MAX);
+        }
     }
 
     visionLiveTrackResume();
+
     if (playing || !visionLiveEnabled()) {
         clearResult(r);
         return false;
     }
+
     return ok;
 }
