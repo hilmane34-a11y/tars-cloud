@@ -33,7 +33,6 @@
 #include <oled.h>
 #include <lengan.h>
 #include <hand_gesture.h>
-#include <vision_track.h>
 
 #define MIC_PORT I2S_NUM_1
 #define MIC_SCK 18
@@ -56,8 +55,8 @@
 
 const uint32_t ALARM_DURATION_MS=180000;
 const uint32_t MIC_RATE=16000;
-enum TarsMode:uint8_t{MODE_ONLINE};
-TarsMode tarsMode=MODE_ONLINE;
+enum TarsMode:uint8_t{MODE_OFFLINE,MODE_ONLINE};
+TarsMode tarsMode=MODE_OFFLINE;
 
 bool alarmRunning=false,greetingPlaying=false,cameraOK=false,cameraLive=false,ntpOK=false;
 volatile bool ntpSyncEvent=false;
@@ -69,7 +68,6 @@ uint32_t sleepPrepareAt=0;
 volatile bool pendingVisionCheck=false;
 uint32_t lastVisionEventAt=0;
 const uint32_t VISION_EVENT_COOLDOWN_MS=45000;
-volatile bool visionAimMoving = false;
 
 OV7670*camera=nullptr;
 SemaphoreHandle_t previewMux=nullptr,envMux=nullptr,cameraMux=nullptr;
@@ -232,12 +230,10 @@ bool startCamera(){
 void cameraTask(void*){
   uint8_t frameErrors=0;
   for(;;){
-    if (!cameraLive || !camera || !cameraOK || playing) {
-  if (playing || !visionAimMoving) {
-    wheelsStop();
-  }
-  vTaskDelay(pdMS_TO_TICKS(20));
-  continue;
+    if(!cameraLive||!camera||!cameraOK||playing){
+      wheelsStop();
+      vTaskDelay(pdMS_TO_TICKS(20));
+      continue;
     }
     bool ok=false;
     bool analyzed=false;
@@ -761,8 +757,61 @@ String ask(const String&q){
   Serial.printf("TARS: ASK RESPONSE LENGTH=%u\n",(unsigned)s.length());
   return s;
 }
+
+bool processOffline(const String&q){
+  String s=normCmd(q);
+  static const char*online[]={"online","on line","tars online","tars on line","mode online","tars mode online"};
+  static const char*hari[]={"hari","hari ini","kata hari","kata kata","kata kata hari ini","kata hari ini tars","tars hari ini","tars kata hari ini"};
+
+  if(cmdMatch(s,hari,sizeof(hari)/sizeof(*hari))){
+    oledShowText("HARI INI","OFFLINE");
+    playLocalMP3(hari_start,hari_end,"Kata-kata hari ini, Ooo celeng Celeng itu ga tau ilmu huruf.");
+    oledSetStatus("READY");
+    return true;
+  }
+
+  if(cmdMatch(s,online,sizeof(online)/sizeof(*online))){
+    Serial.println("TARS: SWITCH OFFLINE -> ONLINE");
+    oledShowText("ONLINE","OFFLINE");
+    tarsMode=MODE_ONLINE;
+    personalityResetSpeechTimer();
+    autoSpeechResetTimer();
+    tarsEmotionResetPending();
+    portENTER_CRITICAL(&visionEventMux);
+    pendingVisionCheck=false;
+    portEXIT_CRITICAL(&visionEventMux);
+    playLocalMP3(online_start,online_end,"Mode online aktif, tuan");
+    Serial.println("TARS: MODE ONLINE");
+    return true;
+  }
+  return false;
+}
+
 void processQuestion(const String&q){
   String nq=normCmd(q);
+
+  if(tarsMode==MODE_OFFLINE){
+    processOffline(q);
+    return;
+  }
+
+  if(nq=="offline"||nq=="off line"||nq=="tars offline"||nq=="tars off line"||nq=="mode offline"||nq=="mode off line"||nq=="tars mode offline"||nq=="tars mode off line"){
+    Serial.println("TARS: SWITCH ONLINE -> OFFLINE");
+    closeSTT();
+    tarsMode=MODE_OFFLINE;
+    autoSpeechResetTimer();
+    portENTER_CRITICAL(&visionEventMux);
+    pendingVisionCheck=false;
+    portEXIT_CRITICAL(&visionEventMux);
+    sttReady=false;
+    sttDone=false;
+    sttError=false;
+    oledShowText("OFFLINE","ONLINE");
+    playLocalMP3(offline_start,offline_end,"Mode offline aktif, tuan");
+    oledSetStatus("READY");
+    Serial.println("TARS: MODE OFFLINE");
+    return;
+  }
 
   oledShowText(q,"STT");
   delay(300);
@@ -783,50 +832,9 @@ void processQuestion(const String&q){
     default:request+=" Jawab secara ramah, singkat, dan tidak monoton.";break;
   }
   request+=" Jangan mengulang kalimat atau sapaan yang sama jika tidak diperlukan.";
-
   processOnlineRequest(request,vision,status,false);
 }
-void visionAimTask(void *parameter) {
-  VisionTrackResult target = {};
-  for (;;) {
-    if (tarsMode != MODE_ONLINE || playing) {
-      wheelsStop();
-      visionAimMoving = false;
-      vTaskDelay(pdMS_TO_TICKS(200));
-      continue;
-    }
-    wheelsStop();
-    visionAimMoving = false;
-    bool ok = visionTrackPerson(target);
-    // Selalu berhenti jika mode berubah atau audio dimulai.
-    if (tarsMode != MODE_ONLINE || playing) {
-      wheelsStop();
-      vTaskDelay(pdMS_TO_TICKS(200));
-      continue;
-    }
-    if (ok && target.found) {
-      if (target.targetX < 135) {
-        // Manusia di kiri: roda kanan maju.
-        wheelsDrive(0, 65);
-        visionAimMoving = true;
-      }
-      else if (target.targetX > 185) {
-        // Manusia di kanan: roda kiri maju.
-        wheelsDrive(65, 0);
-        visionAimMoving = true;
-      }
-      else {
-        // Manusia di tengah: berhenti.
-        wheelsStop();
-      }
-    }
-    else {
-      // Tidak terdeteksi atau permintaan gagal.
-      wheelsStop();
-    }
-    vTaskDelay(pdMS_TO_TICKS(500));
-  }
-}
+
 void setup(){
   Serial.begin(SERIAL_BAUD);
   Wire.begin(OLED_SDA,OLED_SCL);
@@ -866,12 +874,13 @@ void setup(){
   Serial.println("TARS: INMP441 SCK=18 WS=2 SD=15");
   Serial.println("TARS: L9110S A=23/16 B=17/19");
   Serial.println("TARS: MIC PEAK=14000/8000 RMS=3000/1800 PREROLL=250 ms BUF=256");
-  Serial.println("TARS: ONLINE MODE ONLY");
   Serial.println("TARS: STT ONLINE REALTIME PCM");
+  Serial.println("TARS: STT OFFLINE REALTIME PCM");
   Serial.println("TARS: VISION ONLINE ONLY");
   Serial.printf("TARS: OV7670 D0..D7=%d,%d,%d,%d,%d,%d,%d,%d XCLK=%d PCLK=%d VSYNC=%d HREF=%d SCCB=%d/%d\n",CAM_D0,CAM_D1,CAM_D2,CAM_D3,CAM_D4,CAM_D5,CAM_D6,CAM_D7,CAM_XCLK,CAM_PCLK,CAM_VSYNC,CAM_HREF,CAM_SIOD,CAM_SIOC);
   Serial.println("TARS: GPIO4 RESERVED FOR OV7670 XCLK");
   Serial.println("TARS: BLUETOOTH DISABLED");
+  Serial.println("TARS: MODE OFFLINE");
   ramDiag("BOOT");
 
   if(oledOK)
@@ -886,7 +895,6 @@ void setup(){
   oledSetStatus("READY");
   envBegin();
   visionLiveBegin();
-  visionTrackBegin();
   personalityBegin();
   tarsEmotionBegin();
   autoSpeechBegin(autoSpeechCallback);
@@ -898,12 +906,11 @@ void setup(){
       Serial.println("TARS: PERSONALITY TASK FAILED");
     }else Serial.println("TARS: PERSONALITY TASK READY");
   }
-startCamera();
-xTaskCreatePinnedToCore(  cameraTask,  "TARS_EYE",  4096,  nullptr,  2,  nullptr,  1);
-BaseType_t visionTaskResult = xTaskCreatePinnedToCore( visionAimTask, "TARS_VisionAim", 6144, nullptr, 1, nullptr, 0);if (visionTaskResult == pdPASS) { Serial.println("TARS: VISION AIM TASK READY");
-} else {
-  Serial.println("TARS: VISION AIM TASK FAILED");}
-ramDiag("READY");
+
+  startCamera();
+  xTaskCreatePinnedToCore(cameraTask,"TARS_EYE",4096,nullptr,2,nullptr,1);
+
+  ramDiag("READY");
   wheelsStop();
 
   Serial.println("TARS: LIFE READY");
@@ -990,8 +997,8 @@ if(playing){
   delay(1);
   return;
 }
-String q=recordRealtime();
-  if(q.length()){
+String q=tarsMode==MODE_ONLINE?recordRealtime():recordOffline();
+if(q.length()){
   wheelsStop();
   processQuestion(q);
 }else if(!oledSpecial){
