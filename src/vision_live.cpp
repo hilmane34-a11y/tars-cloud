@@ -10,8 +10,6 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 #include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
 #include "config.h"
 
 #ifndef TARS_LIVE_TOKEN
@@ -21,8 +19,6 @@
 #define VISION_JPEG_MAX 20000
 #define VISION_JSON_MAX 28000
 #define VISION_LOCK_WAIT 15000
-#define VISION_QA_QUALITY 55
-#define VISION_TRACK_QUALITY 20
 
 extern OV7670 *camera;
 extern SemaphoreHandle_t cameraMux;
@@ -35,16 +31,11 @@ extern void startCamera();
 static uint8_t visionJpeg[VISION_JPEG_MAX];
 static char *visionJson = nullptr;
 static char questionJson[1024];
-static size_t sharedJpegLength = 0;
-static bool cameraStoppedForVision = false;
-
-enum VisionOwner : uint8_t {
-    VISION_OWNER_NONE, VISION_OWNER_USER, VISION_OWNER_TRACK
-};
 
 static portMUX_TYPE visionLock = portMUX_INITIALIZER_UNLOCKED;
-static volatile VisionOwner visionOwner = VISION_OWNER_NONE;
-static volatile bool visionUserWaiting = false;
+static volatile bool visionBusy = false;
+static bool visionPaused = false;
+static bool cameraStoppedForVision = false;
 
 static void freeVisionJSON() {
     if (visionJson) {
@@ -53,150 +44,118 @@ static void freeVisionJSON() {
     }
 }
 
+static bool acquireVision() {
+    bool ok = false;
+    portENTER_CRITICAL(&visionLock);
+    if (!visionBusy) visionBusy = ok = true;
+    portEXIT_CRITICAL(&visionLock);
+    return ok;
+}
+
+static bool acquireVisionWait(uint32_t timeoutMs) {
+    uint32_t start = millis();
+    while (millis() - start < timeoutMs) {
+        if (acquireVision()) return true;
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+    return false;
+}
+
+static void releaseVision() {
+    portENTER_CRITICAL(&visionLock);
+    visionBusy = false;
+    portEXIT_CRITICAL(&visionLock);
+}
+
 static String cloudURL() {
     String url = TARS_CLOUD_URL;
     while (url.endsWith("/")) url.remove(url.length() - 1);
     return url;
 }
 
-static bool ownerIs(VisionOwner owner) {
-    portENTER_CRITICAL(&visionLock);
-    bool result = visionOwner == owner;
-    portEXIT_CRITICAL(&visionLock);
-    return result;
-}
-
-static bool acquireUserVision() {
-    portENTER_CRITICAL(&visionLock);
-    visionUserWaiting = true;
-    portEXIT_CRITICAL(&visionLock);
-
-    uint32_t started = millis();
-    while (millis() - started < VISION_LOCK_WAIT) {
-        bool acquired = false;
-        portENTER_CRITICAL(&visionLock);
-
-        if (visionOwner == VISION_OWNER_NONE) {
-            visionOwner = VISION_OWNER_USER;
-            visionUserWaiting = false;
-            acquired = true;
-        } else if (visionOwner == VISION_OWNER_USER) {
-            visionUserWaiting = false;
-            acquired = true;
-        }
-
-        portEXIT_CRITICAL(&visionLock);
-        if (acquired) {
-            cameraStoppedForVision = false;
-            sharedJpegLength = 0;
-            return true;
-        }
-        vTaskDelay(pdMS_TO_TICKS(20));
-    }
-
-    portENTER_CRITICAL(&visionLock);
-    visionUserWaiting = false;
-    portEXIT_CRITICAL(&visionLock);
-    return false;
-}
-
-static bool acquireTrackVision() {
-    portENTER_CRITICAL(&visionLock);
-    bool acquired = visionOwner == VISION_OWNER_NONE &&
-                    !visionUserWaiting;
-    if (acquired) visionOwner = VISION_OWNER_TRACK;
-    portEXIT_CRITICAL(&visionLock);
-
-    if (acquired) {
-        cameraStoppedForVision = false;
-        sharedJpegLength = 0;
-    }
-    return acquired;
-}
-
-static void releaseVision(VisionOwner owner) {
-    portENTER_CRITICAL(&visionLock);
-    if (visionOwner == owner) visionOwner = VISION_OWNER_NONE;
-    portEXIT_CRITICAL(&visionLock);
-}
-
-static bool captureFrame(size_t &length, uint8_t quality) {
+// CAPTURE JPEG SEBELUM KAMERA DIMATIKAN
+static bool captureFrame(size_t &length) {
     length = 0;
-    if (playing || !cameraMux) return false;
+    if (!cameraMux) return false;
 
     if (xSemaphoreTake(cameraMux, pdMS_TO_TICKS(3000)) != pdTRUE) {
         Serial.println("TARS: VISION CAMERA LOCK FAILED");
         return false;
     }
 
-    bool ready = !playing && camera && cameraLive && cameraOK;
-    bool ok = ready && I2SCamera::encodeFrameToJPEG(
-        visionJpeg, &length, quality
-    );
+    bool ready = camera && cameraLive && cameraOK && !playing;
+    bool ok = false;
+
+    if (ready)
+        ok = I2SCamera::encodeFrameToJPEG(
+            visionJpeg, &length, 55
+        );
+
     xSemaphoreGive(cameraMux);
 
     if (!ok || !length || length > VISION_JPEG_MAX) {
-        if (length && length <= VISION_JPEG_MAX)
-            memset(visionJpeg, 0, length);
         length = 0;
         Serial.println("TARS: VISION JPEG FAILED");
         return false;
     }
 
-    Serial.printf("TARS: VISION JPEG SIZE=%u QUALITY=%u\n",
-                  (unsigned)length, quality);
-    return true;
-}
-
-static bool stopCameraForTLS() {
-    stopCamera();
-    cameraStoppedForVision = !camera && !cameraLive && !cameraOK;
-
-    Serial.printf("TARS: VISION CAMERA OFF=%d HEAP=%u LARGEST=%u\n",
-                  cameraStoppedForVision, ESP.getFreeHeap(),
-                  ESP.getMaxAllocHeap());
-    return cameraStoppedForVision;
-}
-
-static bool prepareSharedTrackFrame(size_t &length) {
-    length = 0;
-    if (!ownerIs(VISION_OWNER_TRACK) || playing ||
-        !visionLiveEnabled()) return false;
-
-    if (!captureFrame(length, VISION_TRACK_QUALITY)) return false;
-
-    sharedJpegLength = length;
-    Serial.printf("TARS TRACK: JPEG SIZE=%u CAMERA KEPT ON\n",
+    Serial.printf("TARS: VISION JPEG READY SIZE=%u\n",
                   (unsigned)length);
     return true;
 }
 
-static bool buildVisionJSON(const String &question, size_t jpegLength,
-                            size_t &bodyLength) {
+// KAMERA OFF SEBELUM TLS
+static bool stopCameraForTLS() {
+    cameraStoppedForVision = true;
+    stopCamera();
+
+    bool stopped = !camera && !cameraLive && !cameraOK;
+
+    Serial.printf(
+        "TARS: VISION CAMERA OFF=%d HEAP=%u LARGEST=%u\n",
+        stopped, ESP.getFreeHeap(), ESP.getMaxAllocHeap()
+    );
+
+    return stopped;
+}
+
+// JSON + BASE64
+static bool buildVisionJSON(
+    const String &question,
+    size_t jpegLength,
+    size_t &bodyLength
+) {
     bodyLength = 0;
     if (!visionJson || jpegLength > VISION_JPEG_MAX) return false;
 
-    JsonDocument doc;
-    doc["question"] = question;
-    size_t qlen = serializeJson(doc["question"], questionJson,
-                                sizeof(questionJson));
+    JsonDocument questionDoc;
+    questionDoc["question"] = question;
+
+    size_t qlen = serializeJson(
+        questionDoc["question"],
+        questionJson,
+        sizeof(questionJson)
+    );
+
     if (!qlen || qlen >= sizeof(questionJson)) return false;
 
-    int prefix = snprintf(visionJson, VISION_JSON_MAX,
-        "{\"question\":%s,\"format\":\"jpeg\",\"image\":\"\"",
-        questionJson);
+    int prefix = snprintf(
+        visionJson, VISION_JSON_MAX,
+        "{\"question\":%s,\"format\":\"jpeg\",\"image\":\"",
+        questionJson
+    );
 
-    if (prefix <= 0 || (size_t)prefix >= VISION_JSON_MAX) return false;
-
-    // Hilangkan tanda kutip penutup agar base64 masuk ke nilai image.
-    if (prefix < 1 || visionJson[prefix - 1] != '"') return false;
-    prefix--;
+    if (prefix <= 0 || (size_t)prefix >= VISION_JSON_MAX)
+        return false;
 
     size_t encodedLength = 0;
     int result = mbedtls_base64_encode(
         (unsigned char *)visionJson + prefix,
-        VISION_JSON_MAX - (size_t)prefix,
-        &encodedLength, visionJpeg, jpegLength);
+        VISION_JSON_MAX - prefix,
+        &encodedLength,
+        visionJpeg,
+        jpegLength
+    );
 
     if (result != 0) {
         Serial.printf("TARS: VISION BASE64 ERROR=%d\n", result);
@@ -210,23 +169,38 @@ static bool buildVisionJSON(const String &question, size_t jpegLength,
     visionJson[end++] = '}';
     visionJson[end] = '\0';
     bodyLength = end;
+
     return true;
 }
 
-static String sendVisionJSON(const String &question, size_t jpegLength) {
+// TLS + HTTP
+static String sendVisionJSON(
+    const String &question,
+    size_t jpegLength
+) {
     if (WiFi.status() != WL_CONNECTED) {
         Serial.println("TARS: VISION WIFI DISCONNECTED");
         return "";
     }
 
+    Serial.printf(
+        "TARS: VISION TLS HEAP=%u LARGEST=%u\n",
+        ESP.getFreeHeap(), ESP.getMaxAllocHeap()
+    );
+
+    // JSON DIALOKASIKAN SETELAH KAMERA OFF
     visionJson = (char *)malloc(VISION_JSON_MAX);
+
     if (!visionJson) {
-        Serial.printf("TARS: VISION JSON ALLOC FAILED HEAP=%u MAX=%u\n",
-                      ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+        Serial.printf(
+            "TARS: VISION JSON MALLOC FAILED HEAP=%u LARGEST=%u\n",
+            ESP.getFreeHeap(), ESP.getMaxAllocHeap()
+        );
         return "";
     }
 
     size_t bodyLength = 0;
+
     if (!buildVisionJSON(question, jpegLength, bodyLength)) {
         Serial.println("TARS: VISION JSON BUILD FAILED");
         freeVisionJSON();
@@ -238,139 +212,130 @@ static String sendVisionJSON(const String &question, size_t jpegLength) {
     client.setTimeout(20000);
 
     HTTPClient http;
+
     if (!http.begin(client, cloudURL() + "/vision")) {
         Serial.println("TARS: VISION HTTP BEGIN FAILED");
         freeVisionJSON();
-        client.stop();
         return "";
     }
 
     http.setTimeout(45000);
     http.addHeader("Content-Type", "application/json");
-    http.addHeader("Authorization", String("Bearer ") + TARS_LIVE_TOKEN);
+    http.addHeader(
+        "Authorization",
+        String("Bearer ") + TARS_LIVE_TOKEN
+    );
 
-    int code = http.POST((uint8_t *)visionJson, bodyLength);
+    int code = http.POST(
+        (uint8_t *)visionJson,
+        bodyLength
+    );
+
     Serial.printf("TARS: VISION HTTP=%d\n", code);
 
     String answer;
+
     if (code >= 200 && code < 300) {
         String response = http.getString();
         JsonDocument doc;
+
         if (!deserializeJson(doc, response)) {
             answer = doc["response"].as<String>();
             answer.trim();
         } else {
             Serial.println("TARS: VISION RESPONSE JSON ERROR");
         }
-    } else if (code >= 0) {
+    } else {
         Serial.println("TARS: VISION HTTP ERROR " + http.getString());
     }
 
     http.end();
-    client.stop();
+
+    // BEBASKAN JSON SETELAH HTTP SELESAI
     freeVisionJSON();
 
-    Serial.printf("TARS: VISION TLS DONE HEAP=%u MAX=%u\n",
-                  ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+    Serial.printf(
+        "TARS: VISION TLS DONE HEAP=%u LARGEST=%u\n",
+        ESP.getFreeHeap(), ESP.getMaxAllocHeap()
+    );
+
     return answer;
 }
 
+// BEGIN
 void visionLiveBegin() {
     Serial.println("TARS: ON-DEMAND VISION READY");
 }
 
+// PAUSE
 bool visionLivePause() {
     if (!visionLiveEnabled()) return false;
-    if (ownerIs(VISION_OWNER_USER)) return true;
-    if (!acquireUserVision()) {
+    if (visionPaused) return true;
+
+    if (!acquireVisionWait(VISION_LOCK_WAIT)) {
         Serial.println("TARS: VISION LOCK TIMEOUT");
         return false;
     }
-    Serial.println("TARS: VISION USER PRIORITY RESERVED");
+
+    visionPaused = true;
+    cameraStoppedForVision = false;
+
+    Serial.println("TARS: VISION CYCLE RESERVED");
     return true;
 }
 
+// RESUME SETELAH TTS DAN AUDIO SELESAI
 void visionLiveResume() {
-    if (!ownerIs(VISION_OWNER_USER)) return;
+    if (!visionPaused) return;
+
     if (playing) {
-        Serial.println("TARS: VISION RESUME DEFERRED");
+        Serial.println("TARS: VISION RESUME BLOCKED - AUDIO ACTIVE");
         return;
     }
 
-    if (cameraStoppedForVision && visionLiveEnabled() &&
+    if (cameraStoppedForVision &&
+        visionLiveEnabled() &&
         WiFi.status() == WL_CONNECTED) {
         startCamera();
-        if (!camera || !cameraOK || !cameraLive) {
-            Serial.println("TARS: VISION CAMERA NOT READY");
-            return;
-        }
-        Serial.println("TARS: VISION CAMERA RESTART OK");
     }
 
-    if (sharedJpegLength)
-        memset(visionJpeg, 0, sharedJpegLength);
-    sharedJpegLength = 0;
     cameraStoppedForVision = false;
-    releaseVision(VISION_OWNER_USER);
+    visionPaused = false;
+    releaseVision();
 
-    Serial.printf("TARS: VISION CYCLE END HEAP=%u MAX=%u\n",
-                  ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+    Serial.printf(
+        "TARS: VISION CYCLE END HEAP=%u LARGEST=%u\n",
+        ESP.getFreeHeap(), ESP.getMaxAllocHeap()
+    );
 }
 
-bool visionLiveTrackPause() {
-    if (!visionLiveEnabled() || playing ||
-        WiFi.status() != WL_CONNECTED) return false;
-    return acquireTrackVision();
-}
-
-bool visionLiveTrackCapture(size_t &length) {
-    return prepareSharedTrackFrame(length);
-}
-
-uint8_t *visionLiveSharedJpeg() {
-    if (!ownerIs(VISION_OWNER_TRACK) || !sharedJpegLength) return nullptr;
-    return visionJpeg;
-}
-
-void visionLiveTrackResume() {
-    if (!ownerIs(VISION_OWNER_TRACK)) return;
-
-    if (sharedJpegLength)
-        memset(visionJpeg, 0, sharedJpegLength);
-    sharedJpegLength = 0;
-
-    if (cameraStoppedForVision && visionLiveEnabled() &&
-        WiFi.status() == WL_CONNECTED) startCamera();
-
-    cameraStoppedForVision = false;
-    releaseVision(VISION_OWNER_TRACK);
-}
-
+// ASK: CAPTURE -> CAMERA OFF -> TLS -> FREE JSON
 String visionLiveAsk(const String &question) {
-    if (!visionLiveEnabled() || !ownerIs(VISION_OWNER_USER)) return "";
+    if (!visionLiveEnabled() || !visionPaused || !visionBusy)
+        return "";
 
     if (WiFi.status() != WL_CONNECTED && !wifiOK()) {
         Serial.println("TARS: VISION WIFI ERROR");
         return "";
     }
+
     if (playing) {
         Serial.println("TARS: VISION BLOCKED - AUDIO ACTIVE");
         return "";
     }
 
     size_t jpegLength = 0;
-    if (!captureFrame(jpegLength, VISION_QA_QUALITY)) return "";
 
-    sharedJpegLength = jpegLength;
+    if (!captureFrame(jpegLength)) return "";
+
     if (!stopCameraForTLS()) {
         Serial.println("TARS: VISION CAMERA STOP FAILED");
-        memset(visionJpeg, 0, jpegLength);
-        sharedJpegLength = 0;
         return "";
     }
 
     String answer = sendVisionJSON(question, jpegLength);
+
     memset(visionJpeg, 0, jpegLength);
-    sharedJpegLength = 0;
+
     return answer;
 }
