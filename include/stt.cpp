@@ -33,8 +33,12 @@ static const char* STT_HOST_LOCAL=
   "tars-cloud-v1.hilmane34.workers.dev";
 
 String sttFinal,sttPartial;
-bool micOK=false,sttConnected=false,sttReady=false;
-bool sttDone=false,sttError=false;
+bool micOK=false;
+bool sttConnected=false;
+bool sttReady=false;
+bool sttDone=false;
+bool sttError=false;
+bool sttClosing=false;
 
 extern bool wifiOK();
 extern void oledSetStatus(const String&);
