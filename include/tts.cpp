@@ -11,6 +11,7 @@
 #include "AudioTools/AudioCodecs/CodecWAV.h"
 #include "config.h"
 #include "tars_emotion.h"
+#include "esp_heap_caps.h"
 
 extern const uint8_t follow_start[] asm("_binary_src_follow_mp3_start");
 extern const uint8_t follow_end[] asm("_binary_src_follow_mp3_end");
@@ -36,9 +37,9 @@ extern void oledSetStatus(const String&);
 
 bool playing=false,dacOK=false;
 
-static const int MP3_COPY_BUFFER=256;
-static const size_t AUDIO_RING_SIZE=3072,AUDIO_PREBUFFER=512;
-
+static const int MP3_COPY_BUFFER = 1024;
+static const size_t AUDIO_RING_SIZE = 8192;
+static const size_t AUDIO_PREBUFFER = 2048;
 
 class MemMP3Stream:public Stream{
   const uint8_t*data;size_t len,pos;
@@ -68,10 +69,21 @@ class AudioRingStream:public Stream{
   uint32_t lastRx=0;
   bool gotData=false;
 public:
-  void begin(WiFiClient*client,int expectedLength=-1){
+  void logTTSHeap(const char* tahap) {
+  Serial.printf(
+    "TTS[%s] INT_FREE=%u INT_LARGEST=%u FREE8=%u\n",
+    tahap,
+    (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+    (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+    (unsigned)heap_caps_get_free_size(
+      MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT
+    )
+  );
+ }
+ void begin(WiFiClient*client,int expectedLength=-1){
     stop();src=client;expected=expectedLength;received=0;lastRx=millis();
     gotData=false;done=false;stopFlag=false;running=true;h=t=n=0;
-    xTaskCreatePinnedToCore(entry,"tts_rx",2048,this,1,&task,0);
+    xTaskCreatePinnedToCore(entry,"tts_rx",3584,this,1,&task,0);
   }
   void stop(){
     stopFlag=true;running=false;
@@ -83,7 +95,7 @@ public:
   }
   static void entry(void*p){AudioRingStream*s=(AudioRingStream*)p;s->rx();s->task=nullptr;vTaskDelete(nullptr);}
   void rx(){
-    uint8_t temp[256];
+    uint8_t temp[1024];
     while(!stopFlag&&src){
       if(!src->connected())break;
       int av=src->available();
