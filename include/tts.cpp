@@ -12,16 +12,16 @@
 #include "config.h"
 #include "tars_emotion.h"
 #include "esp_heap_caps.h"
-void logTTSHeap(const char* tahap) {
-  Serial.printf(
-    "TTS[%s] INT_FREE=%u INT_MAX=%u 8BIT_FREE=%u 8BIT_MAX=%u\n",
+
+void logTTSHeap(const char* tahap){
+  Serial.printf("TTS[%s] INT_FREE=%u INT_MAX=%u 8BIT_FREE=%u 8BIT_MAX=%u\n",
     tahap,
     (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
     (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
-    (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
-    (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)
-  );
+    (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT),
+    (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT));
 }
+
 extern const uint8_t follow_start[] asm("_binary_src_follow_mp3_start");
 extern const uint8_t follow_end[] asm("_binary_src_follow_mp3_end");
 extern const uint8_t online_start[] asm("_binary_src_online_mp3_start");
@@ -45,10 +45,9 @@ extern void oledStartSpeak(const String&);
 extern void oledSetStatus(const String&);
 
 bool playing=false,dacOK=false;
-
-static const int MP3_COPY_BUFFER = 512;
-static const size_t AUDIO_RING_SIZE = 6144;
-static const size_t AUDIO_PREBUFFER = 512;
+static const int MP3_COPY_BUFFER=512;
+static const size_t AUDIO_RING_SIZE=6144;
+static const size_t AUDIO_PREBUFFER=512;
 
 class MemMP3Stream:public Stream{
   const uint8_t*data;size_t len,pos;
@@ -78,10 +77,12 @@ class AudioRingStream:public Stream{
   uint32_t lastRx=0;
   bool gotData=false;
 public:
- void begin(WiFiClient*client,int expectedLength=-1){
+  bool begin(WiFiClient*client,int expectedLength=-1){
     stop();src=client;expected=expectedLength;received=0;lastRx=millis();
     gotData=false;done=false;stopFlag=false;running=true;h=t=n=0;
-    xTaskCreatePinnedToCore(entry,"tts_rx",2048,this,1,&task,0);
+    BaseType_t result=xTaskCreatePinnedToCore(entry,"tts_rx",4096,this,1,&task,0);
+    if(result!=pdPASS){task=nullptr;src=nullptr;done=true;stopFlag=true;running=false;Serial.println("TARS: TTS RX TASK CREATE FAILED");return false;}
+    return true;
   }
   void stop(){
     stopFlag=true;running=false;
@@ -93,7 +94,7 @@ public:
   }
   static void entry(void*p){AudioRingStream*s=(AudioRingStream*)p;s->rx();s->task=nullptr;vTaskDelete(nullptr);}
   void rx(){
-  static uint8_t temp[512];
+    static uint8_t temp[512];
     while(!stopFlag&&src){
       if(!src->connected())break;
       int av=src->available();
@@ -187,27 +188,29 @@ static EncodedAudioStream wavDec(&wavResample,&wav);
 static StreamCopy copier(MP3_COPY_BUFFER);
 static bool dacLinksReady=false;
 
+static void setupAudioLinks(){
+  if(dacLinksReady)return;
+  dec.addNotifyAudioChange(mp3Resample);
+  mp3Resample.addNotifyAudioChange(pcmProbe);
+  wavDec.addNotifyAudioChange(wavResample);
+  wavResample.addNotifyAudioChange(pcmProbe);
+  dacLinksReady=true;
+}
+
 bool initDAC(){
   AudioInfo info(22050,1,16);
   dac.setMonoDAC(ULP_DAC2);
   if(!dac.begin(info)){Serial.println("TARS: DAC INIT FAILED");dacOK=false;return false;}
-  if(!dacLinksReady){
-    dec.addNotifyAudioChange(mp3Resample);
-    mp3Resample.addNotifyAudioChange(pcmProbe);
-    wavDec.addNotifyAudioChange(wavResample);
-    wavResample.addNotifyAudioChange(pcmProbe);
-    dacLinksReady=true;
-  }
+  setupAudioLinks();
   dacOK=true;
   Serial.println("TARS: DAC GPIO26 ULP DAC2");
   return true;
 }
 
 bool audioStart(){
-  if(dacOK)return true;
+  if(dacOK){playing=true;return true;}
   if(!initDAC())return false;
-  playing=true;
-  return true;
+  playing=true;return true;
 }
 
 void audioStop(){
@@ -218,9 +221,7 @@ void audioStop(){
 static bool playMemoryMP3(const uint8_t*start,const uint8_t*end,const String&name){
   if(!start||!end||end<=start)return false;
   if(!audioStart())return false;
-  localMP3.begin(start,end);
-  pcmProbe.reset();
-  oledStartSpeak(name);
+  localMP3.begin(start,end);pcmProbe.reset();oledStartSpeak(name);
   bool ok=dec.begin();
   if(!ok){
     Serial.printf("TARS: HELIX LOCAL START FAILED HEAP=%u MAX=%u\n",ESP.getFreeHeap(),ESP.getMaxAllocHeap());
@@ -231,14 +232,11 @@ static bool playMemoryMP3(const uint8_t*start,const uint8_t*end,const String&nam
   if(ok){
     copier.begin(dec,localMP3);
     while(localMP3.available()>0)copier.copy();
-    mp3Resample.flush();
-    mp3Resample.end();
+    mp3Resample.flush();mp3Resample.end();
   }
-  dec.end();
-  pcmProbe.report();
+  dec.end();pcmProbe.report();
   uint64_t bytes=pcmProbe.decodedBytes();
-  audioStop();
-  oledSetStatus("READY");
+  audioStop();oledSetStatus("READY");
   return ok&&bytes>0;
 }
 
@@ -256,36 +254,45 @@ bool streamAudio(const String&url,const String&text){
   WiFiClientSecure client;client.setInsecure();
   HTTPClient http;
   if(!http.begin(client,url)){Serial.println("TARS: TTS HTTP BEGIN FAILED");return false;}
-  http.setTimeout(15000);
-  http.addHeader("Content-Type","application/json");
-  const char*hdrs[]={"Content-Type","X-TARS-TTS"};
-  http.collectHeaders(hdrs,2);
+  http.setTimeout(15000);http.addHeader("Content-Type","application/json");
+  const char*hdrs[]={"Content-Type","X-TARS-TTS"};http.collectHeaders(hdrs,2);
   JsonDocument j;j["text"]=text;
   String body;serializeJson(j,body);
   int code=http.POST(body);body="";
-  Serial.printf("TARS: TTS HTTP=%d\n",code);
-  logTTSHeap("AFTER_HTTP");
+  Serial.printf("TARS: TTS HTTP=%d\n",code);logTTSHeap("AFTER_HTTP");
   if(code<200||code>=300){http.end();return false;}
 
   int expected=http.getSize();
   WiFiClient*src=http.getStreamPtr();
   if(!src){http.end();return false;}
-
-  String ct=http.header("Content-Type");
-  String xt=http.header("X-TARS-TTS");
+  String ct=http.header("Content-Type"),xt=http.header("X-TARS-TTS");
   ct.toLowerCase();xt.toLowerCase();
   bool isWav=ct.indexOf("wav")>=0||ct.indexOf("wave")>=0||xt.indexOf("wav")>=0;
   Serial.printf("TARS: TTS FORMAT=%s\n",isWav?"WAV":"MP3");
-  logTTSHeap("BEFORE_HELIX");
-  if(!audioStart()){http.end();return false;}
-  pcmProbe.reset();
-  oledStartSpeak(text);
-  audioRing.begin(src,expected);
+
+  bool mp3Started=false;
+  if(!isWav){
+    setupAudioLinks();
+    logTTSHeap("BEFORE_HELIX");
+    mp3Started=dec.begin();
+    if(!mp3Started){
+      Serial.printf("TARS: HELIX START FAILED HEAP=%u MAX=%u\n",ESP.getFreeHeap(),ESP.getMaxAllocHeap());
+      dec.end();http.end();return false;
+    }
+  }
+
+  if(!audioStart()){
+    if(mp3Started)dec.end();
+    http.end();return false;
+  }
+  pcmProbe.reset();oledStartSpeak(text);
+  if(!audioRing.begin(src,expected)){
+    if(mp3Started)dec.end();
+    audioStop();http.end();return false;
+  }
 
   uint32_t waitStart=millis();
-  while(audioRing.available()<AUDIO_PREBUFFER&&!audioRing.finished()&&millis()-waitStart<5000){
-    delay(2);yield();
-  }
+  while(audioRing.available()<AUDIO_PREBUFFER&&!audioRing.finished()&&millis()-waitStart<5000){delay(2);yield();}
 
   bool ok=false;
   if(isWav){
@@ -302,19 +309,17 @@ bool streamAudio(const String&url,const String&text){
         int before=audioRing.available();
         bool copied=copier.copy();
         int after=audioRing.available();
-        if(copied){last=millis();}
+        if(copied)last=millis();
         else if(audioRing.finished()&&!audioRing.available())break;
         else if(before==after)delay(1);
         if(millis()-last>10000)break;
         yield();
       }
-      wavResample.flush();
-      wavResample.end();
+      wavResample.flush();wavResample.end();
     }
     wavDec.end();
   }else{
-    logTTSHeap("BEFORE_HELIX");
-    ok=dec.begin();
+    ok=mp3Started;
     if(ok){
       audio_tools::AudioInfo info=codec.audioInfo();
       ok=mp3Resample.begin(info,22050);
@@ -326,24 +331,19 @@ bool streamAudio(const String&url,const String&text){
         int before=audioRing.available();
         bool copied=copier.copy();
         int after=audioRing.available();
-        if(copied){last=millis();}
+        if(copied)last=millis();
         else if(audioRing.finished()&&!audioRing.available())break;
         else if(before==after)delay(1);
         if(millis()-last>10000)break;
         yield();
       }
-      mp3Resample.flush();
-      mp3Resample.end();
+      mp3Resample.flush();mp3Resample.end();
     }
     dec.end();
   }
 
-  audioRing.stop();
-  pcmProbe.report();
-  audioStop();
-  http.end();
-  playing=false;
-  oledSetStatus("LISTENING");
+  audioRing.stop();pcmProbe.report();audioStop();http.end();
+  playing=false;oledSetStatus("LISTENING");
   Serial.printf("TARS: TTS AUDIO %s\n",ok?"DONE":"FAILED");
   return ok;
 }
