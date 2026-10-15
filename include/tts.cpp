@@ -12,17 +12,16 @@
 #include "config.h"
 #include "tars_emotion.h"
 #include "esp_heap_caps.h"
-  void logTTSHeap(const char* tahap) {
+void logTTSHeap(const char* tahap) {
   Serial.printf(
-    "TTS[%s] INT_FREE=%u INT_LARGEST=%u FREE8=%u\n",
+    "TTS[%s] INT_FREE=%u INT_MAX=%u 8BIT_FREE=%u 8BIT_MAX=%u\n",
     tahap,
     (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
     (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
-    (unsigned)heap_caps_get_free_size(
-      MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT
-    )
+    (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
+    (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)
   );
- }
+}
 extern const uint8_t follow_start[] asm("_binary_src_follow_mp3_start");
 extern const uint8_t follow_end[] asm("_binary_src_follow_mp3_end");
 extern const uint8_t online_start[] asm("_binary_src_online_mp3_start");
@@ -290,6 +289,7 @@ bool streamAudio(const String&url,const String&text){
 
   bool ok=false;
   if(isWav){
+    logTTSHeap("BEFORE_WAV");
     ok=wavDec.begin();
     if(ok){
       audio_tools::AudioInfo info=wav.audioInfo();
@@ -313,6 +313,7 @@ bool streamAudio(const String&url,const String&text){
     }
     wavDec.end();
   }else{
+    logTTSHeap("BEFORE_HELIX");
     ok=dec.begin();
     if(ok){
       audio_tools::AudioInfo info=codec.audioInfo();
