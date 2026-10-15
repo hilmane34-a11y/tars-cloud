@@ -46,9 +46,9 @@ extern void oledSetStatus(const String&);
 
 bool playing=false,dacOK=false;
 
-static const int MP3_COPY_BUFFER = 1024;
+static const int MP3_COPY_BUFFER = 512;
 static const size_t AUDIO_RING_SIZE = 6144;
-static const size_t AUDIO_PREBUFFER = 1024;
+static const size_t AUDIO_PREBUFFER = 512;
 
 class MemMP3Stream:public Stream{
   const uint8_t*data;size_t len,pos;
@@ -81,7 +81,7 @@ public:
  void begin(WiFiClient*client,int expectedLength=-1){
     stop();src=client;expected=expectedLength;received=0;lastRx=millis();
     gotData=false;done=false;stopFlag=false;running=true;h=t=n=0;
-    xTaskCreatePinnedToCore(entry,"tts_rx",3000,this,1,&task,0);
+    xTaskCreatePinnedToCore(entry,"tts_rx",2048,this,1,&task,0);
   }
   void stop(){
     stopFlag=true;running=false;
@@ -93,7 +93,7 @@ public:
   }
   static void entry(void*p){AudioRingStream*s=(AudioRingStream*)p;s->rx();s->task=nullptr;vTaskDelete(nullptr);}
   void rx(){
-    uint8_t temp[2048];
+  static uint8_t temp[512];
     while(!stopFlag&&src){
       if(!src->connected())break;
       int av=src->available();
