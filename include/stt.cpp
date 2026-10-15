@@ -15,7 +15,7 @@
 #define MIC_SILENCE 4000
 #define RECORD_MIN_MS 500
 #define SILENCE_MS 800
-#define PREROLL_MS 165
+#define PREROLL_MS 160
 #define STT_CONNECT_TIMEOUT 20000
 
 static const size_t BUF=256;
