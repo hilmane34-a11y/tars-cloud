@@ -81,7 +81,7 @@ public:
  void begin(WiFiClient*client,int expectedLength=-1){
     stop();src=client;expected=expectedLength;received=0;lastRx=millis();
     gotData=false;done=false;stopFlag=false;running=true;h=t=n=0;
-    xTaskCreatePinnedToCore(entry,"tts_rx",4584,this,1,&task,0);
+    xTaskCreatePinnedToCore(entry,"tts_rx",3000,this,1,&task,0);
   }
   void stop(){
     stopFlag=true;running=false;
@@ -93,7 +93,7 @@ public:
   }
   static void entry(void*p){AudioRingStream*s=(AudioRingStream*)p;s->rx();s->task=nullptr;vTaskDelete(nullptr);}
   void rx(){
-    uint8_t temp[524];
+    uint8_t temp[2048];
     while(!stopFlag&&src){
       if(!src->connected())break;
       int av=src->available();
