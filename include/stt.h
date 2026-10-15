@@ -18,6 +18,7 @@ extern bool sttClosing;
 bool wifiOK();
 bool sttCooling();
 void closeSTT(uint32_t cooldown = STT_NORMAL_COOLDOWN);
+void sttLoop();
 bool startSTT();
 String stopSTT(uint32_t samples);
 String recordRealtime();
