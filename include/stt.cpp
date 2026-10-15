@@ -27,7 +27,6 @@ static int16_t sendBuf[256];
 
 static WebSocketsClient sttWS;
 static bool sttStarted=false;
-static bool sttClosing=false;
 
 static const char* STT_HOST_LOCAL=
   "tars-cloud-v1.hilmane34.workers.dev";
