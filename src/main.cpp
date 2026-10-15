@@ -579,9 +579,7 @@ bool processOnlineRequest(const String&q,bool vision,bool status,bool automatic)
     if(!vision)startCamera();
     oledSetStatus("AI ERROR");
     ramDiag("AFTER-AI-ERROR");
-    closeSTT(STT_ERROR_COOLDOWN);
-    sttDone=false;
-    sttError=false;
+    
     if(automatic)autoSpeechResetTimer();
     return false;
   }
@@ -606,10 +604,13 @@ bool processOnlineRequest(const String&q,bool vision,bool status,bool automatic)
 
   wheelsStop();
   autonomyStop();
-
-  closeSTT(STT_NORMAL_COOLDOWN);
-  sttDone=false;
-  sttError=false;
+   Serial.printf(
+    "TARS: POST-TTS STT KEEP connected=%d ready=%d heap=%u maxBlock=%u\n",
+  sttConnected,
+  sttReady,
+  ESP.getFreeHeap(),
+  ESP.getMaxAllocHeap()
+);
   oledSetStatus(ok?"LISTENING":"AUDIO ERROR");
   ramDiag("AFTER-CAMERA-RESTART");
 
@@ -617,7 +618,6 @@ bool processOnlineRequest(const String&q,bool vision,bool status,bool automatic)
     if(ok)autoSpeechDone();
     else autoSpeechResetTimer();
   }
-
   Serial.printf("TARS: POST-TTS STT RESET connected=%d ready=%d\n",sttConnected,sttReady);
   return ok;
 }
@@ -900,6 +900,9 @@ void enterTarsDeepSleep(){
 }
 
 void loop(){
+  sttLoop();
+  // Lanjutkan isi loop() lama mulai dari:
+  // if(alarmDue()) ...
   /*time_t now=time(nullptr);
   struct tm t={};
 
