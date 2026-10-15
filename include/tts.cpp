@@ -12,7 +12,17 @@
 #include "config.h"
 #include "tars_emotion.h"
 #include "esp_heap_caps.h"
-
+  void logTTSHeap(const char* tahap) {
+  Serial.printf(
+    "TTS[%s] INT_FREE=%u INT_LARGEST=%u FREE8=%u\n",
+    tahap,
+    (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+    (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+    (unsigned)heap_caps_get_free_size(
+      MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT
+    )
+  );
+ }
 extern const uint8_t follow_start[] asm("_binary_src_follow_mp3_start");
 extern const uint8_t follow_end[] asm("_binary_src_follow_mp3_end");
 extern const uint8_t online_start[] asm("_binary_src_online_mp3_start");
@@ -38,8 +48,8 @@ extern void oledSetStatus(const String&);
 bool playing=false,dacOK=false;
 
 static const int MP3_COPY_BUFFER = 1024;
-static const size_t AUDIO_RING_SIZE = 8192;
-static const size_t AUDIO_PREBUFFER = 2048;
+static const size_t AUDIO_RING_SIZE = 6144;
+static const size_t AUDIO_PREBUFFER = 1024;
 
 class MemMP3Stream:public Stream{
   const uint8_t*data;size_t len,pos;
@@ -69,21 +79,10 @@ class AudioRingStream:public Stream{
   uint32_t lastRx=0;
   bool gotData=false;
 public:
-  void logTTSHeap(const char* tahap) {
-  Serial.printf(
-    "TTS[%s] INT_FREE=%u INT_LARGEST=%u FREE8=%u\n",
-    tahap,
-    (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
-    (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
-    (unsigned)heap_caps_get_free_size(
-      MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT
-    )
-  );
- }
  void begin(WiFiClient*client,int expectedLength=-1){
     stop();src=client;expected=expectedLength;received=0;lastRx=millis();
     gotData=false;done=false;stopFlag=false;running=true;h=t=n=0;
-    xTaskCreatePinnedToCore(entry,"tts_rx",3584,this,1,&task,0);
+    xTaskCreatePinnedToCore(entry,"tts_rx",4584,this,1,&task,0);
   }
   void stop(){
     stopFlag=true;running=false;
@@ -95,7 +94,7 @@ public:
   }
   static void entry(void*p){AudioRingStream*s=(AudioRingStream*)p;s->rx();s->task=nullptr;vTaskDelete(nullptr);}
   void rx(){
-    uint8_t temp[1024];
+    uint8_t temp[524];
     while(!stopFlag&&src){
       if(!src->connected())break;
       int av=src->available();
@@ -266,6 +265,7 @@ bool streamAudio(const String&url,const String&text){
   String body;serializeJson(j,body);
   int code=http.POST(body);body="";
   Serial.printf("TARS: TTS HTTP=%d\n",code);
+  logTTSHeap("AFTER_HTTP");
   if(code<200||code>=300){http.end();return false;}
 
   int expected=http.getSize();
@@ -277,7 +277,7 @@ bool streamAudio(const String&url,const String&text){
   ct.toLowerCase();xt.toLowerCase();
   bool isWav=ct.indexOf("wav")>=0||ct.indexOf("wave")>=0||xt.indexOf("wav")>=0;
   Serial.printf("TARS: TTS FORMAT=%s\n",isWav?"WAV":"MP3");
-
+  logTTSHeap("BEFORE_HELIX");
   if(!audioStart()){http.end();return false;}
   pcmProbe.reset();
   oledStartSpeak(text);
