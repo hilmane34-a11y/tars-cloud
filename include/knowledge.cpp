@@ -6,7 +6,7 @@
 static const char *KNOWLEDGE_FILE = "/knowledge.dat";
 static const uint32_t KNOWLEDGE_MAGIC = 0x4B4E4F57;
 static const uint8_t MAX_SAMPLES = 48;
-static const uint8_t MATCH_THRESHOLD = 70;
+static const uint8_t MATCH_THRESHOLD = 90;
 
 struct __attribute__((packed)) KnowledgeRecord {
   uint32_t magic;
