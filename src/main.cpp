@@ -928,7 +928,35 @@ void processQuestion(const String&q){
   request+=" Jangan mengulang kalimat atau sapaan yang sama jika tidak diperlukan.";
   processOnlineRequest(request,vision,status,false);
 }
+static char serialInputBuffer[160];
+static uint8_t serialInputLength = 0;
 
+bool readSerialQuestion(String &out) {
+  while (Serial.available()) {
+    char c = Serial.read();
+
+    if (c == '\r') continue;
+
+    if (c == '\n') {
+      serialInputBuffer[serialInputLength] = '\0';
+      out = String(serialInputBuffer);
+      out.trim();
+      serialInputLength = 0;
+      return out.length() > 0;
+    }
+
+    if (c == '\b' || c == 127) {
+      if (serialInputLength > 0) serialInputLength--;
+      continue;
+    }
+
+    if (c >= 32 && serialInputLength < sizeof(serialInputBuffer) - 1) {
+      serialInputBuffer[serialInputLength++] = c;
+    }
+  }
+
+  return false;
+}
 void setup(){
   Serial.begin(SERIAL_BAUD);
   Wire.begin(OLED_SDA,OLED_SCL);
@@ -955,9 +983,7 @@ void setup(){
   previewMux=xSemaphoreCreateMutex();
   envMux=xSemaphoreCreateMutex();
   cameraMux=xSemaphoreCreateMutex();
-  micOK=false;
-Serial.println("TARS: STT DISABLED - SERIAL MONITOR INPUT");
-Serial.setTimeout(30);
+  micOK = initMic();
 
   if (!LittleFS.begin(true)) {
   Serial.println("TARS: LITTLEFS ERROR");
@@ -1080,19 +1106,6 @@ void loop(){
     return;
   }
 
-  // INPUT UTAMA DARI SERIAL MONITOR, TANPA STT
-  if (Serial.available()) {
-    String q = Serial.readStringUntil('\n');
-    q.trim();
-
-    if (q.length()) {
-      Serial.println("TARS: INPUT -> " + q);
-      wheelsStop();
-      processQuestion(q);
-      return;
-    }
-  }
-
   if (tarsMode == MODE_ONLINE && !wifiOK()) {
     oledSetStatus("WIFI ERROR");
     delay(500);
@@ -1114,8 +1127,44 @@ void loop(){
     return;
   }
 
-  // STT DIHAPUS DARI LOOP
-  if (!playing && tarsMode == MODE_ONLINE && !sttConnected) {
+  // SERIAL MONITOR: input lengkap diprioritaskan.
+  String q;
+  if (readSerialQuestion(q)) {
+    Serial.println("TARS: SERIAL INPUT -> " + q);
+
+    wheelsStop();
+    autonomyStop();
+
+    // Putuskan STT sebelum memproses perintah Serial.
+    closeSTT();
+    processQuestion(q);
+    delay(1);
+    return;
+  }
+
+  // STT tetap aktif untuk input mikrofon.
+  q = recordRealtime();
+
+  if (q.length()) {
+    Serial.println("TARS: STT INPUT -> " + q);
+
+    wheelsStop();
+    autonomyStop();
+
+    // Cegah WebSocket STT bertabrakan dengan ASK/TTS.
+    closeSTT();
+    processQuestion(q);
+    delay(1);
+    return;
+  }
+
+  if (!oledSpecial) {
+    oledSetStatus("LISTENING");
+  }
+
+  if (!playing &&
+      tarsMode == MODE_ONLINE &&
+      !sttConnected) {
     autoSpeechUpdate(true, false, false);
   }
 
