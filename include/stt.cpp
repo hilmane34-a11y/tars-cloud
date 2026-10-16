@@ -276,9 +276,9 @@ String recordRealtime() {
     size_t prePos = 0, preCount = 0;
     uint32_t voiceStart = 0, lastVoice = 0, samples = 0;
     bool voice = false, retry = false;
-
-    for (;;) {
-      sttWS.loop();
+     for (;;) {
+  pollSerialTeachCommand();
+  sttWS.loop();
 
       if (!wifiOK() || !sttConnected || !sttReady) {
         Serial.println("TARS: STT CONNECTION LOST - RETRY");
