@@ -862,45 +862,29 @@ bool knowledgeLearnCurrentView(const String &label) {
 
   return learned;
 }
+
 bool processKnowledgeTeachCommand(const String &q) {
   String s = normCmd(q);
 
-  // Perintah belajar harus ditujukan kepada TARS.
-  if (!s.startsWith("tars ")) return false;
+  if (!s.startsWith("objek ")) return false;
 
-  s = s.substring(5);
+  s = s.substring(6);
   s.trim();
 
-  if (s.startsWith("ini ")) {
-    s = s.substring(4);
-  } else if (s.startsWith("pelajari ini sebagai ")) {
-    s = s.substring(21);
-  } else if (s.startsWith("simpan ini sebagai ")) {
-    s = s.substring(19);
-  } else {
-    return false;
-  }
-
-  s.trim();
-
-  if (!s.length()) {
-    oledShowText("Sebutkan nama objek", "MEMORI");
-    return true;
-  }
-
-  if (s.length() >= KNOWLEDGE_LABEL_SIZE) {
-    oledShowText("Nama terlalu panjang", "MEMORI");
+  if (!s.length() || s.length() >= KNOWLEDGE_LABEL_SIZE) {
+    oledShowText("Nama objek tidak valid", "MEMORI");
     return true;
   }
 
   if (knowledgeLearnCurrentView(s)) {
-    oledShowText("Objek tersimpan: " + s, "MEMORI");
-    oledSetStatus("LISTENING");
+    oledShowText("Tersimpan: " + s, "MEMORI OBJEK");
+    Serial.printf("TARS: BELAJAR OBJEK '%s'\n", s.c_str());
   } else {
     oledShowText("Gagal menyimpan objek", "MEMORI");
-    oledSetStatus("LISTENING");
+    Serial.println("TARS: GAGAL BELAJAR OBJEK");
   }
 
+  oledSetStatus("LISTENING");
   return true;
 }
 void processQuestion(const String&q){
