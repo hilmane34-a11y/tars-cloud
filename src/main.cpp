@@ -33,6 +33,7 @@
 #include <oled.h>
 #include <lengan.h>
 #include <hand_gesture.h>
+#include <knowledge.h>
 
 #define MIC_PORT I2S_NUM_1
 #define MIC_SCK 18
@@ -810,6 +811,7 @@ void setup(){
   micOK=initMic();
 
   if(!LittleFS.begin(true))
+    knowledgeBegin(); 
     Serial.println("TARS: LITTLEFS ERROR");
   else
     Serial.printf("TARS: LITTLEFS READY %u/%u KB\n",(unsigned)(LittleFS.usedBytes()/1024),(unsigned)(LittleFS.totalBytes()/1024));
