@@ -552,7 +552,7 @@ bool processOnlineRequest(const String&q,bool vision,bool status,bool automatic)
   }
 
   if(!vision){
-    stopCamera();
+   /* stopCamera();
     if(camera||cameraLive||cameraOK){
       Serial.println("TARS: CAMERA OFF FAILED");
       visionLiveResume();
@@ -560,8 +560,8 @@ bool processOnlineRequest(const String&q,bool vision,bool status,bool automatic)
       oledSetStatus("CAMERA ERROR");
       return false;
     }
+  */
   }
-
   wheelsStop();
   autonomyStop();
   ramDiag("CAMERA-OFF-BEFORE-TLS");
@@ -600,8 +600,7 @@ bool processOnlineRequest(const String&q,bool vision,bool status,bool automatic)
 
   ramDiag("AFTER-TTS-AUDIO-OFF");
   visionLiveResume();
-  if(!vision)startCamera();
-
+ // if(!vision)startCamera();
   wheelsStop();
   autonomyStop();
    Serial.printf(
