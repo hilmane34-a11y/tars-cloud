@@ -28,12 +28,9 @@ static int16_t sendBuf[256];
 
 static WebSocketsClient sttWS;
 static bool sttStarted = false;
-
-static const char *STT_HOST_LOCAL =
-  "tars-cloud-v1.hilmane34.workers.dev";
+static const char *STT_HOST_LOCAL = "tars-cloud-v1.hilmane34.workers.dev";
 
 String sttFinal, sttPartial;
-
 bool micOK = false;
 bool sttConnected = false;
 bool sttReady = false;
@@ -65,11 +62,7 @@ void closeSTT() {
   Serial.println("TARS: STT WS CLOSED");
 }
 
-static void sttEvent(
-  WStype_t type,
-  uint8_t *payload,
-  size_t length
-) {
+static void sttEvent(WStype_t type, uint8_t *payload, size_t length) {
   if (type == WStype_CONNECTED) {
     sttConnected = true;
     sttError = false;
@@ -77,33 +70,19 @@ static void sttEvent(
     return;
   }
 
-  if (type == WStype_DISCONNECTED) {
+  if (type == WStype_DISCONNECTED || type == WStype_ERROR) {
     sttConnected = false;
     sttReady = false;
 
-    if (!sttClosing && !sttDone) {
-      sttError = true;
-    }
+    if (!sttClosing && !sttDone) sttError = true;
 
-    Serial.println("TARS: STT WS DISCONNECTED");
+    Serial.println(type == WStype_ERROR
+      ? "TARS: STT WS ERROR"
+      : "TARS: STT WS DISCONNECTED");
     return;
   }
 
-  if (type == WStype_ERROR) {
-    sttConnected = false;
-    sttReady = false;
-
-    if (!sttClosing) {
-      sttError = true;
-    }
-
-    Serial.println("TARS: STT WS ERROR");
-    return;
-  }
-
-  if (type != WStype_TEXT || !payload || !length) {
-    return;
-  }
+  if (type != WStype_TEXT || !payload || !length) return;
 
   String msg;
   if (!msg.reserve(length + 1)) {
@@ -112,9 +91,7 @@ static void sttEvent(
     return;
   }
 
-  for (size_t i = 0; i < length; i++) {
-    msg += (char)payload[i];
-  }
+  for (size_t i = 0; i < length; i++) msg += (char)payload[i];
 
   JsonDocument j;
   if (deserializeJson(j, msg)) {
@@ -122,36 +99,27 @@ static void sttEvent(
     return;
   }
 
-  const char *typeText = j["type"] | "";
+  const char *t = j["type"] | "";
 
-  if (strcmp(typeText, "ready") == 0) {
+  if (!strcmp(t, "ready")) {
     sttReady = true;
     sttError = false;
     Serial.println("TARS: STT READY");
     oledSetListening();
-  } else if (strcmp(typeText, "partial") == 0) {
+  } else if (!strcmp(t, "partial")) {
     sttPartial = j["text"] | "";
     sttPartial.trim();
 
-    if (sttPartial.length()) {
-      Serial.printf(
-        "TARS: STT PARTIAL = %s\n",
-        sttPartial.c_str()
-      );
-    }
-  } else if (strcmp(typeText, "final") == 0) {
+    if (sttPartial.length())
+      Serial.printf("TARS: STT PARTIAL = %s\n", sttPartial.c_str());
+  } else if (!strcmp(t, "final")) {
     sttFinal = j["text"] | "";
     sttFinal.trim();
     sttDone = true;
-
-    Serial.printf(
-      "TARS: STT FINAL = %s\n",
-      sttFinal.c_str()
-    );
-  } else if (strcmp(typeText, "error") == 0) {
+    Serial.printf("TARS: STT FINAL = %s\n", sttFinal.c_str());
+  } else if (!strcmp(t, "error")) {
     sttError = true;
     sttDone = true;
-
     const char *err = j["error"] | "unknown";
     Serial.printf("TARS: STT ERROR = %s\n", err);
     oledSetStatus("STT ERROR");
@@ -159,13 +127,8 @@ static void sttEvent(
 }
 
 bool startSTT() {
-  if (!wifiOK() || !micOK) {
-    return false;
-  }
-
-  if (sttConnected && sttReady) {
-    return true;
-  }
+  if (!wifiOK() || !micOK) return false;
+  if (sttConnected && sttReady) return true;
 
   closeSTT();
 
@@ -178,12 +141,8 @@ bool startSTT() {
   sttWS.setReconnectInterval(0);
   sttWS.enableHeartbeat(15000, 5000, 2);
 
-  Serial.printf(
-    "TARS: STT TLS BEGIN heap=%u maxBlock=%u RSSI=%d\n",
-    ESP.getFreeHeap(),
-    ESP.getMaxAllocHeap(),
-    WiFi.RSSI()
-  );
+  Serial.printf("TARS: STT TLS BEGIN heap=%u maxBlock=%u RSSI=%d\n",
+    ESP.getFreeHeap(), ESP.getMaxAllocHeap(), WiFi.RSSI());
 
   sttWS.beginSSL(STT_HOST_LOCAL, 443, "/stt");
   sttStarted = true;
@@ -220,7 +179,7 @@ String stopSTT(uint32_t samples) {
   j["timestamp"] = (double)samples / MIC_RATE;
 
   String msg;
-  if (serializeJson(j, msg) == 0 || !sttWS.sendTXT(msg)) {
+  if (!serializeJson(j, msg) || !sttWS.sendTXT(msg)) {
     Serial.println("TARS: STT END SEND FAILED");
     closeSTT();
     sttDone = false;
@@ -231,20 +190,17 @@ String stopSTT(uint32_t samples) {
   uint32_t startedAt = millis();
 
   while (!sttDone && !sttError &&
-         millis() - startedAt < 6000) {
+         sttConnected && millis() - startedAt < 6000) {
     sttWS.loop();
     delay(2);
     yield();
   }
 
-  String result = sttDone ? sttFinal : "";
+  String result = (sttDone && !sttError) ? sttFinal : "";
   result.trim();
 
-  if (!sttDone) {
-    Serial.println("TARS: STT FINAL TIMEOUT");
-  }
+  if (!sttDone) Serial.println("TARS: STT FINAL TIMEOUT");
 
-  // Tutup WebSocket sebelum main masuk ke TLS /ask dan TTS.
   closeSTT();
 
   sttDone = false;
@@ -252,162 +208,151 @@ String stopSTT(uint32_t samples) {
   sttFinal = "";
   sttPartial = "";
 
-  Serial.printf(
-    "TARS: STT FINISHED result=%u\n",
-    (unsigned)result.length()
-  );
+  Serial.printf("TARS: STT FINISHED result=%u\n",
+    (unsigned)result.length());
 
   return result;
 }
 
 String recordRealtime() {
-  if (!startSTT()) {
-    return "";
-  }
-
-  oledSetListening();
-
-  size_t prePos = 0;
-  size_t preCount = 0;
-
-  uint32_t voiceStart = 0;
-  uint32_t lastVoice = 0;
-  uint32_t samples = 0;
-  bool voice = false;
+  if (!micOK) return "";
 
   for (;;) {
-    sttWS.loop();
-
-    if (sttError || !sttConnected || !sttReady) {
-      Serial.println("TARS: STT SESSION LOST");
+    if (!wifiOK()) {
       closeSTT();
-      sttDone = false;
-      sttError = false;
-      return "";
-    }
-
-    size_t bytes = 0;
-    if (i2s_read(
-          MIC_PORT,
-          rawBuf,
-          sizeof(rawBuf),
-          &bytes,
-          pdMS_TO_TICKS(30)
-        ) != ESP_OK) {
+      delay(300);
       continue;
     }
 
-    size_t count = bytes / sizeof(int32_t);
-    if (count > BUF / 4) count = BUF / 4;
-    if (!count) continue;
-
-    int32_t peak = 0;
-    uint64_t sum = 0;
-
-    for (size_t i = 0; i < count; i++) {
-      int32_t v = constrain(
-        rawBuf[i] >> 16,
-        -32768,
-        32767
-      );
-
-      pcmBuf[i] = (int16_t)v;
-
-      int32_t a = abs(v);
-      if (a > peak) peak = a;
-      sum += (uint64_t)a * a;
+    if (!startSTT()) {
+      delay(500);
+      continue;
     }
 
-    uint32_t rms =
-      (uint32_t)sqrt((double)sum / count);
+    oledSetListening();
+
+    size_t prePos = 0, preCount = 0;
+    uint32_t voiceStart = 0, lastVoice = 0, samples = 0;
+    bool voice = false, retry = false;
+
+    for (;;) {
+      sttWS.loop();
+
+      if (!wifiOK() || !sttConnected || !sttReady) {
+        Serial.println("TARS: STT CONNECTION LOST - RETRY");
+        retry = true;
+        break;
+      }
+
+      if (sttError) {
+        Serial.println("TARS: STT SERVER ERROR");
+        closeSTT();
+        sttDone = false;
+        sttError = false;
+        return "";
+      }
+
+      size_t bytes = 0;
+      if (i2s_read(MIC_PORT, rawBuf, sizeof(rawBuf),
+                   &bytes, pdMS_TO_TICKS(30)) != ESP_OK) continue;
+
+      size_t count = bytes / sizeof(int32_t);
+      if (count > BUF / 4) count = BUF / 4;
+      if (!count) continue;
+
+      int32_t peak = 0;
+      uint64_t sum = 0;
+
+      for (size_t i = 0; i < count; i++) {
+        int32_t v = constrain(rawBuf[i] >> 16, -32768, 32767);
+        pcmBuf[i] = (int16_t)v;
+        int32_t a = abs(v);
+        if (a > peak) peak = a;
+        sum += (uint64_t)a * a;
+      }
+
+      uint32_t rms = (uint32_t)sqrt((double)sum / count);
+
+      if (!voice) {
+        for (size_t i = 0; i < count; i++) {
+          preBuf[prePos] = pcmBuf[i];
+          prePos = (prePos + 1) % PREROLL_SAMPLES;
+          if (preCount < PREROLL_SAMPLES) preCount++;
+        }
+
+        if (peak >= MIC_THRESHOLD || rms >= 3000) {
+          voice = true;
+          voiceStart = lastVoice = millis();
+
+          tarsEmotionSpeechPeak(
+            (uint16_t)(peak > 32767 ? 32767 : peak), true);
+
+          size_t start = preCount == PREROLL_SAMPLES ? prePos : 0;
+          size_t nsend = 0;
+
+          for (size_t i = 0; i < preCount; i++) {
+            sendBuf[nsend++] = preBuf[(start + i) % PREROLL_SAMPLES];
+
+            if (nsend == 256) {
+              if (!sttWS.sendBIN((uint8_t *)sendBuf,
+                                  nsend * sizeof(int16_t))) {
+                retry = true;
+                break;
+              }
+              nsend = 0;
+            }
+          }
+
+          if (retry) break;
+
+          if (nsend && !sttWS.sendBIN((uint8_t *)sendBuf,
+                                      nsend * sizeof(int16_t))) {
+            retry = true;
+            break;
+          }
+
+          samples += preCount;
+          Serial.printf("TARS: VOICE DETECTED peak=%ld rms=%lu\n",
+            (long)peak, (unsigned long)rms);
+        }
+      } else {
+        if (!sttWS.sendBIN((uint8_t *)pcmBuf,
+                           count * sizeof(int16_t))) {
+          Serial.println("TARS: STT PCM SEND FAILED - RETRY");
+          retry = true;
+          break;
+        }
+
+        samples += count;
+
+        if (peak >= MIC_SILENCE || rms >= 1800) lastVoice = millis();
+
+        if (millis() - voiceStart >= RECORD_MIN_MS &&
+            millis() - lastVoice >= SILENCE_MS) break;
+      }
+
+      yield();
+    }
+
+    if (retry) {
+      closeSTT();
+      sttDone = false;
+      sttError = false;
+      sttFinal = "";
+      sttPartial = "";
+      delay(300);
+      continue;
+    }
 
     if (!voice) {
-      for (size_t i = 0; i < count; i++) {
-        preBuf[prePos] = pcmBuf[i];
-        prePos = (prePos + 1) % PREROLL_SAMPLES;
-
-        if (preCount < PREROLL_SAMPLES) {
-          preCount++;
-        }
-      }
-
-      if (peak >= MIC_THRESHOLD || rms >= 3000) {
-        voice = true;
-        voiceStart = lastVoice = millis();
-
-        tarsEmotionSpeechPeak(
-          (uint16_t)(peak > 32767 ? 32767 : peak),
-          true
-        );
-
-        size_t start =
-          (preCount == PREROLL_SAMPLES) ? prePos : 0;
-
-        size_t nsend = 0;
-
-        for (size_t i = 0; i < preCount; i++) {
-          sendBuf[nsend++] =
-            preBuf[(start + i) % PREROLL_SAMPLES];
-
-          if (nsend == 256) {
-            if (!sttWS.sendBIN(
-                  (uint8_t *)sendBuf,
-                  nsend * sizeof(int16_t)
-                )) {
-              sttError = true;
-              break;
-            }
-            nsend = 0;
-          }
-        }
-
-        if (nsend && !sttError &&
-            !sttWS.sendBIN(
-              (uint8_t *)sendBuf,
-              nsend * sizeof(int16_t)
-            )) {
-          sttError = true;
-        }
-
-        samples += preCount;
-
-        Serial.printf(
-          "TARS: VOICE DETECTED peak=%ld rms=%lu\n",
-          (long)peak,
-          (unsigned long)rms
-        );
-      }
-    } else {
-      if (!sttWS.sendBIN(
-            (uint8_t *)pcmBuf,
-            count * sizeof(int16_t)
-          )) {
-        Serial.println("TARS: STT PCM SEND FAILED");
-        sttError = true;
-        break;
-      }
-
-      samples += count;
-
-      if (peak >= MIC_SILENCE || rms >= 1800) {
-        lastVoice = millis();
-      }
-
-      if (millis() - voiceStart >= RECORD_MIN_MS &&
-          millis() - lastVoice >= SILENCE_MS) {
-        break;
-      }
+      closeSTT();
+      continue;
     }
 
-    yield();
-  }
+    String result = stopSTT(samples);
+    if (result.length()) return result;
 
-  if (!voice || sttError) {
-    closeSTT();
-    sttDone = false;
-    sttError = false;
-    return "";
+    // Sesi gagal atau transkrip kosong: mulai sesi STT baru.
+    delay(200);
   }
-
-  return stopSTT(samples);
 }
