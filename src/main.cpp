@@ -85,8 +85,8 @@ static uint32_t lastKnowledgeCheck = 0;
 static uint32_t knowledgeCandidateSince = 0;
 static uint8_t knowledgeCandidateFrames = 0;
 static uint32_t lastKnowledgeAnnounce = 0;
-static char knowledgeDisplayLabel[KNOWLEDGE_LABEL_SIZE] = "";
-static portMUX_TYPE knowledgeDisplayMux = portMUX_INITIALIZER_UNLOCKED;
+char knowledgeDisplayLabel[KNOWLEDGE_LABEL_SIZE] = "";
+portMUX_TYPE knowledgeDisplayMux = portMUX_INITIALIZER_UNLOCKED;
 static uint8_t knowledgeMissFrames = 0;
 
 static const uint32_t KNOWLEDGE_CHECK_INTERVAL_MS = 500;
