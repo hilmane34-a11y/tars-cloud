@@ -3,6 +3,7 @@
 #include "Log.h"
 #include "../../src/env.h"
 #include <math.h>
+#include <esp_heap_caps.h>
 
 int I2SCamera::blocksReceived = 0;
 int I2SCamera::framesReceived = 0;
@@ -20,21 +21,23 @@ int I2SCamera::framePointer = 0;
 int I2SCamera::frameBytes = 0;
 volatile bool I2SCamera::stopSignal = false;
 
-#define STREAM_LINES 16
+#define STREAM_LINES 8
 #define STREAM_BLOCKS 4
-#define CAMERA_CAPTURE_TIMEOUT 2000
+#define CAMERA_CAPTURE_TIMEOUT 3000
 
-static uint8_t* streamBlock[STREAM_BLOCKS]={0};
-static uint8_t previewFiltered[128*64];
-static volatile uint8_t streamState[STREAM_BLOCKS]={0};
-static volatile int streamBlockY[STREAM_BLOCKS]={0};
-static volatile int streamFill=0,streamLine=0,streamReady=0;
-static volatile int readyQueue[STREAM_BLOCKS]={0};
-static volatile int readyHead=0,readyTail=0;
-static volatile bool streamFrameDone=false,streamError=false;
+static uint8_t* streamStorage = nullptr;
+static uint8_t* streamBlock[STREAM_BLOCKS] = {};
+static size_t streamStorageSize = 0;
 
-static volatile uint8_t lastDominantColor=ENV_COLOR_UNKNOWN;
-static volatile uint8_t lastColorConfidence=0;
+static volatile uint8_t streamState[STREAM_BLOCKS] = {0};
+static volatile int streamBlockY[STREAM_BLOCKS] = {0};
+static volatile int streamFill = 0, streamLine = 0, streamReady = 0;
+static volatile int readyQueue[STREAM_BLOCKS] = {0};
+static volatile int readyHead = 0, readyTail = 0;
+static volatile bool streamFrameDone = false, streamError = false;
+
+static volatile uint8_t lastDominantColor = ENV_COLOR_UNKNOWN;
+static volatile uint8_t lastColorConfidence = 0;
 
 void IRAM_ATTR I2SCamera::i2sInterrupt(void* arg)
 {
@@ -161,28 +164,51 @@ void I2SCamera::deinitVSync()
 void I2SCamera::deinit()
 {
   i2sStop();
-  for(int i=0;i<STREAM_BLOCKS;i++){
-    if(streamBlock[i]){
-      free(streamBlock[i]);
-      streamBlock[i]=nullptr;
-    }
+
+  if (streamStorage) {
+    heap_caps_free(streamStorage);
+    streamStorage = nullptr;
   }
+
+  streamStorageSize = 0;
+
+  for (int i = 0; i < STREAM_BLOCKS; i++) {
+    streamBlock[i] = nullptr;
+    streamState[i] = 0;
+    streamBlockY[i] = 0;
+  }
+
+  streamFill = 0;
+  streamLine = 0;
+  streamReady = 0;
+  readyHead = 0;
+  readyTail = 0;
+  streamFrameDone = false;
+  streamError = false;
+
   dmaBufferDeinit();
-  if(frame){
+
+  if (frame) {
     free(frame);
-    frame=nullptr;
+    frame = nullptr;
   }
-  if(i2sInterruptHandle){
+
+  frameBytes = 0;
+  framePointer = 0;
+
+  if (i2sInterruptHandle) {
     esp_intr_disable(i2sInterruptHandle);
     esp_intr_free(i2sInterruptHandle);
-    i2sInterruptHandle=0;
+    i2sInterruptHandle = 0;
   }
-  if(vSyncInterruptHandle){
+
+  if (vSyncInterruptHandle) {
     esp_intr_disable(vSyncInterruptHandle);
     esp_intr_free(vSyncInterruptHandle);
-    vSyncInterruptHandle=0;
+    vSyncInterruptHandle = 0;
   }
 }
+
 void I2SCamera::dmaBufferDeinit()
 {
   if(!dmaBuffer)return;
@@ -199,32 +225,89 @@ void I2SCamera::dmaBufferDeinit()
 }
 
 bool I2SCamera::init(
-  const int XRES,const int YRES,
-  const int VSYNC,const int HREF,
-  const int XCLK,const int PCLK,
-  const int D0,const int D1,const int D2,const int D3,
-  const int D4,const int D5,const int D6,const int D7)
+  const int XRES, const int YRES,
+  const int VSYNC, const int HREF,
+  const int XCLK, const int PCLK,
+  const int D0, const int D1, const int D2, const int D3,
+  const int D4, const int D5, const int D6, const int D7)
 {
-  xres=XRES;
-  yres=YRES;
-  frame=nullptr;
-  frameBytes=0;
+  xres = XRES;
+  yres = YRES;
+  frame = nullptr;
+  frameBytes = 0;
 
-  i2sInit(VSYNC,HREF,PCLK,D0,D1,D2,D3,D4,D5,D6,D7);
-  dmaBufferInit(xres*2*2);
-  initVSync(VSYNC);
-
-  for(int i=0;i<STREAM_BLOCKS;i++){
-    streamBlock[i]=(uint8_t*)malloc(XRES*STREAM_LINES*2);
-    if(!streamBlock[i]){
-      DEBUG_PRINTLN("STREAM BLOCK ALLOC FAIL");
-      return false;
-    }
+  if (xres <= 0 || yres <= 0 ||
+      xres > 320 || yres > 240) {
+    DEBUG_PRINTLN("CAMERA: invalid resolution");
+    return false;
+  }
+  const size_t blockBytes = (size_t)xres * STREAM_LINES * 2;
+  streamStorageSize = blockBytes * STREAM_BLOCKS;
+  // Satu alokasi heap internal, bukan empat alokasi terpisah.
+  streamStorage = (uint8_t*)heap_caps_malloc(
+    streamStorageSize,
+    MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT
+  );
+  if (!streamStorage) {
+    streamStorageSize = 0;
+    DEBUG_PRINTLN("CAMERA: stream storage allocation failed");
+    return false;
+  }
+  for (int i = 0; i < STREAM_BLOCKS; i++) {
+    streamBlock[i] = streamStorage + (size_t)i * blockBytes;
+  }
+  if (!i2sInit(VSYNC, HREF, PCLK, D0, D1, D2, D3, D4, D5, D6, D7)) {
+    DEBUG_PRINTLN("CAMERA: I2S init failed");
+    heap_caps_free(streamStorage);
+    streamStorage = nullptr;
+    streamStorageSize = 0;
+    for (int i = 0; i < STREAM_BLOCKS; i++)
+      streamBlock[i] = nullptr;
+    return false;
   }
 
+  dmaBufferInit(xres * 2 * 2);
+
+  if (!dmaBuffer || dmaBufferCount != 2 ||
+      !dmaBuffer[0] || !dmaBuffer[0]->valid() ||
+      !dmaBuffer[1] || !dmaBuffer[1]->valid()) {
+    DEBUG_PRINTLN("CAMERA: DMA allocation failed");
+    dmaBufferDeinit();
+
+    if (i2sInterruptHandle) {
+      esp_intr_free(i2sInterruptHandle);
+      i2sInterruptHandle = 0;
+    }
+    heap_caps_free(streamStorage);
+    streamStorage = nullptr;
+    streamStorageSize = 0;
+    for (int i = 0; i < STREAM_BLOCKS; i++)
+      streamBlock[i] = nullptr;
+    return false;
+  }
+  if (!initVSync(VSYNC)) {
+    DEBUG_PRINTLN("CAMERA: VSYNC init failed");
+    dmaBufferDeinit();
+    if (i2sInterruptHandle) {
+      esp_intr_free(i2sInterruptHandle);
+      i2sInterruptHandle = 0;
+    }
+    heap_caps_free(streamStorage);
+    streamStorage = nullptr;
+    streamStorageSize = 0;
+    for (int i = 0; i < STREAM_BLOCKS; i++)
+      streamBlock[i] = nullptr;
+    return false;
+  }
+  streamFill = 0;
+  streamLine = 0;
+  streamReady = 0;
+  readyHead = 0;
+  readyTail = 0;
+  for (int i = 0; i < STREAM_BLOCKS; i++)
+    streamState[i] = 0;
   return true;
 }
-
 bool I2SCamera::i2sInit(
   const int VSYNC, const int HREF, const int PCLK,
   const int D0, const int D1, const int D2, const int D3,
@@ -310,15 +393,27 @@ bool I2SCamera::i2sInit(
 }
 void I2SCamera::dmaBufferInit(int bytes)
 {
-  dmaBufferCount = 2;
-  dmaBuffer = (DMABuffer**) malloc(sizeof(DMABuffer*) * dmaBufferCount);
-  for(int i = 0; i < dmaBufferCount; i++)
-  {
-    dmaBuffer[i] = new DMABuffer(bytes);
-    if(i)
-      dmaBuffer[i-1]->next(dmaBuffer[i]);
+  dmaBufferDeinit();
+
+  if (bytes <= 0) return;
+  const int count = 2;
+  dmaBuffer = (DMABuffer**)calloc(count, sizeof(DMABuffer*));
+  if (!dmaBuffer) {
+    DEBUG_PRINTLN("CAMERA: DMA pointer allocation failed");
+    return;
   }
-  dmaBuffer[dmaBufferCount - 1]->next(dmaBuffer[0]);
+  dmaBufferCount = count;
+  for (int i = 0; i < count; i++) {
+    dmaBuffer[i] = new (std::nothrow) DMABuffer(bytes);
+    if (!dmaBuffer[i] || !dmaBuffer[i]->valid()) {
+      DEBUG_PRINTLN("CAMERA: DMA buffer allocation failed");
+      dmaBufferDeinit();
+      return;
+    }
+  }
+  for (int i = 0; i < count; i++)
+    dmaBuffer[i]->next(dmaBuffer[(i + 1) % count]);
+  dmaBufferActive = 0;
 }
 bool I2SCamera::encodeFrameToJPEG(uint8_t* outBuffer,size_t* outLen,int quality)
 {
@@ -517,27 +612,6 @@ if(millis()-start>CAMERA_CAPTURE_TIMEOUT){
     }
     lastDominantColor=best;
     lastColorConfidence=(uint32_t)count*100/colorSamples;
-  }
-  // Filter 3x3 hanya untuk OLED
-  if(previewOut){
-    for(int y=0;y<64;y++){
-      for(int x=0;x<128;x++){
-        int count=0,total=0;
-        for(int dy=-1;dy<=1;dy++){
-          for(int dx=-1;dx<=1;dx++){
-            int nx=x+dx,ny=y+dy;
-            if(nx<0||nx>=128||ny<0||ny>=64)
-              continue;
-            count+=previewOut[ny*128+nx];
-            total++;
-          }
-        }
-        previewFiltered[y*128+x]=
-          count>=total/2+1?1:0;
-      }
-      if((y&3)==0)vTaskDelay(1);
-    }
-    memcpy(previewOut,previewFiltered,128*64);
   }
   return true;
 }
