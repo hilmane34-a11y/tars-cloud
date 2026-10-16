@@ -216,3 +216,71 @@ bool knowledgeRecognize(
 uint16_t knowledgeSampleCount() {
   return recordCount;
 }
+bool knowledgeDeleteLabel(const char *label) {
+  if (!ready || !label || !*label) return false;
+
+  uint8_t removed = 0;
+  for (int i = 0; i < recordCount; i++) {
+    if (strcasecmp(records[i].label, label) == 0) removed++;
+  }
+  if (!removed) return false;
+
+  const char *tmp = "/knowledge.tmp";
+  const char *bak = "/knowledge.bak";
+
+  LittleFS.remove(tmp);
+  File f = LittleFS.open(tmp, "w");
+  if (!f) return false;
+
+  size_t expected = 0;
+  for (int i = 0; i < recordCount; i++) {
+    if (strcasecmp(records[i].label, label) == 0) continue;
+    expected += sizeof(KnowledgeRecord);
+    if (f.write((const uint8_t *)&records[i],
+                sizeof(KnowledgeRecord)) != sizeof(KnowledgeRecord)) {
+      f.close();
+      LittleFS.remove(tmp);
+      return false;
+    }
+  }
+
+  f.flush();
+  f.close();
+
+  File check = LittleFS.open(tmp, "r");
+  if (!check || check.size() != expected) {
+    if (check) check.close();
+    LittleFS.remove(tmp);
+    return false;
+  }
+  check.close();
+
+  LittleFS.remove(bak);
+  bool hadOriginal = LittleFS.exists(KNOWLEDGE_FILE);
+
+  if (hadOriginal && !LittleFS.rename(KNOWLEDGE_FILE, bak)) {
+    LittleFS.remove(tmp);
+    return false;
+  }
+
+  if (!LittleFS.rename(tmp, KNOWLEDGE_FILE)) {
+    if (hadOriginal) LittleFS.rename(bak, KNOWLEDGE_FILE);
+    LittleFS.remove(tmp);
+    return false;
+  }
+
+  int dst = 0;
+  for (int i = 0; i < recordCount; i++) {
+    if (strcasecmp(records[i].label, label) != 0) {
+      if (dst != i) records[dst] = records[i];
+      dst++;
+    }
+  }
+
+  recordCount = dst;
+  LittleFS.remove(bak);
+
+  Serial.printf("TARS: LABEL '%s' DIHAPUS, %u sampel tersisa\n",
+                label, recordCount);
+  return true;
+}
