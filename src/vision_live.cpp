@@ -16,8 +16,8 @@
 #error "Tambahkan TARS_LIVE_TOKEN di config.h"
 #endif
 
-#define VISION_JPEG_MAX 8000
-#define VISION_JSON_MAX 12000
+#define VISION_JPEG_MAX 10000
+#define VISION_JSON_MAX 14000
 #define VISION_LOCK_WAIT 15000
 
 extern OV7670 *camera;
@@ -88,7 +88,7 @@ static bool captureFrame(size_t &length) {
 
     if (ready)
         ok = I2SCamera::encodeFrameToJPEG(
-            visionJpeg, &length, 25
+            visionJpeg, &length, 35
         );
 
     xSemaphoreGive(cameraMux);
