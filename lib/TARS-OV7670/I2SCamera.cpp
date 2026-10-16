@@ -20,7 +20,7 @@ int I2SCamera::framePointer = 0;
 int I2SCamera::frameBytes = 0;
 volatile bool I2SCamera::stopSignal = false;
 
-#define STREAM_LINES 16
+#define STREAM_LINES 8
 #define STREAM_BLOCKS 4
 #define CAMERA_CAPTURE_TIMEOUT 2000
 
