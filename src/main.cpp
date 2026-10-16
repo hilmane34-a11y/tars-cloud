@@ -807,15 +807,21 @@ void setup(){
   previewMux=xSemaphoreCreateMutex();
   envMux=xSemaphoreCreateMutex();
   cameraMux=xSemaphoreCreateMutex();
-
   micOK=initMic();
 
-  if(!LittleFS.begin(true))
-    knowledgeBegin(); 
-    Serial.println("TARS: LITTLEFS ERROR");
-  else
-    Serial.printf("TARS: LITTLEFS READY %u/%u KB\n",(unsigned)(LittleFS.usedBytes()/1024),(unsigned)(LittleFS.totalBytes()/1024));
-
+  if (!LittleFS.begin(true)) {
+  Serial.println("TARS: LITTLEFS ERROR");
+} else {
+  Serial.printf("TARS: LITTLEFS READY %u/%u KB\n",
+    (unsigned)(LittleFS.usedBytes()/1024),
+    (unsigned)(LittleFS.totalBytes()/1024));
+  if (knowledgeBegin()) {
+    Serial.printf("TARS: KNOWLEDGE READY samples=%u\n",
+      (unsigned)knowledgeSampleCount());
+  } else {
+    Serial.println("TARS: KNOWLEDGE INIT FAILED");
+  }
+}
   Serial.println("TARS: DAC GPIO26 ULP DAC2");
   Serial.println("TARS: AUDIO MP3/WAV -> 22050Hz/16bit");
   Serial.println("TARS: INMP441 SCK=18 WS=2 SD=15");
