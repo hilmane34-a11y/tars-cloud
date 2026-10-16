@@ -78,6 +78,16 @@ bool previewReady=false;
 portMUX_TYPE visionEventMux=portMUX_INITIALIZER_UNLOCKED;
 static TaskHandle_t personalityTaskHandle=nullptr;
 static bool visionSceneLatched=false;
+static char pendingKnowledgeLabel[KNOWLEDGE_LABEL_SIZE] = "";
+static bool pendingKnowledgeEvent = false;
+static char lastRecognizedLabel[KNOWLEDGE_LABEL_SIZE] = "";
+static uint32_t lastKnowledgeCheck = 0;
+static uint32_t knowledgeCandidateSince = 0;
+static uint8_t knowledgeCandidateFrames = 0;
+static uint32_t lastKnowledgeAnnounce = 0;
+
+static const uint32_t KNOWLEDGE_CHECK_INTERVAL_MS = 500;
+static const uint32_t KNOWLEDGE_REPEAT_MS = 10000;
 
 extern const uint8_t alarm_start[] asm("_binary_src_alarm_mp3_start");
 extern const uint8_t alarm_end[] asm("_binary_src_alarm_mp3_end");
@@ -228,6 +238,48 @@ bool startCamera(){
   camDiag("START-DONE");
   return true;
 }
+static char knowledgeResultLabel[KNOWLEDGE_LABEL_SIZE] = "";
+static uint8_t knowledgeResultConfidence = 0;
+static bool knowledgeResultPending = false;
+
+void knowledgeAutoRecognize(const uint16_t *image) {
+  if (!image || playing || knowledgeSampleCount() == 0) return;
+
+  uint32_t now = millis();
+  if (now - lastKnowledgeCheck < KNOWLEDGE_CHECK_INTERVAL_MS) return;
+  lastKnowledgeCheck = now;
+
+  char label[KNOWLEDGE_LABEL_SIZE] = "";
+  uint8_t confidence = 0;
+
+  if (!knowledgeRecognize(image, label, sizeof(label), &confidence)) {
+    lastRecognizedLabel[0] = '\0';
+    knowledgeCandidateFrames = 0;
+    knowledgeCandidateSince = 0;
+    return;
+  }
+
+  if (strcmp(label, lastRecognizedLabel) != 0) {
+    strncpy(lastRecognizedLabel, label, sizeof(lastRecognizedLabel) - 1);
+    lastRecognizedLabel[sizeof(lastRecognizedLabel) - 1] = '\0';
+    knowledgeCandidateFrames = 1;
+    knowledgeCandidateSince = now;
+    return;
+  }
+
+  if (knowledgeCandidateFrames < 3) knowledgeCandidateFrames++;
+
+  if (knowledgeCandidateFrames < 3 ||
+      now - knowledgeCandidateSince < 1000) return;
+
+  if (now - lastKnowledgeAnnounce < KNOWLEDGE_REPEAT_MS) return;
+
+  lastKnowledgeAnnounce = now;
+  strncpy(knowledgeResultLabel, label, sizeof(knowledgeResultLabel) - 1);
+  knowledgeResultLabel[sizeof(knowledgeResultLabel) - 1] = '\0';
+  knowledgeResultConfidence = confidence;
+  knowledgeResultPending = true;
+}
 void cameraTask(void*){
   uint8_t frameErrors=0;
   for(;;){
@@ -243,6 +295,9 @@ void cameraTask(void*){
       if(xSemaphoreTake(envMux,portMAX_DELAY)==pdTRUE){
         if(xSemaphoreTake(previewMux,portMAX_DELAY)==pdTRUE){
 ok=I2SCamera::captureFrameData( cameraEnvironment, cameraPreview);
+if (ok && knowledgeSampleCount() > 0) {
+  knowledgeAutoRecognize(cameraEnvironment);
+}
 static uint32_t lastPreviewDiag=0;
 if(millis()-lastPreviewDiag>=5000){
   lastPreviewDiag=millis();
@@ -297,6 +352,16 @@ if(millis()-lastPreviewDiag>=5000){
       }
       xSemaphoreGive(cameraMux);
     }
+if (knowledgeResultPending && !playing) {
+  knowledgeResultPending = false;
+
+  Serial.printf("TARS: OBJECT '%s' confidence=%u%%\n",
+                knowledgeResultLabel,
+                knowledgeResultConfidence);
+
+  oledShowText(String("Terlihat: ") + knowledgeResultLabel,
+               "MEMORI OBJEK");
+}
     if(ok&&analyzed){
       if(tarsMode==MODE_ONLINE){
         if(environment.event==ENV_NONE)
@@ -752,8 +817,78 @@ String ask(const String&q){
   Serial.printf("TARS: ASK RESPONSE LENGTH=%u\n",(unsigned)s.length());
   return s;
 }
+bool knowledgeLearnCurrentView(const String &label) {
+  if (!cameraMux || !envMux || !cameraLive || !cameraOK)
+    return false;
+
+  if (xSemaphoreTake(cameraMux, pdMS_TO_TICKS(1500)) != pdTRUE)
+    return false;
+
+  bool learned = false;
+
+  if (cameraLive && cameraOK &&
+      xSemaphoreTake(envMux, pdMS_TO_TICKS(1500)) == pdTRUE) {
+    learned = knowledgeLearn(label.c_str(), cameraEnvironment);
+    xSemaphoreGive(envMux);
+  }
+
+  xSemaphoreGive(cameraMux);
+
+  if (learned) {
+    Serial.printf("TARS: OBJECT LEARNED '%s', samples=%u\n",
+                  label.c_str(),
+                  (unsigned)knowledgeSampleCount());
+  } else {
+    Serial.println("TARS: OBJECT LEARNING FAILED");
+  }
+
+  return learned;
+}
+bool processKnowledgeTeachCommand(const String &q) {
+  String s = normCmd(q);
+
+  // Perintah belajar harus ditujukan kepada TARS.
+  if (!s.startsWith("tars ")) return false;
+
+  s = s.substring(5);
+  s.trim();
+
+  if (s.startsWith("ini ")) {
+    s = s.substring(4);
+  } else if (s.startsWith("pelajari ini sebagai ")) {
+    s = s.substring(21);
+  } else if (s.startsWith("simpan ini sebagai ")) {
+    s = s.substring(19);
+  } else {
+    return false;
+  }
+
+  s.trim();
+
+  if (!s.length()) {
+    oledShowText("Sebutkan nama objek", "MEMORI");
+    return true;
+  }
+
+  if (s.length() >= KNOWLEDGE_LABEL_SIZE) {
+    oledShowText("Nama terlalu panjang", "MEMORI");
+    return true;
+  }
+
+  if (knowledgeLearnCurrentView(s)) {
+    oledShowText("Objek tersimpan: " + s, "MEMORI");
+    oledSetStatus("LISTENING");
+  } else {
+    oledShowText("Gagal menyimpan objek", "MEMORI");
+    oledSetStatus("LISTENING");
+  }
+
+  return true;
+}
 void processQuestion(const String&q){
   String nq=normCmd(q);
+    if (processKnowledgeTeachCommand(q))
+    return;
   if(nq=="offline"||nq=="off line"||
      nq=="tars offline"||nq=="tars off line"||
      nq=="mode offline"||nq=="mode off line"||
