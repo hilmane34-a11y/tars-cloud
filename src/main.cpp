@@ -55,8 +55,6 @@
 
 const uint32_t ALARM_DURATION_MS=180000;
 const uint32_t MIC_RATE=16000;
-enum TarsMode:uint8_t{MODE_OFFLINE,MODE_ONLINE};
-TarsMode tarsMode=MODE_OFFLINE;
 
 bool alarmRunning=false,greetingPlaying=false,cameraOK=false,cameraLive=false,ntpOK=false;
 volatile bool ntpSyncEvent=false;
@@ -86,7 +84,7 @@ MP3SYM(hari) MP3SYM(pagi) MP3SYM(siang)
 MP3SYM(sore) MP3SYM(malam)
 
 bool wifiOK();
-bool visionLiveEnabled(){return tarsMode==MODE_ONLINE;}
+bool visionLiveEnabled(){return true;}
 String normCmd(String);
 String systemStatus();
 String ask(const String&);
@@ -537,12 +535,12 @@ bool autoSpeechCallback(const String&prompt){
 
   return processOnlineRequest(q,false,false,true);
 }
-
 bool processOnlineRequest(const String&q,bool vision,bool status,bool automatic){
   wheelsStop();
   autonomyStop();
+  // Pastikan tidak ada sesi STT saat masuk TLS ASK/TTS.
+  closeSTT();
   ramDiag("BEFORE-CAMERA-CYCLE");
-
   if(!visionLivePause()){
     Serial.println("TARS: VISION PAUSE FAILED");
     wheelsStop();
@@ -550,7 +548,6 @@ bool processOnlineRequest(const String&q,bool vision,bool status,bool automatic)
     oledSetStatus("CAMERA ERROR");
     return false;
   }
-
   if(!vision){
     stopCamera();
     if(camera||cameraLive||cameraOK){
@@ -561,31 +558,26 @@ bool processOnlineRequest(const String&q,bool vision,bool status,bool automatic)
       return false;
     }
   }
-
   wheelsStop();
   autonomyStop();
   ramDiag("CAMERA-OFF-BEFORE-TLS");
-
   String answer;
-  if(vision)answer=visionLiveAsk(q);
-  else if(status)answer=systemStatus();
+  if(vision) answer=visionLiveAsk(q);
+  else if(status) answer=systemStatus();
   else answer=ask(q);
-
   if(!answer.length()){
     Serial.println("TARS: AI EMPTY RESPONSE");
     wheelsStop();
     autonomyStop();
     visionLiveResume();
-    if(!vision)startCamera();
+    if(!vision) startCamera();
     oledSetStatus("AI ERROR");
     ramDiag("AFTER-AI-ERROR");
-    closeSTT(STT_ERROR_COOLDOWN);
     sttDone=false;
     sttError=false;
-    if(automatic)autoSpeechResetTimer();
+    if(automatic) autoSpeechResetTimer();
     return false;
   }
-
   wheelsStop();
   autonomyStop();
   oledShowText(answer,automatic?"AUTO SPEECH":vision?"VISION":status?"STATUS":"ASK");
@@ -598,30 +590,30 @@ bool processOnlineRequest(const String&q,bool vision,bool status,bool automatic)
   wheelsStop();
   autonomyStop();
 
-  if(ok)tarsEmotionSpeechDone();
+  if(ok) tarsEmotionSpeechDone();
 
   ramDiag("AFTER-TTS-AUDIO-OFF");
-  visionLiveResume();
-  if(!vision)startCamera();
 
+  visionLiveResume();
+  if(!vision) startCamera();
   wheelsStop();
   autonomyStop();
-
-  closeSTT(STT_NORMAL_COOLDOWN);
   sttDone=false;
   sttError=false;
+  sttFinal="";
+  sttPartial="";
   oledSetStatus(ok?"LISTENING":"AUDIO ERROR");
   ramDiag("AFTER-CAMERA-RESTART");
-
   if(automatic){
-    if(ok)autoSpeechDone();
+    if(ok) autoSpeechDone();
     else autoSpeechResetTimer();
   }
-
-  Serial.printf("TARS: POST-TTS STT RESET connected=%d ready=%d\n",sttConnected,sttReady);
+  Serial.printf(
+    "TARS: POST-TTS STT CLOSED connected=%d ready=%d\n",
+    sttConnected,sttReady
+  );
   return ok;
 }
-
 bool isStatusQuery(const String&q){
   String s=normCmd(q);
   s.replace("statuse","status");
@@ -757,79 +749,30 @@ String ask(const String&q){
   Serial.printf("TARS: ASK RESPONSE LENGTH=%u\n",(unsigned)s.length());
   return s;
 }
-
-bool processOffline(const String&q){
-  String s=normCmd(q);
-  static const char*online[]={"online","on line","tars online","tars on line","mode online","tars mode online"};
-  static const char*hari[]={"hari","hari ini","kata hari","kata kata","kata kata hari ini","kata hari ini tars","tars hari ini","tars kata hari ini"};
-
-  if(cmdMatch(s,hari,sizeof(hari)/sizeof(*hari))){
-    oledShowText("HARI INI","OFFLINE");
-    playLocalMP3(hari_start,hari_end,"Kata-kata hari ini, Ooo celeng Celeng itu ga tau ilmu huruf.");
-    oledSetStatus("READY");
-    return true;
-  }
-
-  if(cmdMatch(s,online,sizeof(online)/sizeof(*online))){
-    Serial.println("TARS: SWITCH OFFLINE -> ONLINE");
-    oledShowText("ONLINE","OFFLINE");
-    tarsMode=MODE_ONLINE;
-    personalityResetSpeechTimer();
-    autoSpeechResetTimer();
-    tarsEmotionResetPending();
-    portENTER_CRITICAL(&visionEventMux);
-    pendingVisionCheck=false;
-    portEXIT_CRITICAL(&visionEventMux);
-    playLocalMP3(online_start,online_end,"Mode online aktif, tuan");
-    Serial.println("TARS: MODE ONLINE");
-    return true;
-  }
-  return false;
-}
-
 void processQuestion(const String&q){
   String nq=normCmd(q);
-
-  if(tarsMode==MODE_OFFLINE){
-    processOffline(q);
+  if(nq=="offline"||nq=="off line"||
+     nq=="tars offline"||nq=="tars off line"||
+     nq=="mode offline"||nq=="mode off line"||
+     nq=="tars mode offline"||nq=="tars mode off line"){
+    oledShowText("TARS ONLINE","MODE ONLINE");
+    oledSetStatus("LISTENING");
     return;
   }
-
-  if(nq=="offline"||nq=="off line"||nq=="tars offline"||nq=="tars off line"||nq=="mode offline"||nq=="mode off line"||nq=="tars mode offline"||nq=="tars mode off line"){
-    Serial.println("TARS: SWITCH ONLINE -> OFFLINE");
-    closeSTT();
-    tarsMode=MODE_OFFLINE;
-    autoSpeechResetTimer();
-    portENTER_CRITICAL(&visionEventMux);
-    pendingVisionCheck=false;
-    portEXIT_CRITICAL(&visionEventMux);
-    sttReady=false;
-    sttDone=false;
-    sttError=false;
-    oledShowText("OFFLINE","ONLINE");
-    playLocalMP3(offline_start,offline_end,"Mode offline aktif, tuan");
-    oledSetStatus("READY");
-    Serial.println("TARS: MODE OFFLINE");
-    return;
-  }
-
   oledShowText(q,"STT");
   delay(300);
   tarsEmotionQuestion(q);
-
   if(tarsEmotionHasEvent())
     tarsEmotionTakeEvent();
-
   bool vision=needsVision(q);
   bool status=isStatusQuery(q);
-
   String request=q;
   switch(random(0,5)){
-    case 0:request+=" Jawab dengan gaya santai dan natural.";break;
-    case 1:request+=" Gunakan pilihan kata yang segar dan tidak kaku.";break;
-    case 2:request+=" Jawab dengan gaya cerdas dan sedikit humor jika sesuai.";break;
-    case 3:request+=" Gunakan kalimat natural dan variasikan cara penyampaian.";break;
-    default:request+=" Jawab secara ramah, singkat, dan tidak monoton.";break;
+    case 0: request+=" Jawab dengan gaya santai dan natural."; break;
+    case 1: request+=" Gunakan pilihan kata yang segar dan tidak kaku."; break;
+    case 2: request+=" Jawab dengan gaya cerdas dan sedikit humor jika sesuai."; break;
+    case 3: request+=" Gunakan kalimat natural dan variasikan cara penyampaian."; break;
+    default: request+=" Jawab secara ramah, singkat, dan tidak monoton."; break;
   }
   request+=" Jangan mengulang kalimat atau sapaan yang sama jika tidak diperlukan.";
   processOnlineRequest(request,vision,status,false);
@@ -875,12 +818,12 @@ void setup(){
   Serial.println("TARS: L9110S A=23/16 B=17/19");
   Serial.println("TARS: MIC PEAK=14000/8000 RMS=3000/1800 PREROLL=250 ms BUF=256");
   Serial.println("TARS: STT ONLINE REALTIME PCM");
-  Serial.println("TARS: STT OFFLINE REALTIME PCM");
-  Serial.println("TARS: VISION ONLINE ONLY");
+  Serial.println("TARS: OFFLINE MODE REMOVED");
+  Serial.println("TARS: VISION ONLINE");
+  Serial.println("TARS: MODE ONLINE");
   Serial.printf("TARS: OV7670 D0..D7=%d,%d,%d,%d,%d,%d,%d,%d XCLK=%d PCLK=%d VSYNC=%d HREF=%d SCCB=%d/%d\n",CAM_D0,CAM_D1,CAM_D2,CAM_D3,CAM_D4,CAM_D5,CAM_D6,CAM_D7,CAM_XCLK,CAM_PCLK,CAM_VSYNC,CAM_HREF,CAM_SIOD,CAM_SIOC);
   Serial.println("TARS: GPIO4 RESERVED FOR OV7670 XCLK");
   Serial.println("TARS: BLUETOOTH DISABLED");
-  Serial.println("TARS: MODE OFFLINE");
   ramDiag("BOOT");
 
   if(oledOK)
@@ -971,25 +914,21 @@ void loop(){
     }
   }*/
   ramMonitor();
-
   if(playing){
   wheelsStop();
   delay(1);
   return;
   }
-
   if(tarsMode==MODE_ONLINE&&!wifiOK()){
     oledSetStatus("WIFI ERROR");
     delay(500);
     return;
   }
-
   if(alarmDue()){
     autonomyStop();
     runAlarm();
     return;
   }
-
 checkTimeGreeting();
 if(playing){
   wheelsStop();
@@ -997,12 +936,14 @@ if(playing){
   delay(1);
   return;
 }
-String q=tarsMode==MODE_ONLINE?recordRealtime():recordOffline();
+String q=recordRealtime();
 if(q.length()){
   wheelsStop();
   processQuestion(q);
 }else if(!oledSpecial){
-  oledSetStatus(tarsMode==MODE_ONLINE?"LISTENING":"READY");
+  oledSetStatus("LISTENING");
+}
+delay(1);
 }
 if(!playing&&tarsMode==MODE_ONLINE&&!sttConnected)
   autoSpeechUpdate(true,false,false);
