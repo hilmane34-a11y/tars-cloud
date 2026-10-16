@@ -38,3 +38,4 @@ bool knowledgeRecognizeFeatures(
 );
 
 uint16_t knowledgeSampleCount();
+bool knowledgeDeleteLabel(const char *label);
