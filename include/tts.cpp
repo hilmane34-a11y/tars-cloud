@@ -47,7 +47,7 @@ extern void oledSetStatus(const String&);
 bool playing=false,dacOK=false;
 
 static const int MP3_COPY_BUFFER = 512;
-static const size_t AUDIO_RING_SIZE = 6144;
+static const size_t AUDIO_RING_SIZE = 4096;
 static const size_t AUDIO_PREBUFFER = 512;
 
 class MemMP3Stream:public Stream{
