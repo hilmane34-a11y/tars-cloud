@@ -295,9 +295,6 @@ void cameraTask(void*){
       if(xSemaphoreTake(envMux,portMAX_DELAY)==pdTRUE){
         if(xSemaphoreTake(previewMux,portMAX_DELAY)==pdTRUE){
 ok=I2SCamera::captureFrameData( cameraEnvironment, cameraPreview);
-if (ok && knowledgeSampleCount() > 0) {
-  knowledgeAutoRecognize(cameraEnvironment);
-}
 static uint32_t lastPreviewDiag=0;
 if(millis()-lastPreviewDiag>=5000){
   lastPreviewDiag=millis();
@@ -340,6 +337,9 @@ if(millis()-lastPreviewDiag>=5000){
           }
           xSemaphoreGive(previewMux);
         }
+       if (ok && knowledgeSampleCount() > 0) {
+  knowledgeAutoRecognize(cameraEnvironment);
+}
         if(ok){
           analyzed=envAnalyze(
             cameraEnvironment,
