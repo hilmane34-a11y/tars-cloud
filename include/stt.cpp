@@ -41,7 +41,41 @@ bool sttClosing = false;
 extern bool wifiOK();
 extern void oledSetStatus(const String &);
 extern void oledSetListening();
+extern bool processKnowledgeTeachCommand(const String &q);
 
+static char serialTeachBuffer[160];
+static size_t serialTeachLength = 0;
+
+static void pollSerialTeachCommand() {
+  while (Serial.available() > 0) {
+    char c = (char)Serial.read();
+
+    if (c == '\r') continue;
+
+    if (c == '\n') {
+      serialTeachBuffer[serialTeachLength] = '\0';
+
+      String q(serialTeachBuffer);
+      q.trim();
+      serialTeachLength = 0;
+
+      if (q.startsWith("objek ")) {
+        Serial.printf("TARS: SERIAL TEACH -> %s\n", q.c_str());
+        processKnowledgeTeachCommand(q);
+      }
+      continue;
+    }
+
+    if (c == '\b' || c == 127) {
+      if (serialTeachLength > 0) serialTeachLength--;
+      continue;
+    }
+
+    if (c >= 32 && serialTeachLength < sizeof(serialTeachBuffer) - 1) {
+      serialTeachBuffer[serialTeachLength++] = c;
+    }
+  }
+}
 bool sttCooling() {
   return false;
 }
@@ -151,6 +185,13 @@ bool startSTT() {
 
   while (!sttReady && !sttError &&
          millis() - startedAt < STT_CONNECT_TIMEOUT) {
+  while (!sttReady && !sttError &&
+       millis() - startedAt < STT_CONNECT_TIMEOUT) {
+  pollSerialTeachCommand();
+  sttWS.loop();
+  delay(2);
+  yield();
+  }
     sttWS.loop();
     delay(2);
     yield();
@@ -190,10 +231,11 @@ String stopSTT(uint32_t samples) {
   uint32_t startedAt = millis();
 
   while (!sttDone && !sttError &&
-         sttConnected && millis() - startedAt < 6000) {
-    sttWS.loop();
-    delay(2);
-    yield();
+       sttConnected && millis() - startedAt < 6000) {
+  pollSerialTeachCommand();
+  sttWS.loop();
+  delay(2);
+  yield();
   }
 
   String result = (sttDone && !sttError) ? sttFinal : "";
