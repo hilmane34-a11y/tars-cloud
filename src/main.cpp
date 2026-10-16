@@ -936,16 +936,16 @@ if(playing){
   delay(1);
   return;
 }
-String q=recordRealtime();
-if(q.length()){
+String q = recordRealtime();
+
+if (q.length()) {
   wheelsStop();
   processQuestion(q);
-}else if(!oledSpecial){
+} else if (!oledSpecial) {
   oledSetStatus("LISTENING");
 }
-delay(1);
+if (!playing && tarsMode == MODE_ONLINE && !sttConnected) {
+  autoSpeechUpdate(true, false, false);
 }
-if(!playing&&tarsMode==MODE_ONLINE&&!sttConnected)
-  autoSpeechUpdate(true,false,false);
 delay(1);
 }
