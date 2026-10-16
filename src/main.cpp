@@ -1100,6 +1100,23 @@ void loop(){
     }
   }*/
   ramMonitor();
+  // Serial untuk belajar objek, tanpa ASK/TTS.
+  String serialQ;
+  if (readSerialQuestion(serialQ)) {
+    String cmd = normCmd(serialQ);
+
+    if (cmd.startsWith("objek ")) {
+      Serial.println("TARS: SERIAL OBJECT LEARNING");
+      processKnowledgeTeachCommand(serialQ);
+      delay(1);
+      return;
+    }
+
+    // Perintah Serial selain belajar objek diabaikan.
+    Serial.println("TARS: SERIAL KHUSUS BELAJAR OBJEK");
+    return;
+  }
+
   if (playing) {
     wheelsStop();
     delay(1);
@@ -1127,46 +1144,18 @@ void loop(){
     return;
   }
 
-  // SERIAL MONITOR: input lengkap diprioritaskan.
-  String q;
-  if (readSerialQuestion(q)) {
-    Serial.println("TARS: SERIAL INPUT -> " + q);
-
-    wheelsStop();
-    autonomyStop();
-
-    // Putuskan STT sebelum memproses perintah Serial.
-    closeSTT();
-    processQuestion(q);
-    delay(1);
-    return;
-  }
-
-  // STT tetap aktif untuk input mikrofon.
-  q = recordRealtime();
+  String q = recordRealtime();
 
   if (q.length()) {
-    Serial.println("TARS: STT INPUT -> " + q);
-
     wheelsStop();
-    autonomyStop();
-
-    // Cegah WebSocket STT bertabrakan dengan ASK/TTS.
-    closeSTT();
     processQuestion(q);
-    delay(1);
-    return;
-  }
-
-  if (!oledSpecial) {
+  } else if (!oledSpecial) {
     oledSetStatus("LISTENING");
   }
 
-  if (!playing &&
-      tarsMode == MODE_ONLINE &&
-      !sttConnected) {
+  if (!playing && tarsMode == MODE_ONLINE && !sttConnected) {
     autoSpeechUpdate(true, false, false);
   }
 
   delay(1);
-}
+  }
