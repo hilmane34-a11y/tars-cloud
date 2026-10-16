@@ -865,7 +865,18 @@ bool knowledgeLearnCurrentView(const String &label) {
 
 bool processKnowledgeTeachCommand(const String &q) {
   String s = normCmd(q);
+   if (s.startsWith("hapus ")) {
+    String label = s.substring(6);
+    label.trim();
 
+    if (knowledgeDeleteLabel(label.c_str())) {
+      oledShowText("Terhapus: " + label, "MEMORI OBJEK");
+      Serial.println("TARS: LABEL BERHASIL DIHAPUS");
+    } else {
+      Serial.println("TARS: LABEL TIDAK DITEMUKAN / GAGAL");
+    }
+    return true;
+}
   if (!s.startsWith("objek ")) return false;
 
   s = s.substring(6);
