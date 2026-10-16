@@ -6,7 +6,10 @@
 #include "config.h"
 #include <sleep_oled.h>
 #include <I2SCamera.h>
+#include "knowledge.h"
 
+extern char knowledgeDisplayLabel[KNOWLEDGE_LABEL_SIZE];
+extern portMUX_TYPE knowledgeDisplayMux;
 extern bool cameraLive, playing, sleepPreparing;
 extern bool visionLiveEnabled();
 extern SemaphoreHandle_t previewMux;
@@ -122,7 +125,7 @@ void drawCameraOLED() {
     xSemaphoreGive(previewMux);
     return;
   }
-
+  
   oled.clearDisplay();
 
   for (int y = 0; y < 64; y++) {
@@ -132,7 +135,21 @@ void drawCameraOLED() {
       }
     }
   }
+char label[KNOWLEDGE_LABEL_SIZE];
 
+  portENTER_CRITICAL(&knowledgeDisplayMux);
+  strncpy(label, knowledgeDisplayLabel, sizeof(label) - 1);
+  label[sizeof(label) - 1] = '\0';
+  portEXIT_CRITICAL(&knowledgeDisplayMux);
+
+  if (label[0] != '\0') {
+    oled.fillRect(0, 0, 128, 10, SSD1306_BLACK);
+    oled.setTextSize(1);
+    oled.setTextColor(SSD1306_WHITE);
+    oled.setCursor(1, 1);
+    oled.print("KENAL: ");
+    oled.print(label);
+}
   oled.display();
   xSemaphoreGive(previewMux);
 }
