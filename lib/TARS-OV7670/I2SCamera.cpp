@@ -29,7 +29,6 @@ static uint8_t* streamStorage = nullptr;
 static uint8_t* streamBlock[STREAM_BLOCKS] = {};
 static size_t streamStorageSize = 0;
 
-static uint8_t previewFiltered[128 * 64];
 static volatile uint8_t streamState[STREAM_BLOCKS] = {0};
 static volatile int streamBlockY[STREAM_BLOCKS] = {0};
 static volatile int streamFill = 0, streamLine = 0, streamReady = 0;
@@ -613,27 +612,6 @@ if(millis()-start>CAMERA_CAPTURE_TIMEOUT){
     }
     lastDominantColor=best;
     lastColorConfidence=(uint32_t)count*100/colorSamples;
-  }
-  // Filter 3x3 hanya untuk OLED
-  if(previewOut){
-    for(int y=0;y<64;y++){
-      for(int x=0;x<128;x++){
-        int count=0,total=0;
-        for(int dy=-1;dy<=1;dy++){
-          for(int dx=-1;dx<=1;dx++){
-            int nx=x+dx,ny=y+dy;
-            if(nx<0||nx>=128||ny<0||ny>=64)
-              continue;
-            count+=previewOut[ny*128+nx];
-            total++;
-          }
-        }
-        previewFiltered[y*128+x]=
-          count>=total/2+1?1:0;
-      }
-      if((y&3)==0)vTaskDelay(1);
-    }
-    memcpy(previewOut,previewFiltered,128*64);
   }
   return true;
 }
