@@ -944,7 +944,9 @@ void setup(){
   previewMux=xSemaphoreCreateMutex();
   envMux=xSemaphoreCreateMutex();
   cameraMux=xSemaphoreCreateMutex();
-  micOK=initMic();
+  micOK=false;
+Serial.println("TARS: STT DISABLED - SERIAL MONITOR INPUT");
+Serial.setTimeout(30);
 
   if (!LittleFS.begin(true)) {
   Serial.println("TARS: LITTLEFS ERROR");
@@ -1061,38 +1063,50 @@ void loop(){
     }
   }*/
   ramMonitor();
-  if(playing){
-  wheelsStop();
-  delay(1);
-  return;
+  if (playing) {
+    wheelsStop();
+    delay(1);
+    return;
   }
-  if(tarsMode==MODE_ONLINE&&!wifiOK()){
+
+  // INPUT UTAMA DARI SERIAL MONITOR, TANPA STT
+  if (Serial.available()) {
+    String q = Serial.readStringUntil('\n');
+    q.trim();
+
+    if (q.length()) {
+      Serial.println("TARS: INPUT -> " + q);
+      wheelsStop();
+      processQuestion(q);
+      return;
+    }
+  }
+
+  if (tarsMode == MODE_ONLINE && !wifiOK()) {
     oledSetStatus("WIFI ERROR");
     delay(500);
     return;
   }
-  if(alarmDue()){
+
+  if (alarmDue()) {
     autonomyStop();
     runAlarm();
     return;
   }
-checkTimeGreeting();
-if(playing){
-  wheelsStop();
-  autonomyStop();
-  delay(1);
-  return;
-}
-String q = recordRealtime();
 
-if (q.length()) {
-  wheelsStop();
-  processQuestion(q);
-} else if (!oledSpecial) {
-  oledSetStatus("LISTENING");
-}
-if (!playing && tarsMode == MODE_ONLINE && !sttConnected) {
-  autoSpeechUpdate(true, false, false);
-}
-delay(1);
+  checkTimeGreeting();
+
+  if (playing) {
+    wheelsStop();
+    autonomyStop();
+    delay(1);
+    return;
+  }
+
+  // STT DIHAPUS DARI LOOP
+  if (!playing && tarsMode == MODE_ONLINE && !sttConnected) {
+    autoSpeechUpdate(true, false, false);
+  }
+
+  delay(1);
 }
