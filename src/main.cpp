@@ -85,6 +85,9 @@ static uint32_t lastKnowledgeCheck = 0;
 static uint32_t knowledgeCandidateSince = 0;
 static uint8_t knowledgeCandidateFrames = 0;
 static uint32_t lastKnowledgeAnnounce = 0;
+static char knowledgeDisplayLabel[KNOWLEDGE_LABEL_SIZE] = "";
+static portMUX_TYPE knowledgeDisplayMux = portMUX_INITIALIZER_UNLOCKED;
+static uint8_t knowledgeMissFrames = 0;
 
 static const uint32_t KNOWLEDGE_CHECK_INTERVAL_MS = 500;
 static const uint32_t KNOWLEDGE_REPEAT_MS = 10000;
@@ -252,25 +255,40 @@ void knowledgeAutoRecognize(const uint16_t *image) {
   char label[KNOWLEDGE_LABEL_SIZE] = "";
   uint8_t confidence = 0;
 
-  if (!knowledgeRecognize(image, label, sizeof(label), &confidence)) {
+if (!knowledgeRecognize(image, label, sizeof(label), &confidence)) {
+  if (knowledgeMissFrames < 3) knowledgeMissFrames++;
+
+  if (knowledgeMissFrames >= 3) {
     lastRecognizedLabel[0] = '\0';
     knowledgeCandidateFrames = 0;
     knowledgeCandidateSince = 0;
-    return;
+
+    portENTER_CRITICAL(&knowledgeDisplayMux);
+    knowledgeDisplayLabel[0] = '\0';
+    portEXIT_CRITICAL(&knowledgeDisplayMux);
   }
+  return;
+}
 
-  if (strcmp(label, lastRecognizedLabel) != 0) {
-    strncpy(lastRecognizedLabel, label, sizeof(lastRecognizedLabel) - 1);
-    lastRecognizedLabel[sizeof(lastRecognizedLabel) - 1] = '\0';
-    knowledgeCandidateFrames = 1;
-    knowledgeCandidateSince = now;
-    return;
-  }
+knowledgeMissFrames = 0;
 
-  if (knowledgeCandidateFrames < 3) knowledgeCandidateFrames++;
+if (strcmp(label, lastRecognizedLabel) != 0) {
+  strncpy(lastRecognizedLabel, label, sizeof(lastRecognizedLabel) - 1);
+  lastRecognizedLabel[sizeof(lastRecognizedLabel) - 1] = '\0';
+  knowledgeCandidateFrames = 1;
+  knowledgeCandidateSince = now;
+  return;
+}
 
-  if (knowledgeCandidateFrames < 3 ||
-      now - knowledgeCandidateSince < 1000) return;
+if (knowledgeCandidateFrames < 3) knowledgeCandidateFrames++;
+
+if (knowledgeCandidateFrames < 3 ||
+    now - knowledgeCandidateSince < 1000) return;
+
+portENTER_CRITICAL(&knowledgeDisplayMux);
+strncpy(knowledgeDisplayLabel, label, sizeof(knowledgeDisplayLabel) - 1);
+knowledgeDisplayLabel[sizeof(knowledgeDisplayLabel) - 1] = '\0';
+portEXIT_CRITICAL(&knowledgeDisplayMux);
 
   if (now - lastKnowledgeAnnounce < KNOWLEDGE_REPEAT_MS) return;
 
