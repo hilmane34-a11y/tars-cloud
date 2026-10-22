@@ -518,8 +518,8 @@ bool I2SCamera::captureFrameData(
   if(environmentOut)
     memset(environmentOut,0,128*64*sizeof(uint16_t));
   // OLED preview tetap 128x64
-  if(previewOut)
-    memset(previewOut,0,128*64);
+  if (previewOut) {
+  memset(previewOut, 0, (128 * 64) / 8);
   uint32_t colorCount[11]={};
   uint32_t colorSamples=0;
   streamFill=0;
@@ -586,11 +586,13 @@ if(millis()-start>CAMERA_CAPTURE_TIMEOUT){
           int ox=x*128/xres;
           if(ox<128&&oy<64){
             int pos=oy*128+ox;
-            uint8_t r=((p>>11)&31)*255/31;
-            uint8_t g=((p>>5)&63)*255/63;
-            uint8_t b=(p&31)*255/31;
-            uint8_t gray=(77*r+150*g+29*b)>>8;
-            previewOut[pos]=(gray>=80)?1:0;
+            uint8_t r = ((p >> 11) & 31) * 255 / 31;
+            uint8_t g = ((p >> 5) & 63) * 255 / 63;
+            uint8_t b = (p & 31) * 255 / 63;
+            uint8_t gray = (77 * r + 150 * g + 29 * b) >> 8;
+
+            if (gray >= 80) {
+            previewOut[pos >> 3] |= (uint8_t)(1U << (pos & 7));
           }
         }
       }
