@@ -100,18 +100,24 @@ jobs:
         shell: bash
         run: |
           FRAMEWORK="$HOME/.platformio/packages/framework-arduinoespressif32"
+          BUILD=".pio/build/tars"
+          BOOTLOADER_BIN="$BUILD/bootloader.bin"
+          BOOT_APP0="$FRAMEWORK/tools/partitions/boot_app0.bin"
           ESPTOOL="$HOME/.platformio/packages/tool-esptoolpy/esptool.py"
 
-          BOOTLOADER_ELF="$FRAMEWORK/tools/sdk/esp32/bin/bootloader_dio_40m.elf"
-          BOOT_APP0="$FRAMEWORK/tools/partitions/boot_app0.bin"
-
-          test -f "$BOOTLOADER_ELF" || {
-            echo "ERROR: bootloader_dio_40m.elf tidak ditemukan"
+          if [ ! -f "$BOOTLOADER_BIN" ]; then
+            echo "ERROR: bootloader.bin hasil build tidak ditemukan"
+            echo "Isi direktori build:"
+            ls -lah "$BUILD"
+            echo ""
+            echo "Mencari bootloader.bin di direktori .pio:"
+            find .pio -type f -name 'bootloader.bin' -print
             exit 1
-          }
+          fi
 
           test -f "$BOOT_APP0" || {
             echo "ERROR: boot_app0.bin tidak ditemukan"
+            find "$FRAMEWORK" -type f -name 'boot_app0.bin' -print
             exit 1
           }
 
@@ -120,35 +126,27 @@ jobs:
             exit 1
           }
 
-          echo "FRAMEWORK=$FRAMEWORK" >> "$GITHUB_ENV"
-          echo "BOOTLOADER_ELF=$BOOTLOADER_ELF" >> "$GITHUB_ENV"
+          echo "BOOTLOADER_BIN=$BOOTLOADER_BIN" >> "$GITHUB_ENV"
           echo "BOOT_APP0=$BOOT_APP0" >> "$GITHUB_ENV"
           echo "ESPTOOL=$ESPTOOL" >> "$GITHUB_ENV"
 
-      - name: Convert bootloader ELF to BIN
-        shell: bash
-        run: |
-          python "$ESPTOOL" \
-            --chip esp32 \
-            elf2image \
-            "$BOOTLOADER_ELF" \
-            -o bootloader.bin
-
-          test -f bootloader.bin
+          echo "Bootloader: $BOOTLOADER_BIN"
+          echo "boot_app0: $BOOT_APP0"
+          echo "esptool: $ESPTOOL"
 
       - name: Verify build files
         shell: bash
         run: |
           BUILD=".pio/build/tars"
 
-          test -f bootloader.bin
+          test -f "$BOOTLOADER_BIN"
           test -f "$BUILD/partitions.bin"
           test -f "$BUILD/firmware.bin"
           test -f "$BUILD/littlefs.bin"
           test -f "$BOOT_APP0"
 
           echo "Build files:"
-          ls -lh bootloader.bin
+          ls -lh "$BOOTLOADER_BIN"
           ls -lh "$BUILD/partitions.bin"
           ls -lh "$BUILD/firmware.bin"
           ls -lh "$BUILD/littlefs.bin"
@@ -182,7 +180,7 @@ jobs:
             --flash_mode dio \
             --flash_freq 40m \
             --flash_size 4MB \
-            0x1000 bootloader.bin \
+            0x1000 "$BOOTLOADER_BIN" \
             0x8000 "$BUILD/partitions.bin" \
             0xE000 "$BOOT_APP0" \
             0x10000 "$BUILD/firmware.bin" \
