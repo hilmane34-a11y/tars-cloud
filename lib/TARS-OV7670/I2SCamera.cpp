@@ -514,9 +514,9 @@ bool I2SCamera::captureFrameData(
   if(!environmentOut&&!previewOut)return false;
   lastDominantColor=ENV_COLOR_UNKNOWN;
   lastColorConfidence=0;
-  // ENV RGB565: 96x32 = 6144 byte
+  // ENV RGB565: 128x64 = sama kaya oled
   if(environmentOut)
-    memset(environmentOut,0,96*32*sizeof(uint16_t));
+    memset(environmentOut,0,128*64*sizeof(uint16_t));
   // OLED preview tetap 128x64
   if(previewOut)
     memset(previewOut,0,128*64);
@@ -562,7 +562,7 @@ if(millis()-start>CAMERA_CAPTURE_TIMEOUT){
       int sourceY=blockY+y;
       if(sourceY>=yres)continue;
       // Pemetaan ENV 96x32
-      int envY=sourceY*32/yres;
+      int envY=sourceY*64/yres;
       for(int x=0;x<xres;x++){
         uint16_t p=src[y*xres+x];
         if((sourceY&3)==0&&(x&3)==0){
@@ -574,9 +574,9 @@ if(millis()-start>CAMERA_CAPTURE_TIMEOUT){
         }
         // ENV RGB565 96x32
         if(environmentOut){
-          int envX=x*96/xres;
-          if(envX<96&&envY<32){
-            int envPos=envY*96+envX;
+          int envX=x*128/xres;
+          if(envX<128&&envY<64){
+            int envPos=envY*128+envX;
             environmentOut[envPos]=p;
           }
         }
