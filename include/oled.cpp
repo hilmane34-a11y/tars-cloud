@@ -13,7 +13,9 @@ extern portMUX_TYPE knowledgeDisplayMux;
 extern bool cameraLive, playing, sleepPreparing;
 extern bool visionLiveEnabled();
 extern SemaphoreHandle_t previewMux;
-extern uint8_t cameraPreview[128 * 64];
+// Preview 128x64 dikemas 1 bit per piksel.
+// Ukuran: 128 * 64 / 8 = 1024 byte.
+extern uint8_t cameraPreview[(128 * 64) / 8];
 extern bool previewReady;
 
 Adafruit_SSD1306 oled(OLED_WIDTH, OLED_HEIGHT, &Wire, -1);
@@ -129,12 +131,14 @@ void drawCameraOLED() {
   oled.clearDisplay();
 
   for (int y = 0; y < 64; y++) {
-    for (int x = 0; x < 128; x++) {
-      if (cameraPreview[y * 128 + x]) {
-        oled.drawPixel(x, y, SSD1306_WHITE);
-      }
+  for (int x = 0; x < 128; x++) {
+    int pos = y * 128 + x;
+
+    if (cameraPreview[pos >> 3] & (1U << (pos & 7))) {
+      oled.drawPixel(x, y, SSD1306_WHITE);
     }
   }
+}
 char label[KNOWLEDGE_LABEL_SIZE];
 
   portENTER_CRITICAL(&knowledgeDisplayMux);
