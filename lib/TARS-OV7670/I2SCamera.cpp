@@ -507,21 +507,25 @@ static uint8_t classifyRGB565(uint16_t p){
   if(h<255)return ENV_COLOR_BLUE;
   return ENV_COLOR_PURPLE;
 }
+
 bool I2SCamera::captureFrameData(
   uint16_t *environmentOut,
   uint8_t *previewOut
 ){
   if(!environmentOut&&!previewOut)return false;
+
   lastDominantColor=ENV_COLOR_UNKNOWN;
   lastColorConfidence=0;
-  // ENV RGB565: 128x64 = sama kaya oled
+
   if(environmentOut)
     memset(environmentOut,0,128*64*sizeof(uint16_t));
-  // OLED preview tetap 128x64
-  if (previewOut) {
-  memset(previewOut, 0, (128 * 64) / 8);}
+
+  if(previewOut)
+    memset(previewOut,0,(128*64)/8);
+
   uint32_t colorCount[11]={};
   uint32_t colorSamples=0;
+
   streamFill=0;
   streamLine=0;
   streamReady=0;
@@ -529,42 +533,49 @@ bool I2SCamera::captureFrameData(
   readyTail=0;
   streamFrameDone=false;
   streamError=false;
+
   for(int i=0;i<STREAM_BLOCKS;i++)
     streamState[i]=0;
+
   i2sRun();
+
   const int blocksNeeded=(yres+STREAM_LINES-1)/STREAM_LINES;
   int blocksDone=0;
   uint32_t start=millis();
+
   while(blocksDone<blocksNeeded){
-if(millis()-start>CAMERA_CAPTURE_TIMEOUT){
-  Serial.printf(
-    "TARS: CAM FAIL = CAPTURE TIMEOUT blocks=%d/%d ready=%d fill=%d line=%d\n",
-    blocksDone,
-    blocksNeeded,
-    streamReady,
-    streamFill,
-    streamLine
-  );
-  i2sStop();
-  return false;
+    if(millis()-start>CAMERA_CAPTURE_TIMEOUT){
+      Serial.printf(
+        "TARS: CAM FAIL = CAPTURE TIMEOUT blocks=%d/%d ready=%d fill=%d line=%d\n",
+        blocksDone,blocksNeeded,streamReady,streamFill,streamLine
+      );
+      i2sStop();
+      return false;
     }
+
     if(streamReady<=0){
       delay(1);
       continue;
     }
+
     int idx=readyQueue[readyTail];
     readyTail=(readyTail+1)%STREAM_BLOCKS;
     streamReady--;
+
     uint16_t *src=(uint16_t*)streamBlock[idx];
     int blockY=blocksDone*STREAM_LINES;
+
     for(int y=0;y<STREAM_LINES;y++){
       if((y&3)==0)vTaskDelay(1);
+
       int sourceY=blockY+y;
       if(sourceY>=yres)continue;
-      // Pemetaan ENV 96x32
+
       int envY=sourceY*64/yres;
+
       for(int x=0;x<xres;x++){
         uint16_t p=src[y*xres+x];
+
         if((sourceY&3)==0&&(x&3)==0){
           uint8_t c=classifyRGB565(p);
           if(c<11){
@@ -572,7 +583,7 @@ if(millis()-start>CAMERA_CAPTURE_TIMEOUT){
             colorSamples++;
           }
         }
-        // ENV RGB565 96x32
+
         if(environmentOut){
           int envX=x*128/xres;
           if(envX<128&&envY<64){
@@ -580,41 +591,48 @@ if(millis()-start>CAMERA_CAPTURE_TIMEOUT){
             environmentOut[envPos]=p;
           }
         }
-        // OLED grayscale tetap 128x64
+
         if(previewOut){
           int oy=sourceY*64/yres;
           int ox=x*128/xres;
+
           if(ox<128&&oy<64){
             int pos=oy*128+ox;
-            uint8_t r = ((p >> 11) & 31) * 255 / 31;
-            uint8_t g = ((p >> 5) & 63) * 255 / 63;
-            uint8_t b = (p & 31) * 255 / 31;
-            uint8_t gray = (77 * r + 150 * g + 29 * b) >> 8;
 
-            if (gray >= 80) {
-            previewOut[pos >> 3] |= (uint8_t)(1U << (pos & 7));
+            uint8_t r=((p>>11)&31)*255/31;
+            uint8_t g=((p>>5)&63)*255/63;
+            uint8_t b=(p&31)*255/31;
+            uint8_t gray=(77*r+150*g+29*b)>>8;
+
+            if(gray>=80)
+              previewOut[pos>>3]|=(uint8_t)(1U<<(pos&7));
           }
         }
       }
     }
+
     streamState[idx]=0;
     blocksDone++;
     start=millis();
   }
+
   i2sStop();
 
   if(colorSamples){
     uint8_t best=ENV_COLOR_UNKNOWN;
     uint32_t count=0;
+
     for(uint8_t i=1;i<11;i++){
       if(colorCount[i]>count){
         count=colorCount[i];
         best=i;
       }
     }
+
     lastDominantColor=best;
     lastColorConfidence=(uint32_t)count*100/colorSamples;
   }
+
   return true;
 }
 bool I2SCamera::capturePreview(uint8_t *out){
