@@ -72,7 +72,7 @@ const uint32_t VISION_EVENT_COOLDOWN_MS=45000;
 
 OV7670*camera=nullptr;
 SemaphoreHandle_t previewMux=nullptr,envMux=nullptr,cameraMux=nullptr;
-static uint16_t cameraEnvironment[96*32];
+static uint16_t cameraEnvironment[128*64];
 uint8_t cameraPreview[128*64];
 bool previewReady=false;
 portMUX_TYPE visionEventMux=portMUX_INITIALIZER_UNLOCKED;
@@ -321,10 +321,7 @@ if(millis()-lastPreviewDiag>=5000){
     ok,  previewReady,   cameraLive,  playing );
 }
           int gesture=handGestureUpdate(
-            cameraEnvironment,
-            96,
-            32
-          );
+            cameraEnvironment,128,64 );
           if(gesture==HAND_OPEN){
             griperBuka();
             delay(150);
