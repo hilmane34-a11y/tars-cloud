@@ -17,7 +17,6 @@ jobs:
           python-version: "3.11"
 
       - name: Install PlatformIO
-        shell: bash
         run: |
           python -m pip install --upgrade pip
           pip install -U platformio
@@ -28,11 +27,6 @@ jobs:
           echo "========================================"
           echo "VERIFY PARTITION TABLE"
           echo "========================================"
-
-          test -f partitions.csv || {
-            echo "ERROR: partitions.csv tidak ditemukan"
-            exit 1
-          }
 
           cat partitions.csv
 
@@ -105,134 +99,56 @@ jobs:
       - name: Locate ESP32 tools
         shell: bash
         run: |
-          set -e
-
-          BUILD="$GITHUB_WORKSPACE/.pio/build/tars"
           FRAMEWORK="$HOME/.platformio/packages/framework-arduinoespressif32"
-          TOOL_DIR="$HOME/.platformio/packages/tool-esptoolpy"
+          ESPTOOL="$HOME/.platformio/packages/tool-esptoolpy/esptool.py"
 
-          echo "========================================"
-          echo "LOCATE ESP32 TOOLS"
-          echo "========================================"
+          BOOTLOADER_ELF="$FRAMEWORK/tools/sdk/esp32/bin/bootloader_dio_40m.elf"
+          BOOT_APP0="$FRAMEWORK/tools/partitions/boot_app0.bin"
 
-          test -d "$BUILD" || {
-            echo "ERROR: direktori build tidak ditemukan: $BUILD"
+          test -f "$BOOTLOADER_ELF" || {
+            echo "ERROR: bootloader_dio_40m.elf tidak ditemukan"
             exit 1
           }
 
-          echo ""
-          echo "Mencari bootloader.bin..."
-
-          BOOTLOADER_BIN=""
-
-          for FILE in \
-            "$BUILD/bootloader.bin" \
-            "$BUILD/bootloader/bootloader.bin"
-          do
-            if [ -f "$FILE" ]; then
-              BOOTLOADER_BIN="$FILE"
-              break
-            fi
-          done
-
-          if [ -z "$BOOTLOADER_BIN" ]; then
-            BOOTLOADER_BIN="$(find "$BUILD" -type f -name 'bootloader.bin' -print -quit)"
-          fi
-
-          if [ -z "$BOOTLOADER_BIN" ]; then
-            echo "ERROR: bootloader.bin tidak ditemukan."
-            echo "Isi direktori build:"
-            find "$BUILD" -maxdepth 4 -type f -print | sort
+          test -f "$BOOT_APP0" || {
+            echo "ERROR: boot_app0.bin tidak ditemukan"
             exit 1
-          fi
+          }
 
-          echo "Bootloader ditemukan: $BOOTLOADER_BIN"
-
-          echo ""
-          echo "Mencari boot_app0.bin..."
-
-          BOOT_APP0=""
-
-          for FILE in \
-            "$FRAMEWORK/tools/partitions/boot_app0.bin" \
-            "$HOME/.platformio/packages/framework-arduinoespressif32-libs/tools/partitions/boot_app0.bin"
-          do
-            if [ -f "$FILE" ]; then
-              BOOT_APP0="$FILE"
-              break
-            fi
-          done
-
-          if [ -z "$BOOT_APP0" ]; then
-            BOOT_APP0="$(find "$HOME/.platformio/packages" -type f -name 'boot_app0.bin' -print -quit 2>/dev/null || true)"
-          fi
-
-          if [ -z "$BOOT_APP0" ]; then
-            echo "ERROR: boot_app0.bin tidak ditemukan."
-            find "$HOME/.platformio/packages" -type f -name 'boot_app0.bin' -print 2>/dev/null || true
+          test -f "$ESPTOOL" || {
+            echo "ERROR: esptool.py tidak ditemukan"
             exit 1
-          fi
+          }
 
-          echo "boot_app0 ditemukan: $BOOT_APP0"
-
-          echo ""
-          echo "Mencari esptool..."
-
-          ESPTOOL=""
-
-          if [ -d "$TOOL_DIR" ]; then
-            ESPTOOL="$(find "$TOOL_DIR" -type f \( -name 'esptool.py' -o -name 'esptool' \) -print -quit)"
-          fi
-
-          if [ -z "$ESPTOOL" ]; then
-            echo "esptool tidak ditemukan di paket PlatformIO."
-            echo "Memasang esptool Python..."
-            python -m pip install esptool
-            ESPTOOL_MODE="python-module"
-          else
-            echo "esptool ditemukan: $ESPTOOL"
-
-            case "$ESPTOOL" in
-              *.py)
-                ESPTOOL_MODE="python-script"
-                ;;
-              *)
-                ESPTOOL_MODE="executable"
-                ;;
-            esac
-          fi
-
-          echo "BOOTLOADER_BIN=$BOOTLOADER_BIN" >> "$GITHUB_ENV"
+          echo "FRAMEWORK=$FRAMEWORK" >> "$GITHUB_ENV"
+          echo "BOOTLOADER_ELF=$BOOTLOADER_ELF" >> "$GITHUB_ENV"
           echo "BOOT_APP0=$BOOT_APP0" >> "$GITHUB_ENV"
           echo "ESPTOOL=$ESPTOOL" >> "$GITHUB_ENV"
-          echo "ESPTOOL_MODE=$ESPTOOL_MODE" >> "$GITHUB_ENV"
 
-          echo ""
-          echo "Mode esptool: $ESPTOOL_MODE"
-          echo "ESP32 tools berhasil diperiksa."
+      - name: Convert bootloader ELF to BIN
+        shell: bash
+        run: |
+          python "$ESPTOOL" \
+            --chip esp32 \
+            elf2image \
+            "$BOOTLOADER_ELF" \
+            -o bootloader.bin
+
+          test -f bootloader.bin
 
       - name: Verify build files
         shell: bash
         run: |
-          set -e
-
           BUILD=".pio/build/tars"
 
-          for FILE in \
-            "$BOOTLOADER_BIN" \
-            "$BUILD/partitions.bin" \
-            "$BUILD/firmware.bin" \
-            "$BUILD/littlefs.bin" \
-            "$BOOT_APP0"
-          do
-            if [ ! -f "$FILE" ]; then
-              echo "ERROR: file build tidak ditemukan: $FILE"
-              exit 1
-            fi
-          done
+          test -f bootloader.bin
+          test -f "$BUILD/partitions.bin"
+          test -f "$BUILD/firmware.bin"
+          test -f "$BUILD/littlefs.bin"
+          test -f "$BOOT_APP0"
 
           echo "Build files:"
-          ls -lh "$BOOTLOADER_BIN"
+          ls -lh bootloader.bin
           ls -lh "$BUILD/partitions.bin"
           ls -lh "$BUILD/firmware.bin"
           ls -lh "$BUILD/littlefs.bin"
@@ -241,13 +157,11 @@ jobs:
       - name: Verify LittleFS image size
         shell: bash
         run: |
-          set -e
-
           BUILD=".pio/build/tars"
           SIZE=$(stat -c%s "$BUILD/littlefs.bin")
 
           echo "LittleFS image size: $SIZE bytes"
-          echo "Expected maximum: 524288 bytes"
+          echo "Expected maximum : 524288 bytes"
 
           if [ "$SIZE" -gt 524288 ]; then
             echo "ERROR: LittleFS melebihi 512 KB"
@@ -259,49 +173,20 @@ jobs:
       - name: Merge TARS firmware
         shell: bash
         run: |
-          set -e
-
           BUILD=".pio/build/tars"
 
-          run_esptool() {
-            case "$ESPTOOL_MODE" in
-              python-script)
-                python "$ESPTOOL" "$@"
-                ;;
-              executable)
-                "$ESPTOOL" "$@"
-                ;;
-              python-module)
-                python -m esptool "$@"
-                ;;
-              *)
-                echo "ERROR: mode esptool tidak dikenal: $ESPTOOL_MODE"
-                return 1
-                ;;
-            esac
-          }
-
-          echo "========================================"
-          echo "MERGE TARS FIRMWARE"
-          echo "========================================"
-
-          run_esptool \
+          python "$ESPTOOL" \
             --chip esp32 \
             merge_bin \
             -o TARS-ESP32.bin \
             --flash_mode dio \
             --flash_freq 40m \
             --flash_size 4MB \
-            0x1000 "$BOOTLOADER_BIN" \
+            0x1000 bootloader.bin \
             0x8000 "$BUILD/partitions.bin" \
             0xE000 "$BOOT_APP0" \
             0x10000 "$BUILD/firmware.bin" \
             0x380000 "$BUILD/littlefs.bin"
-
-          test -s TARS-ESP32.bin
-
-          echo "Merge selesai."
-          ls -lh TARS-ESP32.bin
 
       - name: Verify final BIN
         shell: bash
@@ -310,10 +195,6 @@ jobs:
           import os
 
           path = "TARS-ESP32.bin"
-
-          if not os.path.isfile(path):
-              raise SystemExit("ERROR: TARS-ESP32.bin tidak ditemukan")
-
           size = os.path.getsize(path)
 
           print("========================================")
@@ -325,7 +206,7 @@ jobs:
           print("----------------------------------------")
           print("Flash           : 4 MB")
           print("Firmware offset : 0x10000")
-          print("Firmware region : 0x10000 - 0x37FFFF")
+          print("Firmware size   : 0x370000 (3.4375 MB)")
           print("LittleFS offset : 0x380000")
           print("LittleFS size   : 0x80000 (512 KB)")
           print("----------------------------------------")
@@ -334,10 +215,7 @@ jobs:
               raise SystemExit("ERROR: BIN melebihi 4 MB")
 
           if size != 0x400000:
-              raise SystemExit(
-                  f"ERROR: merged BIN berukuran {size} bytes, "
-                  "bukan 4 MB (4194304 bytes)"
-              )
+              raise SystemExit("ERROR: merged BIN bukan 4 MB penuh")
 
           print("OK - merged BIN tepat 4 MB")
           print("OK - layout flash sesuai")
