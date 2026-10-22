@@ -519,7 +519,7 @@ bool I2SCamera::captureFrameData(
     memset(environmentOut,0,128*64*sizeof(uint16_t));
   // OLED preview tetap 128x64
   if (previewOut) {
-  memset(previewOut, 0, (128 * 64) / 8);
+  memset(previewOut, 0, (128 * 64) / 8);}
   uint32_t colorCount[11]={};
   uint32_t colorSamples=0;
   streamFill=0;
