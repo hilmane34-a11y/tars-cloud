@@ -3,7 +3,10 @@ import os
 
 project = env.subst("$PROJECT_DIR")
 framework = env.subst("$PROJECT_PACKAGES_DIR/framework-arduinoespressif32")
-libdeps = os.path.join(env.subst("$PROJECT_LIBDEPS_DIR"), env["PIOENV"])
+libdeps = os.path.join(
+    env.subst("$PROJECT_LIBDEPS_DIR"),
+    env["PIOENV"]
+)
 
 paths = [
     # Project
@@ -21,8 +24,15 @@ paths = [
     os.path.join(framework, "libraries", "Wire", "src"),
     os.path.join(framework, "libraries", "SPI", "src"),
     os.path.join(framework, "libraries", "WiFi", "src"),
-    os.path.join(framework, "libraries", "WiFiClientSecure", "src"),
+
+    # FIX: Network.h untuk WiFiGeneric.h
+    os.path.join(framework, "libraries", "Network", "src"),
+
+    # Network client dan HTTP
+    os.path.join(framework, "libraries", "NetworkClientSecure", "src"),
     os.path.join(framework, "libraries", "HTTPClient", "src"),
+
+    # Filesystem
     os.path.join(framework, "libraries", "LittleFS", "src"),
 ]
 
@@ -45,6 +55,7 @@ paths = list(dict.fromkeys(
     p for p in paths if os.path.isdir(p)
 ))
 
+# Register include paths
 env.Append(CPPPATH=paths)
 
 # Compile .cpp files located in include/
@@ -55,6 +66,8 @@ env.BuildSources(
 )
 
 print("========== TARS INCLUDE CPP PATH ==========")
+
 for p in paths:
     print("TARS INCLUDE:", p)
+
 print("===========================================")
