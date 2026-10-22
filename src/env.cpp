@@ -2,8 +2,8 @@
 #include <string.h>
 #include <stdlib.h>
 
-#define ENV_WIDTH  96
-#define ENV_HEIGHT 32
+#define ENV_WIDTH  128
+#define ENV_HEIGHT 64
 
 #define GRID_W 16
 #define GRID_H 8
