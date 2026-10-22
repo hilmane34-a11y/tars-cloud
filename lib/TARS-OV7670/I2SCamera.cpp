@@ -4,7 +4,6 @@
 #include "../../src/env.h"
 #include <math.h>
 #include <esp_heap_caps.h>
-#include "esp32/rom/gpio.h"
 
 int I2SCamera::blocksReceived = 0;
 int I2SCamera::framesReceived = 0;
