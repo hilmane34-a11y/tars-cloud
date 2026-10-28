@@ -13,7 +13,7 @@ static const uint32_t MAGIC_NEW  = 0x4B4E4F59;
 static const uint32_t MAGIC_MARK = 0x4B4E4F5A;
 
 static const uint8_t MAX_SAMPLES = 48;
-static const uint8_t MATCH_THRESHOLD = 84;
+static const uint8_t MATCH_THRESHOLD = 90;
 
 #define GW 64
 #define GH 32
