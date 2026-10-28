@@ -5,7 +5,11 @@
 #include <stdlib.h>
 
 static const char *KNOWLEDGE_FILE = "/knowledge.dat";
-static const uint32_t KNOWLEDGE_MAGIC = 0x4B4E4F59;
+static const char *KNOWLEDGE_TMP  = "/knowledge.tmp";
+static const char *KNOWLEDGE_BAK  = "/knowledge.bak";
+
+static const uint32_t MAGIC_OLD = 0x4B4E4F58;
+static const uint32_t MAGIC_NEW = 0x4B4E4F59;
 static const uint8_t MAX_SAMPLES = 48;
 static const uint8_t MATCH_THRESHOLD = 84;
 
@@ -19,122 +23,136 @@ static KnowledgeRecord records[MAX_SAMPLES];
 static uint8_t recordCount = 0;
 static bool ready = false;
 
-static inline void getRGB(
-    uint16_t p, int &r, int &g, int &b) {
+static uint16_t rgb565(uint8_t r, uint8_t g, uint8_t b) {
+  return ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
+}
+
+static void getRGB(uint16_t p, int &r, int &g, int &b) {
   r = ((p >> 11) & 31) * 255 / 31;
   g = ((p >> 5) & 63) * 255 / 63;
   b = (p & 31) * 255 / 31;
 }
 
-static inline int luminance(int r, int g, int b) {
-  return (77 * r + 150 * g + 29 * b) >> 8;
+static int colorDistance(uint16_t a, uint16_t b) {
+  int ar, ag, ab, br, bg, bb;
+  getRGB(a, ar, ag, ab);
+  getRGB(b, br, bg, bb);
+  return (abs(ar - br) * 3 + abs(ag - bg) * 4 +
+          abs(ab - bb) * 2) / 9;
 }
 
-static inline int colorDistance(
-    int r, int g, int b,
-    int br, int bg, int bb) {
-  return (abs(r - br) * 3 +
-          abs(g - bg) * 4 +
-          abs(b - bb) * 2) / 3;
-}
-
-static inline bool isForeground(
-    uint16_t p, int br, int bg, int bb) {
-  int r, g, b;
-  getRGB(p, r, g, b);
-
-  // Perbedaan warna dari warna dominan tepi gambar.
-  // Objek hitam tetap dapat lolos karena kontrasnya tinggi.
-  return colorDistance(r, g, b, br, bg, bb) >= 28;
+static bool validLabel(const char *label) {
+  return label && label[0] &&
+         strnlen(label, KNOWLEDGE_LABEL_SIZE) <
+         KNOWLEDGE_LABEL_SIZE;
 }
 
 bool knowledgeBegin() {
-  recordCount = 0;
   ready = false;
+  recordCount = 0;
+
+  if (!LittleFS.begin(false)) {
+    Serial.println("TARS: LITTLEFS GAGAL, DATA TIDAK DIHAPUS");
+    return false;
+  }
+
+  if (!LittleFS.exists(KNOWLEDGE_FILE)) {
+    ready = true;
+    Serial.println("TARS: MEMORI OBJEK KOSONG");
+    return true;
+  }
 
   File f = LittleFS.open(KNOWLEDGE_FILE, "r");
-  bool incompatible = false;
+  if (!f) {
+    Serial.println("TARS: KNOWLEDGE GAGAL DIBUKA");
+    return false;
+  }
 
-  if (f) {
-    while (f.available() >= (int)sizeof(KnowledgeRecord)) {
-      KnowledgeRecord r;
+  const size_t recordSize = sizeof(KnowledgeRecord);
+  size_t fileSize = f.size();
 
-      if (f.read((uint8_t *)&r, sizeof(r)) != sizeof(r) ||
-          r.magic != KNOWLEDGE_MAGIC ||
-          r.label[0] == '\0') {
-        incompatible = true;
-        break;
-      }
+  if (fileSize % recordSize != 0 ||
+      fileSize / recordSize > MAX_SAMPLES) {
+    f.close();
+    Serial.println("TARS: FORMAT KNOWLEDGE TIDAK COCOK; DATA DIPERTAHANKAN");
+    return false;
+  }
 
-      r.label[KNOWLEDGE_LABEL_SIZE - 1] = '\0';
+  uint8_t loaded = 0;
+  bool valid = true;
 
-      if (recordCount < MAX_SAMPLES) {
-        records[recordCount++] = r;
-      }
+  while (f.available() && loaded < MAX_SAMPLES) {
+    KnowledgeRecord rec;
+
+    if (f.read((uint8_t *)&rec, recordSize) != recordSize) {
+      valid = false;
+      break;
     }
 
-    if (f.available() > 0) incompatible = true;
-    f.close();
+    if ((rec.magic != MAGIC_OLD && rec.magic != MAGIC_NEW) ||
+        rec.label[0] == '\0' ||
+        memchr(rec.label, '\0', KNOWLEDGE_LABEL_SIZE) == nullptr) {
+      valid = false;
+      break;
+    }
+
+    records[loaded++] = rec;
   }
 
-  if (incompatible) {
+  f.close();
+
+  if (!valid || loaded != fileSize / recordSize) {
     recordCount = 0;
-    LittleFS.remove(KNOWLEDGE_FILE);
-    Serial.println(
-      "TARS: FORMAT KNOWLEDGE BARU, AJARKAN ULANG OBJEK"
-    );
+    Serial.println("TARS: DATA KNOWLEDGE TIDAK VALID; FILE ASLI TIDAK DIHAPUS");
+    return false;
   }
 
+  recordCount = loaded;
   ready = true;
+
+  Serial.printf("TARS: MEMORI OBJEK DIMUAT %u SAMPEL\n", recordCount);
   return true;
 }
 
-bool knowledgeBuildFeatures(
-    const uint16_t *image,
-    uint8_t *features) {
+bool knowledgeBuildFeatures(const uint16_t *image, uint8_t *features) {
   if (!image || !features) return false;
 
   const int W = KNOWLEDGE_WIDTH;
   const int H = KNOWLEDGE_HEIGHT;
 
-  // Perkirakan warna latar dari tepi gambar.
-  // Tidak menyimpan atau membuat salinan background.
-  uint32_t sr = 0, sg = 0, sb = 0;
-  uint32_t n = 0;
+  uint32_t edgeR = 0, edgeG = 0, edgeB = 0;
+  uint32_t edgeCount = 0;
 
-  for (int x = 0; x < W; x++) {
-    int r, g, b;
-    getRGB(image[x], r, g, b);
-    sr += r; sg += g; sb += b; n++;
+  // Perkirakan warna latar dari tepian gambar.
+  for (int y = 0; y < H; y++) {
+    for (int x = 0; x < W; x++) {
+      if (x != 0 && x != W - 1 &&
+          y != 0 && y != H - 1) continue;
 
-    int k = (H - 1) * W + x;
-    getRGB(image[k], r, g, b);
-    sr += r; sg += g; sb += b; n++;
+      int r, g, b;
+      getRGB(image[y * W + x], r, g, b);
+      edgeR += r;
+      edgeG += g;
+      edgeB += b;
+      edgeCount++;
+    }
   }
 
-  for (int y = 1; y < H - 1; y++) {
-    int r, g, b;
-    getRGB(image[y * W], r, g, b);
-    sr += r; sg += g; sb += b; n++;
+  if (!edgeCount) return false;
 
-    getRGB(image[y * W + W - 1], r, g, b);
-    sr += r; sg += g; sb += b; n++;
-  }
-
-  if (!n) return false;
-
-  int br = sr / n;
-  int bg = sg / n;
-  int bb = sb / n;
-  int bgLum = luminance(br, bg, bb);
+  uint16_t background = rgb565(
+    edgeR / edgeCount,
+    edgeG / edgeCount,
+    edgeB / edgeCount
+  );
 
   int minX = W, minY = H, maxX = -1, maxY = -1;
   int foregroundCount = 0;
 
-  // Cari objek di seluruh frame, bukan hanya tengah.
+  // Cari area yang berbeda dari latar.
   for (int y = 0; y < H; y++) {
     for (int x = 0; x < W; x++) {
-      if (!isForeground(image[y * W + x], br, bg, bb))
+      if (colorDistance(image[y * W + x], background) < 28)
         continue;
 
       if (x < minX) minX = x;
@@ -145,24 +163,21 @@ bool knowledgeBuildFeatures(
     }
   }
 
+  if (maxX < minX || maxY < minY) return false;
+
   int boxW = maxX - minX + 1;
   int boxH = maxY - minY + 1;
   int boxArea = boxW * boxH;
 
-  // Tolak frame kosong atau perubahan yang memenuhi hampir
-  // seluruh gambar. Tidak menyimpan background sebagai objek.
-  if (maxX < 0 || foregroundCount < 12 ||
-      boxW < 4 || boxH < 4 ||
-      boxArea < 20 ||
-      boxArea > (W * H * 92 / 100)) {
-    memset(features, 0, KNOWLEDGE_FEATURE_SIZE);
+  if (boxW < 5 || boxH < 5 ||
+      boxArea < 30 ||
+      foregroundCount < 20 ||
+      foregroundCount > (W * H * 92 / 100))
     return false;
-  }
 
-  // 4x4 sel mengikuti bounding box objek.
-  // Setiap sel menyimpan:
-  // [0] kepadatan bentuk, [1] tingkat gelap relatif,
-  // [2] warna/chroma, [3] kekuatan tepi.
+  // Fitur 4x4: bentuk, kegelapan, warna, dan tepi.
+  int idx = 0;
+
   for (int cy = 0; cy < 4; cy++) {
     for (int cx = 0; cx < 4; cx++) {
       int x0 = minX + cx * boxW / 4;
@@ -170,198 +185,184 @@ bool knowledgeBuildFeatures(
       int y0 = minY + cy * boxH / 4;
       int y1 = minY + (cy + 1) * boxH / 4;
 
-      uint32_t count = 0, total = 0;
-      uint32_t sumLum = 0, sumChr = 0, sumEdge = 0;
-      uint32_t edgeN = 0;
+      int count = 0;
+      int darkSum = 0;
+      int chromaSum = 0;
+      int edgeSum = 0;
+      int pixels = 0;
 
       for (int y = y0; y < y1; y++) {
         for (int x = x0; x < x1; x++) {
-          total++;
           uint16_t p = image[y * W + x];
-
-          if (!isForeground(p, br, bg, bb)) continue;
-
-          int r, g, b;
+          int r, g, b, br, bg, bb;
           getRGB(p, r, g, b);
-          int lum = luminance(r, g, b);
-          int hi = max(r, max(g, b));
-          int lo = min(r, min(g, b));
+          getRGB(background, br, bg, bb);
 
-          count++;
-          sumLum += lum;
-          sumChr += hi - lo;
+          int dist = colorDistance(p, background);
+          bool fg = dist >= 28;
 
-          // Ukur tepi objek lokal tanpa buffer tambahan.
-          if (x + 1 < x1 &&
-              isForeground(image[y * W + x + 1],
-                           br, bg, bb)) {
-            int r2, g2, b2;
-            getRGB(image[y * W + x + 1], r2, g2, b2);
-            sumEdge += abs(lum -
-                luminance(r2, g2, b2));
-            edgeN++;
+          if (fg) count++;
+
+          int lum = (r * 3 + g * 6 + b) / 10;
+          int bgLum = (br * 3 + bg * 6 + bb) / 10;
+
+          int darkness = bgLum - lum;
+          if (darkness < 0) darkness = 0;
+          if (darkness > 255) darkness = 255;
+          darkSum += darkness;
+
+          int hi = r;
+          if (g > hi) hi = g;
+          if (b > hi) hi = b;
+
+          int lo = r;
+          if (g < lo) lo = g;
+          if (b < lo) lo = b;
+
+          chromaSum += hi - lo;
+
+          if (x > minX && y > minY) {
+            int right = colorDistance(p, image[y * W + x - 1]);
+            int down  = colorDistance(p, image[(y - 1) * W + x]);
+            edgeSum += (right + down) / 2;
           }
 
-          if (y + 1 < y1 &&
-              isForeground(image[(y + 1) * W + x],
-                           br, bg, bb)) {
-            int r2, g2, b2;
-            getRGB(image[(y + 1) * W + x], r2, g2, b2);
-            sumEdge += abs(lum -
-                luminance(r2, g2, b2));
-            edgeN++;
-          }
+          pixels++;
         }
       }
 
-      int i = (cy * 4 + cx) * 4;
+      if (!pixels) pixels = 1;
 
-      features[i] = total
-          ? constrain((int)(count * 255 / total), 0, 255)
-          : 0;
-
-      if (count) {
-        int avgLum = sumLum / count;
-
-        // 0 = tidak lebih gelap dari latar,
-        // 100 = sangat gelap relatif terhadap latar.
-        int dark = bgLum > 0
-            ? (bgLum - avgLum) * 100 / bgLum
-            : 0;
-        features[i + 1] = constrain(dark, 0, 100);
-
-        features[i + 2] = constrain(
-            (int)(sumChr / count), 0, 255);
-
-        features[i + 3] = edgeN
-            ? constrain((int)(sumEdge / edgeN), 0, 255)
-            : 0;
-      } else {
-        features[i + 1] = 0;
-        features[i + 2] = 0;
-        features[i + 3] = 0;
-      }
+      features[idx++] = (uint8_t)(count * 255 / pixels);
+      features[idx++] = (uint8_t)(darkSum / pixels);
+      features[idx++] = (uint8_t)(chromaSum / pixels);
+      features[idx++] = (uint8_t)(edgeSum / pixels);
     }
   }
 
   return true;
 }
 
-bool knowledgeLearnFeatures(
-    const char *label,
-    const uint8_t *features) {
-  if (!ready || !label || !features ||
-      recordCount >= MAX_SAMPLES) return false;
+bool knowledgeLearnFeatures(const char *label, const uint8_t *features) {
+  if (!ready || !validLabel(label) || !features ||
+      recordCount >= MAX_SAMPLES) {
+    Serial.println("TARS: GAGAL BELAJAR, CEK LABEL/MEMORI");
+    return false;
+  }
 
-  while (*label == ' ') label++;
-  if (!*label) return false;
-
-  KnowledgeRecord r = {};
-  r.magic = KNOWLEDGE_MAGIC;
-
-  size_t len = strlen(label);
-  if (len >= sizeof(r.label)) len = sizeof(r.label) - 1;
-  memcpy(r.label, label, len);
-  r.label[len] = '\0';
-
-  memcpy(r.features, features, KNOWLEDGE_FEATURE_SIZE);
+  KnowledgeRecord rec = {};
+  rec.magic = MAGIC_NEW;
+  strncpy(rec.label, label, KNOWLEDGE_LABEL_SIZE - 1);
+  memcpy(rec.features, features, KNOWLEDGE_FEATURE_SIZE);
 
   File f = LittleFS.open(KNOWLEDGE_FILE, "a");
-  if (!f) return false;
+  if (!f) {
+    Serial.println("TARS: FILE KNOWLEDGE GAGAL DIBUKA");
+    return false;
+  }
 
-  size_t written = f.write((const uint8_t *)&r, sizeof(r));
+  size_t written = f.write((const uint8_t *)&rec, sizeof(rec));
   f.flush();
   f.close();
 
-  if (written != sizeof(r)) return false;
+  if (written != sizeof(rec)) {
+    Serial.println("TARS: PENYIMPANAN FITUR GAGAL");
+    return false;
+  }
 
-  records[recordCount++] = r;
+  records[recordCount++] = rec;
+  Serial.printf("TARS: OBJEK '%s' DISIMPAN\n", label);
   return true;
 }
 
-bool knowledgeLearn(
-    const char *label,
-    const uint16_t *image) {
+bool knowledgeLearn(const char *label, const uint16_t *image) {
   uint8_t features[KNOWLEDGE_FEATURE_SIZE];
 
-  if (!knowledgeBuildFeatures(image, features))
+  if (!knowledgeBuildFeatures(image, features)) {
+    Serial.println("TARS: OBJEK TIDAK TERPISAH DARI LATAR");
     return false;
+  }
 
   return knowledgeLearnFeatures(label, features);
 }
 
 bool knowledgeRecognizeFeatures(
-    const uint8_t *features,
-    char *labelOut,
-    size_t labelOutSize,
-    uint8_t *confidenceOut) {
-  if (labelOut && labelOutSize) labelOut[0] = '\0';
+  const uint8_t *features,
+  char *labelOut,
+  size_t labelOutSize,
+  uint8_t *confidenceOut
+) {
+  if (!ready || !features || !labelOut || labelOutSize == 0)
+    return false;
+
+  labelOut[0] = '\0';
   if (confidenceOut) *confidenceOut = 0;
 
-  if (!ready || !features || !labelOut ||
-      !labelOutSize || recordCount == 0) return false;
-
-  float bestScore = -1.0f;
+  int bestScore = 1000;
+  int secondScore = 1000;
   int bestIndex = -1;
 
   for (int n = 0; n < recordCount; n++) {
-    float shapeDiff = 0;
-    float darkDiff = 0;
-    float colorDiff = 0;
-    float edgeDiff = 0;
+    // Fitur lama tetap disimpan, tetapi tidak dicampur dengan
+    // fitur baru karena cara pembentukan gambar bisa berbeda.
+    if (records[n].magic != MAGIC_NEW) continue;
+
+    int shapeDiff = 0, darkDiff = 0;
+    int colorDiff = 0, edgeDiff = 0;
 
     for (int i = 0; i < KNOWLEDGE_FEATURE_SIZE; i += 4) {
       shapeDiff += abs((int)features[i] -
                        (int)records[n].features[i]);
-
       darkDiff += abs((int)features[i + 1] -
                       (int)records[n].features[i + 1]);
-
       colorDiff += abs((int)features[i + 2] -
                        (int)records[n].features[i + 2]);
-
       edgeDiff += abs((int)features[i + 3] -
                       (int)records[n].features[i + 3]);
     }
 
-    shapeDiff /= (16.0f * 255.0f);
-    darkDiff /= (16.0f * 100.0f);
-    colorDiff /= (16.0f * 255.0f);
-    edgeDiff /= (16.0f * 255.0f);
+    shapeDiff /= 16;
+    darkDiff /= 16;
+    colorDiff /= 16;
+    edgeDiff /= 16;
 
-    float diff =
-        0.45f * shapeDiff +
-        0.20f * darkDiff +
-        0.10f * colorDiff +
-        0.25f * edgeDiff;
+    int score =
+      (shapeDiff * 45 +
+       darkDiff * 20 +
+       colorDiff * 10 +
+       edgeDiff * 25) / 100;
 
-    float score = 100.0f * (1.0f - diff);
-
-    if (score > bestScore) {
+    if (score < bestScore) {
+      secondScore = bestScore;
       bestScore = score;
       bestIndex = n;
+    } else if (score < secondScore) {
+      secondScore = score;
     }
   }
 
   if (bestIndex < 0) return false;
 
-  uint8_t confidence = constrain(
-      (int)(bestScore + 0.5f), 0, 100);
+  int confidence = 100 - bestScore * 100 / 255;
+  if (confidence < 0) confidence = 0;
+  if (confidence > 100) confidence = 100;
 
-  if (confidenceOut) *confidenceOut = confidence;
-  if (bestScore < MATCH_THRESHOLD) return false;
+  if (confidenceOut) *confidenceOut = (uint8_t)confidence;
 
-  strncpy(labelOut, records[bestIndex].label,
-          labelOutSize - 1);
+  if (bestScore > (255 - MATCH_THRESHOLD))
+    return false;
+
+  strncpy(labelOut, records[bestIndex].label, labelOutSize - 1);
   labelOut[labelOutSize - 1] = '\0';
   return true;
 }
 
 bool knowledgeRecognize(
-    const uint16_t *image,
-    char *labelOut,
-    size_t labelOutSize,
-    uint8_t *confidenceOut) {
+  const uint16_t *image,
+  char *labelOut,
+  size_t labelOutSize,
+  uint8_t *confidenceOut
+) {
   uint8_t features[KNOWLEDGE_FEATURE_SIZE];
 
   if (!knowledgeBuildFeatures(image, features)) {
@@ -371,7 +372,8 @@ bool knowledgeRecognize(
   }
 
   return knowledgeRecognizeFeatures(
-      features, labelOut, labelOutSize, confidenceOut);
+    features, labelOut, labelOutSize, confidenceOut
+  );
 }
 
 uint16_t knowledgeSampleCount() {
@@ -379,80 +381,62 @@ uint16_t knowledgeSampleCount() {
 }
 
 bool knowledgeDeleteLabel(const char *label) {
-  if (!ready || !label || !*label) return false;
+  if (!ready || !validLabel(label)) return false;
 
+  KnowledgeRecord kept[MAX_SAMPLES];
+  uint8_t keptCount = 0;
   uint8_t removed = 0;
+
   for (int i = 0; i < recordCount; i++) {
-    if (strcasecmp(records[i].label, label) == 0)
+    if (strcasecmp(records[i].label, label) == 0) {
       removed++;
+    } else {
+      kept[keptCount++] = records[i];
+    }
   }
+
   if (!removed) return false;
 
-  const char *tmp = "/knowledge.tmp";
-  const char *bak = "/knowledge.bak";
+  LittleFS.remove(KNOWLEDGE_TMP);
+  File tmp = LittleFS.open(KNOWLEDGE_TMP, "w");
+  if (!tmp) return false;
 
-  LittleFS.remove(tmp);
-  File f = LittleFS.open(tmp, "w");
-  if (!f) return false;
-
-  size_t expected = 0;
-
-  for (int i = 0; i < recordCount; i++) {
-    if (strcasecmp(records[i].label, label) == 0)
-      continue;
-
-    expected += sizeof(KnowledgeRecord);
-
-    if (f.write((const uint8_t *)&records[i],
-                sizeof(KnowledgeRecord)) !=
-                sizeof(KnowledgeRecord)) {
-      f.close();
-      LittleFS.remove(tmp);
-      return false;
+  bool writeOK = true;
+  for (int i = 0; i < keptCount; i++) {
+    if (tmp.write((const uint8_t *)&kept[i],
+                  sizeof(KnowledgeRecord)) != sizeof(KnowledgeRecord)) {
+      writeOK = false;
+      break;
     }
   }
 
-  f.flush();
-  f.close();
+  tmp.flush();
+  tmp.close();
 
-  File check = LittleFS.open(tmp, "r");
-  if (!check || check.size() != expected) {
-    if (check) check.close();
-    LittleFS.remove(tmp);
-    return false;
-  }
-  check.close();
-
-  LittleFS.remove(bak);
-  bool hadOriginal = LittleFS.exists(KNOWLEDGE_FILE);
-
-  if (hadOriginal &&
-      !LittleFS.rename(KNOWLEDGE_FILE, bak)) {
-    LittleFS.remove(tmp);
+  if (!writeOK) {
+    LittleFS.remove(KNOWLEDGE_TMP);
     return false;
   }
 
-  if (!LittleFS.rename(tmp, KNOWLEDGE_FILE)) {
-    if (hadOriginal) LittleFS.rename(bak, KNOWLEDGE_FILE);
-    LittleFS.remove(tmp);
+  // Backup file lama sebelum menggantinya.
+  LittleFS.remove(KNOWLEDGE_BAK);
+
+  if (LittleFS.exists(KNOWLEDGE_FILE) &&
+      !LittleFS.rename(KNOWLEDGE_FILE, KNOWLEDGE_BAK)) {
+    LittleFS.remove(KNOWLEDGE_TMP);
     return false;
   }
 
-  int dst = 0;
-
-  for (int i = 0; i < recordCount; i++) {
-    if (strcasecmp(records[i].label, label) != 0) {
-      if (dst != i) records[dst] = records[i];
-      dst++;
-    }
+  if (!LittleFS.rename(KNOWLEDGE_TMP, KNOWLEDGE_FILE)) {
+    if (LittleFS.exists(KNOWLEDGE_BAK))
+      LittleFS.rename(KNOWLEDGE_BAK, KNOWLEDGE_FILE);
+    return false;
   }
 
-  recordCount = dst;
-  LittleFS.remove(bak);
+  memcpy(records, kept, keptCount * sizeof(KnowledgeRecord));
+  recordCount = keptCount;
 
-  Serial.printf(
-      "TARS: LABEL '%s' DIHAPUS, %u sampel tersisa\n",
-      label, recordCount);
-
+  Serial.printf("TARS: LABEL '%s' DIHAPUS, %u SAMPEL\n",
+                label, removed);
   return true;
 }
