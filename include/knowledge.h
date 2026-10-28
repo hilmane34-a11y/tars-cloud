@@ -1,8 +1,8 @@
 #pragma once
 #include <Arduino.h>
 
-#define KNOWLEDGE_WIDTH  96
-#define KNOWLEDGE_HEIGHT 32
+#define KNOWLEDGE_WIDTH  128
+#define KNOWLEDGE_HEIGHT 64
 #define KNOWLEDGE_FEATURE_SIZE 64
 #define KNOWLEDGE_LABEL_SIZE 24
 
