@@ -1,4 +1,3 @@
-
 #include "knowledge.h"
 #include <LittleFS.h>
 #include <string.h>
@@ -14,7 +13,7 @@ static const uint32_t MAGIC_NEW  = 0x4B4E4F59;
 static const uint32_t MAGIC_MARK = 0x4B4E4F5A;
 
 static const uint8_t MAX_SAMPLES = 48;
-static const uint8_t MATCH_THRESHOLD = 90;
+static const uint8_t MATCH_THRESHOLD = 84;
 
 #define GW 64
 #define GH 32
@@ -30,12 +29,12 @@ static KnowledgeRecord records[MAX_SAMPLES];
 static uint8_t recordCount = 0;
 static bool ready = false;
 
-// Buffer kerja kecil: tidak menyimpan foto ke LittleFS.
+// Buffer sementara di DRAM; foto tidak disimpan ke LittleFS.
 static uint8_t objectMask[GP];
 static uint16_t floodQueue[GP];
 
 static uint16_t samplePixel(const uint16_t *image, int x, int y) {
-  return image[(y * 2) * KNOWLEDGE_WIDTH + (x * 2)];
+  return image[(y * 2) * KNOWLEDGE_WIDTH + x * 2];
 }
 
 static void getRGB(uint16_t p, int &r, int &g, int &b) {
@@ -44,12 +43,15 @@ static void getRGB(uint16_t p, int &r, int &g, int &b) {
   b = (p & 31) * 255 / 31;
 }
 
+// Perbandingan warna RGB565 tanpa konversi berulang ke 8-bit.
 static int colorDistance(uint16_t a, uint16_t b) {
-  int ar, ag, ab, br, bg, bb;
-  getRGB(a, ar, ag, ab);
-  getRGB(b, br, bg, bb);
-  return (abs(ar - br) * 3 + abs(ag - bg) * 4 +
-          abs(ab - bb) * 2) / 9;
+  int dr = abs((int)((a >> 11) & 31) -
+               (int)((b >> 11) & 31)) * 255 / 31;
+  int dg = abs((int)((a >> 5) & 63) -
+               (int)((b >> 5) & 63)) * 255 / 63;
+  int db = abs((int)(a & 31) - (int)(b & 31)) * 255 / 31;
+
+  return (dr * 3 + dg * 4 + db * 2) / 9;
 }
 
 static bool validLabel(const char *label) {
@@ -62,6 +64,7 @@ bool knowledgeBegin() {
   ready = false;
   recordCount = 0;
 
+  // false: jangan format LittleFS jika gagal mount.
   if (!LittleFS.begin(false)) {
     Serial.println("TARS: LITTLEFS GAGAL; DATA DIPERTAHANKAN");
     return false;
@@ -122,17 +125,15 @@ bool knowledgeBegin() {
   return true;
 }
 
-// Segmentasi seed: cari area yang warnanya berdekatan dan terhubung.
-// Kandidat yang menyentuh tepi frame atau terlalu besar ditolak.
+// Ekstraksi fitur bentuk dari satu wilayah warna yang terhubung.
+// Wilayah besar, wilayah yang mencapai tepi, dan wilayah tanpa
+// perbedaan batas yang cukup dari latar ditolak.
 static bool extractAt(
   const uint16_t *image,
   int sx, int sy,
   uint8_t *features,
-  int *outMinX = nullptr,
-  int *outMinY = nullptr,
-  int *outMaxX = nullptr,
-  int *outMaxY = nullptr,
-  int *outArea = nullptr
+  int *outArea = nullptr,
+  int *outContrast = nullptr
 ) {
   if (!image || !features ||
       sx < 1 || sx >= GW - 1 ||
@@ -141,17 +142,18 @@ static bool extractAt(
 
   memset(objectMask, 0, sizeof(objectMask));
 
-  uint16_t seedColor = samplePixel(image, sx, sy);
-  int head = 0, tail = 0;
-  int minX = GW, minY = GH, maxX = -1, maxY = -1;
+  const uint16_t seedColor = samplePixel(image, sx, sy);
+  const int COLOR_LIMIT = 42;
+
+  int head = 0;
+  int tail = 0;
+  int minX = GW, minY = GH;
+  int maxX = -1, maxY = -1;
   bool touchesEdge = false;
 
-  int seedIndex = sy * GW + sx;
-  objectMask[seedIndex] = 1;
-  floodQueue[tail++] = seedIndex;
-
-  // Ambang warna lokal; tidak memakai rata-rata seluruh latar.
-  const int COLOR_LIMIT = 42;
+  const int seed = sy * GW + sx;
+  objectMask[seed] = 1;
+  floodQueue[tail++] = seed;
 
   while (head < tail) {
     int pos = floodQueue[head++];
@@ -170,7 +172,8 @@ static bool extractAt(
     const int ny[4] = {y, y, y - 1, y + 1};
 
     for (int k = 0; k < 4; k++) {
-      int xx = nx[k], yy = ny[k];
+      int xx = nx[k];
+      int yy = ny[k];
 
       if (xx < 0 || xx >= GW || yy < 0 || yy >= GH)
         continue;
@@ -178,9 +181,8 @@ static bool extractAt(
       int ni = yy * GW + xx;
       if (objectMask[ni]) continue;
 
-      uint16_t p = samplePixel(image, xx, yy);
-
-      if (colorDistance(p, seedColor) <= COLOR_LIMIT) {
+      if (colorDistance(samplePixel(image, xx, yy), seedColor)
+          <= COLOR_LIMIT) {
         objectMask[ni] = 1;
 
         if (tail < GP)
@@ -188,14 +190,13 @@ static bool extractAt(
       }
     }
 
-    // Hentikan kandidat yang sudah terlalu luas.
     if (tail > GP * 45 / 100)
       return false;
   }
 
-  int area = tail;
-  int bw = maxX - minX + 1;
-  int bh = maxY - minY + 1;
+  const int area = tail;
+  const int bw = maxX - minX + 1;
+  const int bh = maxY - minY + 1;
 
   if (touchesEdge || area < 8 ||
       bw < 3 || bh < 3 ||
@@ -203,8 +204,48 @@ static bool extractAt(
       area > GP * 45 / 100)
     return false;
 
-  // Buat fitur dari mask objek saja.
-  // Background di luar mask tidak dihitung.
+  // Ukur perbedaan warna pada batas objek dengan wilayah di luar.
+  // Ini membantu menolak lantai atau latar yang menyatu.
+  int boundarySum = 0;
+  int boundaryCount = 0;
+
+  for (int y = minY; y <= maxY; y++) {
+    for (int x = minX; x <= maxX; x++) {
+      if (!objectMask[y * GW + x]) continue;
+
+      const int nx[4] = {x - 1, x + 1, x, x};
+      const int ny[4] = {y, y, y - 1, y + 1};
+
+      for (int k = 0; k < 4; k++) {
+        int xx = nx[k], yy = ny[k];
+
+        if (xx < 0 || xx >= GW || yy < 0 || yy >= GH)
+          continue;
+
+        if (!objectMask[yy * GW + xx]) {
+          boundarySum += colorDistance(
+            samplePixel(image, x, y),
+            samplePixel(image, xx, yy)
+          );
+          boundaryCount++;
+        }
+      }
+    }
+  }
+
+  int contrast = boundaryCount
+    ? boundarySum / boundaryCount
+    : 0;
+
+  // Jika batas objek hampir sama dengan latar, jangan belajar.
+  if (contrast < 10)
+    return false;
+
+  // Fitur 64 byte: 4 nilai x 16 sel.
+  // 1) kepadatan siluet
+  // 2) kecerahan
+  // 3) variasi warna
+  // 4) detail tepi di dalam objek
   int idx = 0;
 
   for (int cy = 0; cy < 4; cy++) {
@@ -215,7 +256,9 @@ static bool extractAt(
       int y1 = minY + (cy + 1) * bh / 4;
 
       int maskCount = 0;
-      int lumSum = 0, chromaSum = 0, edgeSum = 0;
+      int lumSum = 0;
+      int chromaSum = 0;
+      int edgeSum = 0;
 
       for (int y = y0; y < y1; y++) {
         for (int x = x0; x < x1; x++) {
@@ -230,18 +273,21 @@ static bool extractAt(
           int lo = min(r, min(g, b));
           chromaSum += hi - lo;
 
-          // Hitung kontur hanya di antara piksel mask.
-          if (x + 1 < GW && objectMask[y * GW + x + 1])
+          if (x + 1 < GW &&
+              objectMask[y * GW + x + 1]) {
             edgeSum += colorDistance(
               samplePixel(image, x, y),
               samplePixel(image, x + 1, y)
             );
+          }
 
-          if (y + 1 < GH && objectMask[(y + 1) * GW + x])
+          if (y + 1 < GH &&
+              objectMask[(y + 1) * GW + x]) {
             edgeSum += colorDistance(
               samplePixel(image, x, y),
               samplePixel(image, x, y + 1)
             );
+          }
 
           maskCount++;
         }
@@ -257,33 +303,44 @@ static bool extractAt(
     }
   }
 
-  if (outMinX) *outMinX = minX;
-  if (outMinY) *outMinY = minY;
-  if (outMaxX) *outMaxX = maxX;
-  if (outMaxY) *outMaxY = maxY;
   if (outArea) *outArea = area;
+  if (outContrast) *outContrast = contrast;
 
   return true;
 }
 
-// Belajar: cari kandidat valid yang dekat pusat gambar.
-bool knowledgeBuildFeatures(const uint16_t *image, uint8_t *features) {
+// Belajar: cari kandidat di tengah dan pilih wilayah yang
+// punya batas jelas, bentuk memadai, dan dekat pusat gambar.
+bool knowledgeBuildFeatures(
+  const uint16_t *image,
+  uint8_t *features
+) {
   if (!image || !features) return false;
 
   uint8_t candidate[KNOWLEDGE_FEATURE_SIZE];
   bool found = false;
   int bestScore = -100000;
-  int cx = GW / 2, cy = GH / 2;
 
-  // Prioritas area tengah, bukan seluruh sudut saat belajar.
-  for (int y = GH / 4; y < GH * 3 / 4; y += 1) {
-    for (int x = GW / 4; x < GW * 3 / 4; x += 1) {
-      if (!extractAt(image, x, y, candidate)) continue;
+  const int cx = GW / 2;
+  const int cy = GH / 2;
 
-      // Kandidat lebih dekat pusat mendapat prioritas.
-      // Kandidat besar yang memenuhi hampir seluruh gambar ditolak.
+  for (int y = GH / 4; y < GH * 3 / 4; y += 2) {
+    for (int x = GW / 4; x < GW * 3 / 4; x += 2) {
+      int area = 0;
+      int contrast = 0;
+
+      if (!extractAt(image, x, y, candidate,
+                     &area, &contrast))
+        continue;
+
       int distance = abs(x - cx) + abs(y - cy);
-      int score = 1000 - distance * 20;
+
+      // Prioritaskan pusat, batas yang jelas, dan wilayah
+      // yang cukup besar tanpa memenuhi sebagian besar frame.
+      int score = 1000
+                - distance * 20
+                + contrast * 3
+                + (area < 300 ? area : 300) / 3;
 
       if (score > bestScore) {
         bestScore = score;
@@ -296,7 +353,66 @@ bool knowledgeBuildFeatures(const uint16_t *image, uint8_t *features) {
   return found;
 }
 
-bool knowledgeLearnFeatures(const char *label, const uint8_t *features) {
+// Simpan ulang secara transaksional agar kegagalan tulis tidak
+// langsung merusak file memori utama.
+static bool writeRecordsTransactional(
+  const KnowledgeRecord *list,
+  uint8_t count
+) {
+  LittleFS.remove(KNOWLEDGE_TMP);
+
+  File tmp = LittleFS.open(KNOWLEDGE_TMP, "w");
+  if (!tmp) return false;
+
+  bool ok = true;
+
+  for (int i = 0; i < count; i++) {
+    if (tmp.write((const uint8_t *)&list[i],
+                  sizeof(KnowledgeRecord)) !=
+        sizeof(KnowledgeRecord)) {
+      ok = false;
+      break;
+    }
+  }
+
+  tmp.flush();
+  tmp.close();
+
+  if (!ok) {
+    LittleFS.remove(KNOWLEDGE_TMP);
+    return false;
+  }
+
+  // Jika file lama ada, pindahkan ke backup dahulu.
+  LittleFS.remove(KNOWLEDGE_BAK);
+
+  bool hadOriginal = LittleFS.exists(KNOWLEDGE_FILE);
+
+  if (hadOriginal &&
+      !LittleFS.rename(KNOWLEDGE_FILE, KNOWLEDGE_BAK)) {
+    LittleFS.remove(KNOWLEDGE_TMP);
+    return false;
+  }
+
+  if (!LittleFS.rename(KNOWLEDGE_TMP, KNOWLEDGE_FILE)) {
+    if (hadOriginal && LittleFS.exists(KNOWLEDGE_BAK))
+      LittleFS.rename(KNOWLEDGE_BAK, KNOWLEDGE_FILE);
+
+    LittleFS.remove(KNOWLEDGE_TMP);
+    return false;
+  }
+
+  // Backup lama baru dibuang setelah file baru berhasil dipasang.
+  if (LittleFS.exists(KNOWLEDGE_BAK))
+    LittleFS.remove(KNOWLEDGE_BAK);
+
+  return true;
+}
+
+bool knowledgeLearnFeatures(
+  const char *label,
+  const uint8_t *features
+) {
   if (!ready || !validLabel(label) || !features ||
       recordCount >= MAX_SAMPLES) {
     Serial.println("TARS: GAGAL BELAJAR; CEK LABEL/MEMORI");
@@ -308,19 +424,21 @@ bool knowledgeLearnFeatures(const char *label, const uint8_t *features) {
   strncpy(rec.label, label, KNOWLEDGE_LABEL_SIZE - 1);
   memcpy(rec.features, features, KNOWLEDGE_FEATURE_SIZE);
 
-  File f = LittleFS.open(KNOWLEDGE_FILE, "a");
-  if (!f) return false;
+  // Pertahankan semua sampel yang ada, termasuk format lama.
+  KnowledgeRecord next[MAX_SAMPLES];
 
-  size_t written = f.write((const uint8_t *)&rec, sizeof(rec));
-  f.flush();
-  f.close();
+  for (int i = 0; i < recordCount; i++)
+    next[i] = records[i];
 
-  if (written != sizeof(rec)) {
-    Serial.println("TARS: PENYIMPANAN FITUR GAGAL");
+  next[recordCount] = rec;
+
+  if (!writeRecordsTransactional(next, recordCount + 1)) {
+    Serial.println("TARS: PENYIMPANAN GAGAL; CEK LITTLEFS");
     return false;
   }
 
   records[recordCount++] = rec;
+
   Serial.printf("TARS: OBJEK '%s' DISIMPAN (FITUR MARK)\n", label);
   return true;
 }
@@ -329,7 +447,7 @@ bool knowledgeLearn(const char *label, const uint16_t *image) {
   uint8_t features[KNOWLEDGE_FEATURE_SIZE];
 
   if (!knowledgeBuildFeatures(image, features)) {
-    Serial.println("TARS: MARK OBJEK GAGAL; TIDAK DISIMPAN");
+    Serial.println("TARS: MARK GAGAL; OBJEK TIDAK DISIMPAN");
     return false;
   }
 
@@ -337,12 +455,16 @@ bool knowledgeLearn(const char *label, const uint16_t *image) {
 }
 
 static int compareFeatures(
-  const uint8_t *a, const uint8_t *b
+  const uint8_t *a,
+  const uint8_t *b
 ) {
-  int shape = 0, lum = 0, color = 0, edge = 0;
+  int shape = 0;
+  int lum = 0;
+  int color = 0;
+  int edge = 0;
 
   for (int i = 0; i < KNOWLEDGE_FEATURE_SIZE; i += 4) {
-    shape += abs((int)a[i] - (int)b[i]);
+    shape += abs((int)a[i]     - (int)b[i]);
     lum   += abs((int)a[i + 1] - (int)b[i + 1]);
     color += abs((int)a[i + 2] - (int)b[i + 2]);
     edge  += abs((int)a[i + 3] - (int)b[i + 3]);
@@ -353,7 +475,8 @@ static int compareFeatures(
   color /= 16;
   edge /= 16;
 
-  return (shape * 45 + lum * 20 + color * 10 + edge * 25) / 100;
+  return (shape * 45 + lum * 20 +
+          color * 10 + edge * 25) / 100;
 }
 
 bool knowledgeRecognizeFeatures(
@@ -362,7 +485,7 @@ bool knowledgeRecognizeFeatures(
   size_t labelOutSize,
   uint8_t *confidenceOut
 ) {
-  if (!ready || !features || !labelOut || labelOutSize == 0)
+  if (!ready || !features || !labelOut || !labelOutSize)
     return false;
 
   labelOut[0] = '\0';
@@ -372,10 +495,11 @@ bool knowledgeRecognizeFeatures(
   int bestIndex = -1;
 
   for (int n = 0; n < recordCount; n++) {
-    // Hanya fitur hasil mark baru yang formatnya sesuai.
+    // Fitur versi baru tidak dicampur dengan descriptor lama.
     if (records[n].magic != MAGIC_MARK) continue;
 
     int score = compareFeatures(features, records[n].features);
+
     if (score < best) {
       best = score;
       bestIndex = n;
@@ -389,14 +513,16 @@ bool knowledgeRecognizeFeatures(
   if (confidence < 0) confidence = 0;
   if (confidence > 100) confidence = 100;
 
-  if (confidenceOut) *confidenceOut = (uint8_t)confidence;
+  if (confidenceOut)
+    *confidenceOut = (uint8_t)confidence;
 
   strncpy(labelOut, records[bestIndex].label, labelOutSize - 1);
   labelOut[labelOutSize - 1] = '\0';
   return true;
 }
 
-// Pengenalan: cari kandidat di seluruh gambar, termasuk sudut.
+// Pengenalan memindai seluruh frame, termasuk area sudut.
+// Langkah pemindaian dibuat lebih renggang untuk mengurangi beban CPU.
 bool knowledgeRecognize(
   const uint16_t *image,
   char *labelOut,
@@ -410,17 +536,23 @@ bool knowledgeRecognize(
   if (confidenceOut) *confidenceOut = 0;
 
   uint8_t candidate[KNOWLEDGE_FEATURE_SIZE];
+
   int best = 1000;
   int bestIndex = -1;
 
-  for (int y = 1; y < GH - 1; y += 2) {
-    for (int x = 1; x < GW - 1; x += 2) {
-      if (!extractAt(image, x, y, candidate)) continue;
+  for (int y = 1; y < GH - 1; y += 3) {
+    for (int x = 1; x < GW - 1; x += 3) {
+      if (!extractAt(image, x, y, candidate))
+        continue;
 
       for (int n = 0; n < recordCount; n++) {
-        if (records[n].magic != MAGIC_MARK) continue;
+        if (records[n].magic != MAGIC_MARK)
+          continue;
 
-        int score = compareFeatures(candidate, records[n].features);
+        int score = compareFeatures(
+          candidate, records[n].features
+        );
+
         if (score < best) {
           best = score;
           bestIndex = n;
@@ -436,7 +568,8 @@ bool knowledgeRecognize(
   if (confidence < 0) confidence = 0;
   if (confidence > 100) confidence = 100;
 
-  if (confidenceOut) *confidenceOut = (uint8_t)confidence;
+  if (confidenceOut)
+    *confidenceOut = (uint8_t)confidence;
 
   strncpy(labelOut, records[bestIndex].label, labelOutSize - 1);
   labelOut[labelOutSize - 1] = '\0';
@@ -448,32 +581,33 @@ uint16_t knowledgeSampleCount() {
 }
 
 bool knowledgeDeleteLabel(const char *label) {
-  if (!ready || !validLabel(label)) return false;
+  if (!ready || !validLabel(label))
+    return false;
 
-  KnowledgeRecord kept[MAX_SAMPLES];
-  uint8_t keptCount = 0;
-  uint8_t removed = 0;
-
-  for (int i = 0; i < recordCount; i++) {
-    if (strcasecmp(records[i].label, label) == 0)
-      removed++;
-    else
-      kept[keptCount++] = records[i];
-  }
-
-  if (!removed) return false;
-
+  // Tulis langsung ke TMP tanpa array kept besar di stack.
   LittleFS.remove(KNOWLEDGE_TMP);
+
   File tmp = LittleFS.open(KNOWLEDGE_TMP, "w");
   if (!tmp) return false;
 
+  uint8_t keptCount = 0;
+  uint8_t removed = 0;
   bool ok = true;
-  for (int i = 0; i < keptCount; i++) {
-    if (tmp.write((const uint8_t *)&kept[i],
-                  sizeof(KnowledgeRecord)) != sizeof(KnowledgeRecord)) {
+
+  for (int i = 0; i < recordCount; i++) {
+    if (strcasecmp(records[i].label, label) == 0) {
+      removed++;
+      continue;
+    }
+
+    if (tmp.write((const uint8_t *)&records[i],
+                  sizeof(KnowledgeRecord)) !=
+        sizeof(KnowledgeRecord)) {
       ok = false;
       break;
     }
+
+    keptCount++;
   }
 
   tmp.flush();
@@ -484,22 +618,44 @@ bool knowledgeDeleteLabel(const char *label) {
     return false;
   }
 
+  if (!removed) {
+    LittleFS.remove(KNOWLEDGE_TMP);
+    return false;
+  }
+
   LittleFS.remove(KNOWLEDGE_BAK);
 
-  if (LittleFS.exists(KNOWLEDGE_FILE) &&
+  bool hadOriginal = LittleFS.exists(KNOWLEDGE_FILE);
+
+  if (hadOriginal &&
       !LittleFS.rename(KNOWLEDGE_FILE, KNOWLEDGE_BAK)) {
     LittleFS.remove(KNOWLEDGE_TMP);
     return false;
   }
 
   if (!LittleFS.rename(KNOWLEDGE_TMP, KNOWLEDGE_FILE)) {
-    if (LittleFS.exists(KNOWLEDGE_BAK))
+    if (hadOriginal && LittleFS.exists(KNOWLEDGE_BAK))
       LittleFS.rename(KNOWLEDGE_BAK, KNOWLEDGE_FILE);
+
+    LittleFS.remove(KNOWLEDGE_TMP);
     return false;
   }
 
-  memcpy(records, kept, keptCount * sizeof(KnowledgeRecord));
-  recordCount = keptCount;
+  // Kompakkan rekaman di RAM setelah file baru berhasil dipasang.
+  uint8_t dst = 0;
+
+  for (int i = 0; i < recordCount; i++) {
+    if (strcasecmp(records[i].label, label) != 0) {
+      if (dst != i)
+        records[dst] = records[i];
+      dst++;
+    }
+  }
+
+  recordCount = dst;
+
+  if (LittleFS.exists(KNOWLEDGE_BAK))
+    LittleFS.remove(KNOWLEDGE_BAK);
 
   Serial.printf("TARS: LABEL '%s' DIHAPUS, %u SAMPEL\n",
                 label, removed);
