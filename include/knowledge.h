@@ -14,3 +14,4 @@ bool knowledgeRecognize(const uint16_t *image, char *labelOut, size_t labelOutSi
 bool knowledgeRecognizeFeatures(const uint8_t *features, char *labelOut, size_t labelOutSize, uint8_t *confidenceOut = nullptr);
 uint16_t knowledgeSampleCount();
 bool knowledgeDeleteLabel(const char *label);
+bool knowledgeHasLabel(const char *label);
