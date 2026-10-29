@@ -977,7 +977,7 @@ void setup(){
   cameraMux=xSemaphoreCreateMutex();
   micOK = initMic();
 
-  if (!LittleFS.begin(true)) {
+  if (!LittleFS.begin(false)) {
   Serial.println("TARS: LITTLEFS ERROR");
 } else {
   Serial.printf("TARS: LITTLEFS READY %u/%u KB\n",
@@ -987,7 +987,7 @@ if (knowledgeBegin()) {
   Serial.printf("TARS: KNOWLEDGE READY samples=%u\n",
                 (unsigned)knowledgeSampleCount());
 } else {
-  Serial.println("TARS: KNOWLEDGE INIT FAILED - DATA CHECK REQUIRED");
+  Serial.println("TARS: KNOWLEDGE INIT FAILED - DATA DIPERTAHANKAN");
 }
 }
   Serial.println("TARS: DAC GPIO26 ULP DAC2");
