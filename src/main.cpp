@@ -320,24 +320,21 @@ if(millis()-lastPreviewDiag>=5000){
     "TARS: PREVIEW DIAG capture=%d ready=%d live=%d play=%d\n",
     ok,  previewReady,   cameraLive,  playing );
 }
-          int gesture=handGestureUpdate(
-            cameraEnvironment,128,64 );
-          if(gesture==HAND_OPEN){
-            griperBuka();
-            delay(150);
-            griperStop();
-          }
-          else if(gesture==HAND_CLOSED){
-            griperTutup();
-            delay(150);
-            griperStop();
-          }
-          else if(gesture==HAND_ARM_UP){
-            lenganNaik();
-          }
-          else if(gesture==HAND_ARM_DOWN){
-            lenganTurun();
-          }
+static int lastGesture = -1;
+int gesture = handGestureUpdate(cameraEnvironment, 128, 64);
+
+if (gesture != lastGesture) {
+  if (gesture == HAND_OPEN) {
+    griperBuka();
+    delay(150);
+    griperStop();
+  } else if (gesture == HAND_CLOSED) {
+    griperTutup();
+    delay(150);
+    griperStop();
+  }
+  lastGesture = gesture;
+}
           if(ok){
             previewReady=true;
           }else{
@@ -988,12 +985,12 @@ void setup(){
   Serial.printf("TARS: LITTLEFS READY %u/%u KB\n",
     (unsigned)(LittleFS.usedBytes()/1024),
     (unsigned)(LittleFS.totalBytes()/1024));
-  if (knowledgeBegin()) {
-    Serial.printf("TARS: KNOWLEDGE READY samples=%u\n",
-      (unsigned)knowledgeSampleCount());
-  } else {
-    Serial.println("TARS: KNOWLEDGE INIT FAILED");
-  }
+if (knowledgeBegin()) {
+  Serial.printf("TARS: KNOWLEDGE READY samples=%u\n",
+                (unsigned)knowledgeSampleCount());
+} else {
+  Serial.println("TARS: KNOWLEDGE INIT FAILED - DATA CHECK REQUIRED");
+}
 }
   Serial.println("TARS: DAC GPIO26 ULP DAC2");
   Serial.println("TARS: AUDIO MP3/WAV -> 22050Hz/16bit");
