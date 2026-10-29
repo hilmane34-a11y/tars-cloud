@@ -702,3 +702,16 @@ bool knowledgeDeleteLabel(const char *label) {
                 label, removed);
   return true;
 }
+bool knowledgeHasLabel(const char *label) {
+  if (!ready || !records || !validLabel(label))
+    return false;
+
+  for (int i = 0; i < recordCount; i++) {
+    if (records[i].magic == MAGIC_MARK &&
+        strcasecmp(records[i].label, label) == 0) {
+      return true;
+    }
+  }
+
+  return false;
+}
