@@ -157,7 +157,75 @@ static void personalityTask(void*){
     vTaskDelay(pdMS_TO_TICKS(250));
   }
 }
+static char pickupTarget[KNOWLEDGE_LABEL_SIZE] = "";
+static volatile bool pickupRequested = false;
+static uint8_t pickupStableFrames = 0;
+static uint32_t pickupLastCheck = 0;
+static bool pickupRunning = false;
 
+static bool pickupCommand(const String &q) {
+  String s = normCmd(q);
+  s.trim();
+
+  if (!s.startsWith("ambil ")) return false;
+
+  String label = s.substring(6);
+  label.trim();
+
+  if (label.isEmpty() ||
+      label.length() >= KNOWLEDGE_LABEL_SIZE) {
+    oledShowText("Nama objek tidak valid", "AMBIL OBJEK");
+    return true;
+  }
+
+  if (!knowledgeHasLabel(label.c_str())) {
+    oledShowText("Objek belum dipelajari", "MEMORI OBJEK");
+    return true;
+  }
+
+  if (pickupRunning || pickupRequested) {
+    oledShowText("Sedang mengambil", "TARS");
+    return true;
+  }
+
+  strncpy(pickupTarget, label.c_str(), sizeof(pickupTarget) - 1);
+  pickupTarget[sizeof(pickupTarget) - 1] = '\0';
+  pickupStableFrames = 0;
+  pickupLastCheck = 0;
+  pickupRequested = true;
+
+  wheelsStop();
+  oledShowText("Mencari: " + label, "AMBIL OBJEK");
+  Serial.printf("TARS: MENCARI OBJEK '%s'\n", pickupTarget);
+  return true;
+}
+
+static void pickupExecute() {
+  pickupRunning = true;
+  pickupRequested = false;
+  wheelsStop();
+
+  oledShowText("Lengan turun", "AMBIL OBJEK");
+  lenganTurun();
+  delay(500);
+  lenganStop();
+
+  oledShowText("Menjepit objek", "AMBIL OBJEK");
+  griperTutup();
+  delay(500);
+  griperStop();
+
+  oledShowText("Lengan naik", "AMBIL OBJEK");
+  lenganNaik();
+  delay(500);
+  lenganStop();
+
+  tanganStop();
+  pickupRunning = false;
+
+  oledShowText("Proses selesai", "AMBIL OBJEK");
+  Serial.println("TARS: URUTAN AMBIL SELESAI");
+}
 void ramDiag(const char*tag){
   uint32_t f=ESP.getFreeHeap(),m=ESP.getMinFreeHeap(),a=ESP.getMaxAllocHeap();
   uint32_t i=heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT);
@@ -954,9 +1022,8 @@ void processQuestion(const String&q){
   autonomyNotifyUserCommand();
 
   String nq=normCmd(q);
-  if(processKnowledgeTeachCommand(q))
-    return;
-
+  if(processKnowledgeTeachCommand(q)) return;
+if (pickupCommand(q)) return;
   oledShowText(q,"STT");
   delay(300);
   tarsEmotionQuestion(q);
