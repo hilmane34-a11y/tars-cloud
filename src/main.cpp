@@ -893,25 +893,22 @@ bool processKnowledgeTeachCommand(const String &q) {
   return true;
 }
 void processQuestion(const String&q){
+  autonomyNotifyUserCommand();
+
   String nq=normCmd(q);
-    if (processKnowledgeTeachCommand(q))
+  if(processKnowledgeTeachCommand(q))
     return;
-  if(nq=="offline"||nq=="off line"||
-     nq=="tars offline"||nq=="tars off line"||
-     nq=="mode offline"||nq=="mode off line"||
-     nq=="tars mode offline"||nq=="tars mode off line"){
-    oledShowText("TARS ONLINE","MODE ONLINE");
-    oledSetStatus("LISTENING");
-    return;
-  }
+
   oledShowText(q,"STT");
   delay(300);
   tarsEmotionQuestion(q);
   if(tarsEmotionHasEvent())
     tarsEmotionTakeEvent();
+
   bool vision=needsVision(q);
   bool status=isStatusQuery(q);
   String request=q;
+
   switch(random(0,5)){
     case 0: request+=" Jawab dengan gaya santai dan natural."; break;
     case 1: request+=" Gunakan pilihan kata yang segar dan tidak kaku."; break;
@@ -919,6 +916,7 @@ void processQuestion(const String&q){
     case 3: request+=" Gunakan kalimat natural dan variasikan cara penyampaian."; break;
     default: request+=" Jawab secara ramah, singkat, dan tidak monoton."; break;
   }
+
   request+=" Jangan mengulang kalimat atau sapaan yang sama jika tidak diperlukan.";
   processOnlineRequest(request,vision,status,false);
 }
