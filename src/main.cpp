@@ -461,6 +461,31 @@ if(millis()-lastPreviewDiag>=5000){
       }
       xSemaphoreGive(cameraMux);
     }
+if (pickupRequested && !pickupRunning &&
+    !playing && ok &&
+    millis() - pickupLastCheck >= 500) {
+
+  pickupLastCheck = millis();
+
+  char found[KNOWLEDGE_LABEL_SIZE] = "";
+  uint8_t confidence = 0;
+
+  if (knowledgeRecognize(
+        cameraEnvironment,
+        found, sizeof(found), &confidence) &&
+      strcmp(found, pickupTarget) == 0) {
+
+    if (pickupStableFrames < 3)
+      pickupStableFrames++;
+
+    if (pickupStableFrames >= 3) {
+      pickupExecute();
+      pickupStableFrames = 0;
+    }
+  } else {
+    pickupStableFrames = 0;
+  }
+}
 if (knowledgeResultPending && !playing) {
   knowledgeResultPending = false;
 
