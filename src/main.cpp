@@ -1127,12 +1127,6 @@ void setup(){
   cameraMux=xSemaphoreCreateMutex();
   micOK = initMic();
 
-  if (!LittleFS.begin(false)) {
-  Serial.println("TARS: LITTLEFS ERROR");
-} else {
-  Serial.printf("TARS: LITTLEFS READY %u/%u KB\n",
-    (unsigned)(LittleFS.usedBytes()/1024),
-    (unsigned)(LittleFS.totalBytes()/1024));
 if (knowledgeBegin()) {
   Serial.printf("TARS: KNOWLEDGE READY samples=%u\n",
                 (unsigned)knowledgeSampleCount());
