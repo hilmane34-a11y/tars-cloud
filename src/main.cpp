@@ -99,13 +99,58 @@ MP3SYM(follow) MP3SYM(online) MP3SYM(offline)
 MP3SYM(hari) MP3SYM(pagi) MP3SYM(siang)
 MP3SYM(sore) MP3SYM(malam)
 
+static char lastHandAction[KNOWLEDGE_LABEL_SIZE] = "";
+static uint8_t handCandidateFrames = 0;
+static uint32_t handCandidateSince = 0;
+static uint32_t lastHandActionMs = 0;
+static void knowledgeHandGesture(const char *label) {
+  if (!label || !label[0]) {
+    handCandidateFrames = 0;
+    handCandidateSince = 0;
+    lastHandAction[0] = '\0';
+    return;
+  }
+  bool openHand = strcmp(label, "tangan terbuka") == 0;
+  bool closedHand = strcmp(label, "tangan mengepal") == 0;
+  if (!openHand && !closedHand) {
+    handCandidateFrames = 0;
+    handCandidateSince = 0;
+    lastHandAction[0] = '\0';
+    return;
+  }
+  uint32_t now = millis();
+  if (strcmp(label, lastHandAction) != 0) {
+    strncpy(lastHandAction, label, sizeof(lastHandAction) - 1);
+    lastHandAction[sizeof(lastHandAction) - 1] = '\0';
+    handCandidateFrames = 1;
+    handCandidateSince = now;
+    return;
+  }
+  if (handCandidateFrames < 3) handCandidateFrames++;
+  if (handCandidateFrames < 3 ||
+      now - handCandidateSince < 1000 ||
+      now - lastHandActionMs < 700) {
+    return;
+  }
+  if (openHand) {
+    griperBuka();
+    delay(150);
+    griperStop();
+    Serial.println("TARS: KNOWLEDGE GESTURE - GRIPER BUKA");
+  } else {
+    griperTutup();
+    delay(150);
+    griperStop();
+    Serial.println("TARS: KNOWLEDGE GESTURE - GRIPER TUTUP");
+  }
+  lastHandActionMs = millis();
+}
 bool wifiOK();
 bool visionLiveEnabled(){return true;}
 String normCmd(String);
 String systemStatus();
 String ask(const String&);
 bool processOnlineRequest(const String&,bool,bool,bool);
-
 static void personalityTask(void*){
   for(;;){
     personalityUpdate(false,false,false);
@@ -247,7 +292,6 @@ static bool knowledgeResultPending = false;
 
 void knowledgeAutoRecognize(const uint16_t *image) {
   if (!image || playing || knowledgeSampleCount() == 0) return;
-
   uint32_t now = millis();
   if (now - lastKnowledgeCheck < KNOWLEDGE_CHECK_INTERVAL_MS) return;
   lastKnowledgeCheck = now;
@@ -266,6 +310,7 @@ if (!knowledgeRecognize(image, label, sizeof(label), &confidence)) {
     portENTER_CRITICAL(&knowledgeDisplayMux);
     knowledgeDisplayLabel[0] = '\0';
     portEXIT_CRITICAL(&knowledgeDisplayMux);
+    knowledgeHandGesture(label);
   }
   return;
 }
