@@ -32,7 +32,6 @@
 #include <tts.h>
 #include <oled.h>
 #include <lengan.h>
-#include <hand_gesture.h>
 #include <knowledge.h>
 
 #define MIC_PORT I2S_NUM_1
@@ -364,21 +363,6 @@ if(millis()-lastPreviewDiag>=5000){
   Serial.printf(
     "TARS: PREVIEW DIAG capture=%d ready=%d live=%d play=%d\n",
     ok,  previewReady,   cameraLive,  playing );
-}
-static int lastGesture = -1;
-int gesture = handGestureUpdate(cameraEnvironment, 128, 64);
-
-if (gesture != lastGesture) {
-  if (gesture == HAND_OPEN) {
-    griperBuka();
-    delay(150);
-    griperStop();
-  } else if (gesture == HAND_CLOSED) {
-    griperTutup();
-    delay(150);
-    griperStop();
-  }
-  lastGesture = gesture;
 }
           if(ok){
             previewReady=true;
@@ -936,6 +920,35 @@ bool processKnowledgeTeachCommand(const String &q) {
 
   oledSetStatus("LISTENING");
   return true;
+}
+bool parseTakeObjectCommand(const String &question,
+                            char *labelOut,
+                            size_t labelSize) {
+  if (!labelOut || labelSize == 0) return false;
+  labelOut[0] = '\0';
+  String s = normCmd(question);
+  s.trim();
+  const char *prefixes[] = {
+    "ambil ",
+    "tolong ambil ",
+    "coba ambil "
+  };
+  for (const char *prefix : prefixes) {
+    String p(prefix);
+    if (s.startsWith(p)) {
+      String label = s.substring(p.length());
+      label.trim();
+      if (label.isEmpty() ||
+          label.length() >= labelSize ||
+          !knowledgeHasLabel(label.c_str())) {
+        return false;
+      }
+      strncpy(labelOut, label.c_str(), labelSize - 1);
+      labelOut[labelSize - 1] = '\0';
+      return true;
+    }
+  }
+  return false;
 }
 void processQuestion(const String&q){
   autonomyNotifyUserCommand();
