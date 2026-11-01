@@ -1133,7 +1133,6 @@ if (knowledgeBegin()) {
 } else {
   Serial.println("TARS: KNOWLEDGE INIT FAILED - DATA DIPERTAHANKAN");
 }
-}
   Serial.println("TARS: DAC GPIO26 ULP DAC2");
   Serial.println("TARS: AUDIO MP3/WAV -> 22050Hz/16bit");
   Serial.println("TARS: INMP441 SCK=18 WS=2 SD=15");
